@@ -1,0 +1,46 @@
+{
+  "name": "functions",
+  "description": "Cloud Functions for Firebase",
+  "scripts": {
+    "lint": "eslint .",
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "@node-escpos/bluetooth-adapter": "^0.1.0",
+    "@node-escpos/core": "^0.4.0",
+    "@node-escpos/network-adapter": "^0.0.1",
+    "@node-escpos/usb-adapter": "^0.1.0",
+    "api": "^5.0.5",
+    "axios": "^1.4.0",
+    "connect-timeout": "^1.9.0",
+    "cors": "^2.8.5",
+    "escpos": "^3.0.0-alpha.6",
+    "escpos-network": "^3.0.0-alpha.5",
+    "escpos-usb": "^3.0.0-alpha.4",
+    "express": "^5.1.0",
+    "firebase-admin": "^11.5.0",
+    "firebase-functions": "^4.2.0",
+    "fs": "^0.0.1-security",
+    "https": "^1.0.0",
+    "node-fetch-commonjs": "^3.2.4",
+    "path": "^0.12.7",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4",
+    "usb": "^2.9.0",
+    "vitest": "^0.29.2"
+  },
+  "devDependencies": {
+    "eslint": "^7.32.0",
+    "eslint-config-google": "^0.14.0",
+    "firebase-functions-test": "^0.2.3"
+  },
+  "private": true
+}
