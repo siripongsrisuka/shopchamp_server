@@ -10,7 +10,14 @@ exports.stringDateTime = () => {
         today.getSeconds().toString().padStart(2,"0");
 
     return cDateTime;  // 27/06/2021 00:25:26
-}
+};
+
+exports.toUTC7 = (date = new Date()) => {
+  // date is UTC
+  const utcTime = date.getTime(); // milliseconds
+  const utc7Time = utcTime + (7 * 60 * 60 * 1000); // shift 7 hours
+  return new Date(utc7Time);
+};
 
 
 exports.stringTime = () => {

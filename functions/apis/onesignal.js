@@ -167,62 +167,47 @@ app.put("/setExternalUserId/:player_id", async (req,res) => {
 
 
 // updateTagsByPlayerId
-// app.put("/updateTagsByPlayerId/:player_id", async (req,res) => {
-//     // If using "Message Personalization", please allow 60+ seconds before sending your messages.
-//     const { player_id } = req.params
-//     const { tags } = req.body;
-
-//     console.log(player_id);
-//     console.log(tags);
-
-//     //'https://onesignal.com/api/v1/apps/APP_ID/users/EXTERNAL_USER_ID';
-//     //'https://onesignal.com/api/v1/apps/'+env.onesignal_app_id+'/users/'+external_user_id;
-
-//     //'https://onesignal.com/api/v1/players/PLAYER_ID';
-//     //'https://onesignal.com/api/v1/players/'+player_id;
-
-//     try{
-//         const endpoint = 'https://onesignal.com/api/v1/players/'+player_id;
-//         const params = {
-//             method: 'PUT',
-//             headers: {
-//                 accept: 'text/plain',
-//                 'Content-Type': 'application/json; charset=utf-8',
-//                 Authorization: 'Basic '+ env.onesignal_api_key,
-//             },
-//             // body: JSON.stringify({
-//             //     tags:{
-//             //         first_name:'Win'
-//             //     }
-//             // }),
-//             body: JSON.stringify({
-//                 app_id: env.onesignal_app_id,
-//                 tags:{...tags}
-//             }),
-//             // tags: {
-//             //     first_name: 'Jon',       // add/update
-//             //     key_to_delete: '""'      //   delete
-//             // }
-//         };
-//         const objRes = await fetch(endpoint, params);
-
-//         functions.logger.info("function:updateTagsByPlayerId:info",{message:"Success updateTagsByPlayerId"});
-//         res.status(200).send(objRes);
-//         // {
-//         //     "success": true
-//         // }
-
-//     }catch(err){
-//         functions.logger.error("function:updateTagsByPlayerId:error",err);
-//         res.status(500).send({message:"Internal Server Error",error:err});
-//     }
-// });
-
 app.put("/updateTagsByPlayerId/:player_id", async (req,res) => {
- 
+    // If using "Message Personalization", please allow 60+ seconds before sending your messages.
+    const { player_id } = req.params
+    const { tags } = req.body;
+
+    console.log(player_id);
+    console.log(tags);
+
+    //'https://onesignal.com/api/v1/apps/APP_ID/users/EXTERNAL_USER_ID';
+    //'https://onesignal.com/api/v1/apps/'+env.onesignal_app_id+'/users/'+external_user_id;
+
+    //'https://onesignal.com/api/v1/players/PLAYER_ID';
+    //'https://onesignal.com/api/v1/players/'+player_id;
+
     try{
-       
-        res.status(200).send(null);
+        const endpoint = 'https://onesignal.com/api/v1/players/'+player_id;
+        const params = {
+            method: 'PUT',
+            headers: {
+                accept: 'text/plain',
+                'Content-Type': 'application/json; charset=utf-8',
+                Authorization: 'Basic '+ env.onesignal_api_key,
+            },
+            // body: JSON.stringify({
+            //     tags:{
+            //         first_name:'Win'
+            //     }
+            // }),
+            body: JSON.stringify({
+                app_id: env.onesignal_app_id,
+                tags:{...tags}
+            }),
+            // tags: {
+            //     first_name: 'Jon',       // add/update
+            //     key_to_delete: '""'      //   delete
+            // }
+        };
+        const objRes = await fetch(endpoint, params);
+
+        functions.logger.info("function:updateTagsByPlayerId:info",{message:"Success updateTagsByPlayerId"});
+        res.status(200).send(objRes);
         // {
         //     "success": true
         // }
@@ -232,6 +217,21 @@ app.put("/updateTagsByPlayerId/:player_id", async (req,res) => {
         res.status(500).send({message:"Internal Server Error",error:err});
     }
 });
+
+// app.put("/updateTagsByPlayerId/:player_id", async (req,res) => {
+ 
+//     try{
+       
+//         res.status(200).send(null);
+//         // {
+//         //     "success": true
+//         // }
+
+//     }catch(err){
+//         functions.logger.error("function:updateTagsByPlayerId:error",err);
+//         res.status(500).send({message:"Internal Server Error",error:err});
+//     }
+// });
 
 
 
@@ -569,7 +569,7 @@ app.post("/sendPush", async (req,res) => {
         let {heading,content,big_picture,small_icon,large_icon,url,data,campaignName,objTargerUserCondition,android_channel_id,priority,enable_frequency_cap} = req.body;
 
         heading = heading ? heading : 'heading';
-        content = content ? content : 'English or Any Language Message';
+        content = content ? content : '';
         // big_picture = big_picture ? big_picture : 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSKr5wT7rfkjkGvNeqgXjBmarC5ZNoZs-H2uMpML8O7Q4F9W-IlUQibBT6IPqyvX45NOgw&usqp=CAU';
         big_picture = big_picture ? big_picture : '';
         small_icon = small_icon ? small_icon : '';
@@ -609,18 +609,31 @@ app.post("/sendPush", async (req,res) => {
                 //     relation: '=',
                 //     value: id,
                 //   },
-                // ],                        
+                // ],                 
                 android_channel_id:android_channel_id,  // android only , nessacary to control notification level on mobile (ecpesscially "Urgent",cannot neglect it !)
                 priority:priority, // for android,chrome , 10 = high priority ,other = normal priority
                 enable_frequency_cap:enable_frequency_cap,  // false => break the rule quota limit message of user (if has set limit),against the total capped count ("frequency capping") (limit amount to send to user in setting time frequently eg. limit 5 message per hours (default) )
                 app_id: env.onesignal_app_id,   // onesignal project id
             }),
         };
-        fetch(endpoint, params)
 
-        functions.logger.info("function:sendPush:info",{message:"Success Send Push"});
-        // res.status(200).send(pushData);
-        res.status(200).send({message:"Success Send Push"});
+                const {status,jsonData:objRes} = await fetch(endpoint, params)
+                        .then(res => Promise.all([res.status, res.json()]))
+                        .then(([status, jsonData]) => { return {status:status,jsonData:jsonData} });
+
+                    if (status === 200){
+                        functions.logger.info("function:sendPush:info",{message:"Success sendPush001"});
+                        res.status(200).send(objRes);
+                    }else {
+                        functions.logger.error("function:sendPush:error",objRes?.errors);
+                        res.status(status).send({message:"Internal Server Error",errors:objRes?.errors});
+                    }
+
+        // fetch(endpoint, params)
+
+        // functions.logger.info("function:sendPush:info",{message:"Success Send Push"});
+        // // res.status(200).send(pushData);
+        // res.status(200).send({message:"Success Send Push"});
     }catch(err){
         functions.logger.error("function:sendPush:error",err);
         res.status(500).send({message:"Internal Server Error",error:err});

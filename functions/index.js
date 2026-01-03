@@ -39,7 +39,7 @@ const functionMember = require("./apis/member");
 const functionPaymentGateway = require("./apis/paymentGateway");
 const functionKshop = require("./apis/kshop");
 const functionShop= require("./apis/shop");
-
+const testApp = require("./test/app");
 
 exports.helloWorld = requestFunction.onRequest((req, res) =>{
     functions.logger.info("deploy 5",{structureData:true});
@@ -66,7 +66,7 @@ exports.shop = functions
   .region("asia-southeast2")
   .runWith({ timeoutSeconds: 300, memory: "1GB" }) // Increase timeout and memory
   .https.onRequest(functionShop)
-
+exports.test = requestFunction.onRequest(testApp);
 
 
 
