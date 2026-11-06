@@ -1,0 +1,27 @@
+// pos/functions.js — Cloud Functions gen2 ของ API ใหม่ (ก้อน 4 · DEV-0001) · index.js ต่อท้ายด้วย exports.pos / exports.pos_heavy
+//
+// gen2 (Cloud Run) · region asia-southeast2 เดียวกับ function เดิม · config ต่อ function = workloads.js FUNCTION_CONFIG
+//   URL: https://asia-southeast2-shopcham-24b0b.cloudfunctions.net/pos/<path> · /pos_heavy/<path>
+//   (Cloud Run service id ใช้ขีดแทนขีดล่าง: pos-heavy)
+// require ไฟล์นี้ = ไม่โหลด handler · ไม่สร้าง express app · ไม่แตะฐาน
+//   app สร้างตอนคำขอแรกของ instance นั้น ⇒ function เดิม (gen1) ที่โหลด index.js เดียวกันไม่เสียเวลาเปิดเครื่องเพิ่ม
+"use strict";
+
+const { onRequest } = require("firebase-functions/v2/https");
+const { REGION, FN, FUNCTION_CONFIG } = require("./workloads");
+
+function lazyApp(fnName) {
+  let app = null;
+  return (req, res) => {
+    if (!app) app = require("./app").makeApp({ fnName });
+    return app(req, res);
+  };
+}
+
+const mk = (fnName) => onRequest({ region: REGION, invoker: "public", ...FUNCTION_CONFIG[fnName] }, lazyApp(fnName));
+
+module.exports = {
+  pos: mk(FN.POS),
+  pos_heavy: mk(FN.HEAVY),
+  lazyApp,
+};

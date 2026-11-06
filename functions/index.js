@@ -105,3 +105,9 @@ exports.delDeleteSkuStock = functions.pubsub.schedule('0 3 1 * *').timeZone('Asi
         functions.logger.error("function:delDeleteSkuStock:catch",err);
     }
 }); 
+
+// ── API ใหม่ (DEV-0001 ก้อน 4) · gen2 · region asia-southeast2 · ต่อท้ายอย่างเดียว (ด่านแช่แข็ง appendOnly)
+// โค้ดอยู่ functions/pos/ · require ไม่โหลด handler (app สร้างตอนคำขอแรก) · deploy ทีละตัว: --only functions:pos / functions:pos_heavy
+const posFunctions = require("./pos/functions");
+exports.pos = posFunctions.pos;
+exports.pos_heavy = posFunctions.pos_heavy;
