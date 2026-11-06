@@ -131,7 +131,7 @@ test("③ เพดาน body วัดจาก rawBody (framework อ่า�
   assert.equal((await call("/webhook/ntt", 257 * 1024)).code, 413);
 });
 
-test("④ export: index.js ต่อท้าย exports.pos_gateway · functions.js gen2 asia-southeast2 invoker public · ยังไม่ผูก secret", () => {
+test("④ export: index.js ต่อท้าย exports.pos_gateway · functions.js gen2 asia-southeast2 invoker public · ผูกเฉพาะ secret ที่สร้างแล้ว", () => {
   const index = fs.readFileSync(path.resolve(__dirname, "../../index.js"), "utf8");
   assert.match(index, /^exports\.pos_gateway = posFunctions\.pos_gateway;$/m);
   const F = require("../functions");
@@ -142,7 +142,11 @@ test("④ export: index.js ต่อท้าย exports.pos_gateway · function
   assert.equal(ep.timeoutSeconds, 60);
   assert.equal(ep.concurrency, 40);
   assert.equal(ep.maxInstances, 20);
-  assert.ok(!ep.secretEnvironmentVariables || ep.secretEnvironmentVariables.length === 0, "ผูก secret ที่ยังไม่สร้าง = deploy ล้ม");
+  // Pack สร้าง GATEWAY_CRED_ENC_KEY แล้ว 2026-11-07 · ตัวอื่นยังไม่มี ⇒ ผูกตัวที่ไม่มีจริง = deploy ล้ม
+  const SECRETS_CREATED = ["GATEWAY_CRED_ENC_KEY"];
+  const bound = (ep.secretEnvironmentVariables || []).map((s) => s.key).sort();
+  assert.deepEqual(bound, SECRETS_CREATED, "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
+  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key), SECRETS_CREATED, "pos ต้องผูกกุญแจเดียวกัน (ที่ลับ token LINE)");
   assert.deepEqual(ep.httpsTrigger && ep.httpsTrigger.invoker, ["public"]);
   for (const k of ["pos", "pos_heavy"]) assert.equal(F[k].__endpoint.platform, "gcfv2", `${k} ไม่ถูกแตะ`);
 });
