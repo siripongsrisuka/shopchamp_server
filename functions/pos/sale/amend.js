@@ -130,6 +130,11 @@ function createBodyOf({ shopId, billId, requestId, oldBill, changes }) {
     shiftId: oldBill.shiftId,
   };
   for (const k of MONEY_INPUT_FIELDS) if (changes[k] !== undefined) body[k] = changes[k];
+  // ช่องที่แอปเก่าอ่านตรงไม่มีค่าตั้งต้น (main3 src/hook/usePrintAction.js:66-67 · :205-206 `pointDiscount.value` `campaign.length`)
+  //   ใบที่แก้ได้ผ่านล็อก member/promotion แล้ว (amendRules.amendLocks) ⇒ แต้มลด 0 และไม่มีโปร · ใส่ค่าว่างให้ใบใหม่เสมอ
+  //   ไม่ใส่ = พิมพ์ใบกำกับเต็มของใบใหม่จากจอประวัติแอปเก่า throw (พบจาก e2e pos/e2e/amend-compat.e2e.js)
+  body.pointDiscount = { value: 0, point: 0 };
+  body.campaign = [];
   const openTime = dateOf(oldBill.shiftOpenTime);
   if (openTime) body.shiftOpenTime = openTime.toISOString();
   const shape = SaleCreateRequest.shape || {};
