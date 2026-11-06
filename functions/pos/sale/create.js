@@ -274,6 +274,10 @@ function create(deps) {
           //   คำขอไม่ส่ง = เติมค่าว่างรูปเดียวกับที่แอปเก่าเขียนเสมอ
           pointDiscount: isObj(input.pointDiscount) ? input.pointDiscount : { value: 0, point: 0 },
           campaign: Array.isArray(input.campaign) ? input.campaign : [],
+          // C-2: สูตรเดียวกันคิด Number(manualDiscount) + Number(productDiscount) · ไม่มี field = NaN บนใบกำกับ
+          //   ค่าว่างรูปแอปเก่า (manualDiscount '' · productDiscount 0 · บิลจากแอปเก่าในร้านทดสอบ 202611000001)
+          manualDiscount: input.manualDiscount !== undefined ? input.manualDiscount : "",
+          productDiscount: input.productDiscount !== undefined ? input.productDiscount : 0,
         };
         if (shiftOpenAt !== null) bill.shiftOpenTime = shiftOpenAt;
         if (round.status === "unassigned") bill.shiftUnassigned = true;

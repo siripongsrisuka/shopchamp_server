@@ -343,6 +343,27 @@ test("C-1 คู่ควบคุม · ส่งมา ⇒ ใช้ค่า�
   assert.equal(b.campaign.length, 1);
 });
 
+// ── C-2 คำขอไม่ส่ง manualDiscount productDiscount ⇒ บิลมีค่าว่างรูปแอปเก่า ──
+//   แอปเก่าพิมพ์ใบกำกับคิด Number(manualDiscount) + Number(productDiscount) ตรง (main3 src/hook/usePrintAction.js:66 · :205)
+//   ไม่มี field = NaN ⇒ ช่องส่วนลดบนใบกำกับเป็น "NaN" (พบตอนเทสเครื่องจริง 2026-11-06 · บิล 202611000005 ไม่มีทั้ง 2 field)
+test("C-2 · ไม่ส่ง manualDiscount productDiscount ⇒ บิล manualDiscount '' · productDiscount 0 · สูตรแอปเก่าได้ 0", async () => {
+  seed();
+  await call(body());
+  const b = onlyBill();
+  assert.equal(b.manualDiscount, "");
+  assert.equal(b.productDiscount, 0);
+  assert.equal(Number(b.manualDiscount) + Number(b.pointDiscount.value) + Number(b.productDiscount), 0);
+});
+
+test("C-2 คู่ควบคุม · ส่งมา ⇒ ใช้ค่าที่ส่ง ไม่ทับ", async () => {
+  seed();
+  const r = await call(body({ manualDiscount: 3, productDiscount: 2, moneyMustPaid: 15, payment: [{ id: 1, amount: 15, name: "เงินสด" }] }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const b = onlyBill();
+  assert.equal(b.manualDiscount, 3);
+  assert.equal(b.productDiscount, 2);
+});
+
 // ── ก้อน 5 ข้อ ①: ร้านไม่ใช้ระบบกะ (shop.shift ไม่ใช่ true) ขายได้ รูปบิลส่วนกะเท่าแอปเก่า (main3 CheckoutScreen.js:146,763) ──
 test("ข้อ ① · ร้านไม่ใช้กะ ส่ง shiftId ไม่ส่ง shiftOpenTime ⇒ off · บิลมี shiftId ประจำจุด · ไม่มี shiftOpenTime/shiftUnassigned", async () => {
   seed({ data: { shift: { sh1: { shopId: "shopA", status: false, openTime: "", duringShift: [] } } } });
