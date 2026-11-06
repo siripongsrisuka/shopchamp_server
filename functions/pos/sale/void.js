@@ -9,7 +9,7 @@
 //      ยกเว้นเรียกจาก sale.amend ขั้น ④ (req.amendVoid === true · ใส่ได้จากในโปรเซสเท่านั้น express ไม่ส่ง field นี้):
 //      ข้าม 116 ตามสัญญา sale.amend.yaml ④ · แต่ยืนยันใน transaction ว่าบิลมี amend {status:pending} ของ requestId นี้
 //      (sale.amend ประทับไว้ที่ ① หลังผ่านด่าน 143) ไม่ใช่ = 403 right_required เหมือนเดิม
-//   2. อ่าน bill · shop · shift (ถ้าส่ง) → ตัดสินสถานะบิล
+//   2. อ่าน bill · shop · shift (ถ้าส่ง) → ตัดสินสถานะบิล (ยิงซ้ำ/ยกเลิกแล้ว ก่อน · แล้วบิลมีใบกำกับ = 409 tax_invoice_issued ไม่เขียนอะไร)
 //   3. อ่าน stock ของทุกแถว แล้วอ่านสมาชิกในกลุ่มผูกที่ยังไม่ได้อ่าน · อ่าน member ถ้าบิลมีสมาชิก
 //   2b. บิลมี amend {status:pending} ของคำขอแก้อื่นที่ยังไม่เกิน 5 นาที (หรืออ่านเวลาไม่ได้) → 409 amend_in_progress (B-9 · 2026-11-06)
 //       ยกเว้นคำขอยกเลิกของการแก้นั้นเอง (req.amendVoid + amend.requestId ตรง) · pending เกิน 5 นาที = ค้าง ยกเลิกได้ตามปกติ
@@ -34,6 +34,7 @@ const { ok, sendDeny, deny, parseOr400, internalError, zodIssues } = require("..
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { AMEND_PENDING_TTL_MS } = require("../_shared/idempotency");
+const { amendLocks } = require("./amendRules");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -46,7 +47,7 @@ const isNonEmptyString = (v) => typeof v === "string" && v !== "";
 
 /**
  * billStateForVoid(raw, requestId) — ตัดสินบิลที่อ่านได้ (ผ่านด่านร้านแล้ว)
- *   → {kind:"void", bill} | {kind:"replay"} | deny 409 (legacy_bill_view_only · bill_unreadable · already_void)
+ *   → {kind:"void", bill} | {kind:"replay"} | deny 409 (legacy_bill_view_only · bill_unreadable · already_void · tax_invoice_issued)
  *   ลอง Bill ก่อน · ไม่ผ่านแต่เป็นรุ่นแรก = ดูอย่างเดียว (Pack เลือก 1) · ไม่ผ่านทั้ง 2 = ไม่เขียนทับ
  */
 function billStateForVoid(raw, requestId) {
@@ -63,6 +64,9 @@ function billStateForVoid(raw, requestId) {
     }
     return deny(409, "already_void", "บิลนี้ถูกยกเลิกไปแล้ว");
   }
+  // ออกใบกำกับภาษีแล้ว = ยกเลิกไม่ได้ (Pack เคาะ 2026-11-06 · ไม่มีใบลดหนี้) · ตรวจหลังด่านยิงซ้ำ ⇒ บิลที่ยกเลิกไว้ก่อนกติกานี้ยิงซ้ำได้ผลเดิม
+  //   ตัวตัดสินเดียวกับล็อกของ sale.amend (amendRules.amendLocks · tax_invoice)
+  if (amendLocks(bill).includes("tax_invoice")) return deny(409, "tax_invoice_issued", "บิลนี้ออกใบกำกับภาษีแล้ว ยกเลิกไม่ได้");
   return { kind: "void", bill };
 }
 
@@ -89,7 +93,7 @@ function amendPendingFresh(raw, now) {
 }
 
 /** replayResultOf(bill) — คำตอบของคำขอเดิมที่ยิงซ้ำ ประกอบจาก field ที่เขียนไว้ครั้งแรก (ไม่เขียนเพิ่ม)
- *   voidShift: open เมื่อครั้งแรกบันทึก voidShiftId (เขียนเฉพาะตอนกะเปิด) · taxNumber คงอยู่บนบิล (#21)
+ *   voidShift: open เมื่อครั้งแรกบันทึก voidShiftId (เขียนเฉพาะตอนกะเปิด) · taxNumber = บิลที่ยกเลิกไว้ก่อนกติกาใบกำกับยกเลิกไม่ได้ (#21)
  *   refundCash: จาก bill.voidRefundCash ที่เก็บตอนยกเลิกครั้งแรก (B-10) · บิลที่ไม่มี field นี้ (ยกเลิกก่อน B-10) = ไม่ตอบ (คิดซ้ำไม่ได้)
  */
 function replayResultOf(bill) {

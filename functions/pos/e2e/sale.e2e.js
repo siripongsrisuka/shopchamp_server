@@ -9,6 +9,7 @@ const E = require("./_env");
 const O = require("./_old");
 const { create } = require("../sale/create");
 const { void: makeVoid } = require("../sale/void");
+const { issueTaxInvoice } = require("../sale/issueTaxInvoice");
 const { manage } = require("../shift/manage");
 
 const { call, seed, get, where, ms, clock, saleBody, reqId, OPEN_ISO, NOW_ISO } = E;
@@ -280,6 +281,25 @@ test("ยกเลิกบิล: void · คืนสต็อก · คืน
     assert.equal(m.point, o.point);
     assert.deepEqual(m.bought.map(({ yearMonth, buy, time }) => ({ yearMonth, buy, time })), o.bought.map(({ yearMonth, buy, time }) => ({ yearMonth, buy, time })));
   }
+});
+
+test("บิลที่ออกใบกำกับแล้วยกเลิกไม่ได้ (Pack เคาะ 2026-11-06): ขาย → ออกใบกำกับ → ยกเลิก 409 tax_invoice_issued · บิล สต็อก แจ้งเตือน ไม่เปลี่ยน", async () => {
+  const f = await fresh();
+  const s = await sell(f);
+  assert.equal(s.status, 200, JSON.stringify(s.body));
+  const cust = { id: "c1", name: "บริษัท ลูกค้า จำกัด", tel: "0000000000", address: "กรุงเทพ", taxNumber: "0105500000000", branch: "สำนักงานใหญ่" };
+  const t = await call(issueTaxInvoice, NOW, { body: { shopId: f.id.shopA, billId: s.body.billId, taxCustomer: cust, staffId: f.id.owner, staffName: "เจ้าของ" }, shopAccess: f.access.owner });
+  assert.equal(t.status, 200, JSON.stringify(t.body));
+  const billBefore = await get("bill", s.body.billId);
+  const stockBefore = (await where("stock", "shopId", f.id.shopA)).map((d) => d.stock).sort();
+  for (const acc of [f.access.owner, f.access.staff]) {
+    const v = await call(makeVoid, NOW, { body: voidBody(f, s.body.billId, { staffId: acc.uid, shiftId: f.id.sh1 }), shopAccess: acc });
+    assert.equal(v.status, 409, JSON.stringify(v.body));
+    assert.equal(v.body.error, "tax_invoice_issued");
+  }
+  assert.deepEqual(await get("bill", s.body.billId), billBefore);
+  assert.deepEqual((await where("stock", "shopId", f.id.shopA)).map((d) => d.stock).sort(), stockBefore);
+  assert.equal((await where("notification", "shopId", f.id.shopA)).filter((n) => n.heading === "ยกเลิกใบเสร็จ").length, 0);
 });
 
 test("ยกเลิกพร้อมกัน 2 เครื่อง (คนละ requestId): คืนสต็อกครั้งเดียว · ใบหนึ่ง 200 อีกใบ 409 already_void", async () => {

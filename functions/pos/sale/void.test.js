@@ -231,9 +231,8 @@ test("W1 กันรั่ว: amendVoid ข้าม 116 ได้เฉพา
 });
 
 test("M3: ยิงซ้ำ requestId เดิม ตอบ taxNumber + voidShift เดิม (ไม่เขียนซ้ำ)", async () => {
-  seed({ bill: { b1: bill({ taxNumber: "TX-0001" }) } });
-  const first = await call(body({ shiftId: "sh1" }), OWNER);
-  assert.equal(first.code, 200);
+  // บิลมีใบกำกับยกเลิกไม่ได้แล้ว (Pack เคาะ 2026-11-06) ⇒ ใช้บิลที่ยกเลิกไว้ก่อนกติกานี้ (ข้อมูลเดิมในฐาน)
+  seed({ bill: { b1: bill({ taxNumber: "TX-0001", void: true, voidRequestId: RID, voidStaff: "เจ้าของ", reason: "x", voidShiftId: "sh1", voidShiftOpenTime: ts("2026-11-10T01:00:00.000Z") }) } });
   const n = LOG.length;
   const again = await call(body({ shiftId: "sh1" }), OWNER);
   assert.equal(again.code, 200);
@@ -303,4 +302,36 @@ test("B-5: ยกเลิกจาก sale.amend (amendVoid ของคำข�
   await call(body(), OWNER);
   assert.equal(writesTo("notification").length, 1);
   assert.equal(writesTo("notification")[0].v.categoryId, 1);
+});
+
+// ── บิลมีใบกำกับภาษี = ยกเลิกไม่ได้ (Pack เคาะ 2026-11-06 · lanes/dev/source/chunk5-shift-tax.md) ──
+test("บิลมีใบกำกับ → 409 tax_invoice_issued · ไม่เขียนอะไร · เจ้าของ พนักงาน 116 ทีมงาน และทางจาก sale.amend ก็ปัด", async () => {
+  const STAFF_116 = { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["116"] };
+  for (const [who, access, extra] of [["เจ้าของ", OWNER], ["พนักงาน 116", STAFF_116], ["ทีมงาน", ADMIN]]) {
+    seed({ bill: { b1: bill({ taxNumber: "202611000003", member: { id: "m1" }, gainPoint: 5 }) }, member: { m1: { shopId: "shopA", point: 50 } } });
+    const before = JSON.stringify(DATA);
+    const r = await call(body({ shiftId: "sh1" }), access);
+    assert.equal(r.code, 409, who); assert.equal(r.body.error, "tax_invoice_issued", who);
+    assert.equal(LOG.length, 0, who); assert.equal(JSON.stringify(DATA), before, who);
+  }
+  // req.amendVoid (sale.amend ล็อกใบกำกับไว้ก่อนแล้ว · ถ้าหลุดมาถึงนี่ก็ยังปัด)
+  seed({ bill: { b1: bill({ taxNumber: "202611000003", amend: { status: "pending", requestId: RID } }) } });
+  const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+  await handler({ body: body(), shopAccess: STAFF_143, amendVoid: true }, res);
+  assert.equal(res.code, 409); assert.equal(res.body.error, "tax_invoice_issued"); assert.equal(LOG.length, 0);
+});
+
+test("บิลมีใบกำกับที่ยกเลิกไว้แล้ว (ข้อมูลเดิม): requestId เดิม = 200 alreadyVoid · คำขออื่น = 409 already_void · ไม่เขียน", async () => {
+  seed({ bill: { b1: bill({ taxNumber: "202611000003", void: true, voidRequestId: RID, voidStaff: "เจ้าของ", reason: "x" }) } });
+  const same = await call(body(), OWNER);
+  assert.equal(same.code, 200); assert.equal(same.body.alreadyVoid, true); assert.equal(same.body.taxNumber, "202611000003");
+  const other = await call(body({ requestId: RID2 }), OWNER);
+  assert.equal(other.code, 409); assert.equal(other.body.error, "already_void");
+  assert.equal(LOG.length, 0);
+});
+
+test("billStateForVoid: taxNumber ว่าง = ยกเลิกได้ · มีค่า = 409 tax_invoice_issued", () => {
+  assert.equal(V.billStateForVoid(bill({ taxNumber: "" }), RID).kind, "void");
+  const s = V.billStateForVoid(bill({ taxNumber: "202611000003" }), RID);
+  assert.equal(s.ok, false); assert.equal(s.status, 409); assert.equal(s.error, "tax_invoice_issued");
 });
