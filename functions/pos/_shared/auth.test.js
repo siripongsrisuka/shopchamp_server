@@ -326,6 +326,24 @@ test("staffInShop: อยู่ใน humanResource · ทีมงานใช�
   assert.equal(A.staffInShop(shop, "", {}), false);
 });
 
+test("B-11 staffStatusOf / staffInShop activeOnly: inActive อยู่ในร้านแต่ไม่ active · แถวซ้ำ active แถวไหนก็ได้", () => {
+  const shop = { humanResource: [
+    { id: "u-owner", status: "active", position: ["001"] },
+    { id: "u-off", status: "inActive" },
+    { id: "u-dup", status: "inActive" }, { id: "u-dup", status: "active" },
+  ] };
+  assert.equal(A.staffStatusOf(shop, "u-owner", {}), "active");
+  assert.equal(A.staffStatusOf(shop, "u-off", {}), "inactive");
+  assert.equal(A.staffStatusOf(shop, "u-dup", {}), "active");
+  assert.equal(A.staffStatusOf(shop, "u-none", {}), "not_in_shop");
+  assert.equal(A.staffStatusOf(shop, "u-company", { uid: "u-company", byAdmin: true }), "active");
+  // ทิศสองทาง: ไม่ส่ง activeOnly = อยู่ในร้านพอ (during/close) · ส่ง = ต้อง active (open · payCredit)
+  assert.equal(A.staffInShop(shop, "u-off", {}), true);
+  assert.equal(A.staffInShop(shop, "u-off", {}, { activeOnly: true }), false);
+  assert.equal(A.staffInShop(shop, "u-owner", {}, { activeOnly: true }), true);
+  assert.equal(A.staffInShop(shop, "u-none", {}, { activeOnly: true }), false);
+});
+
 test("memberStatusOf (ใช้ร่วม profile.loading): active · inactive · not_a_member", () => {
   assert.equal(A.memberStatusOf(shopA(), "u-owner", NOW).status, "active");
   assert.equal(A.memberStatusOf(shopA([]), "u-staff", NOW).status, "inactive");

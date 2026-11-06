@@ -61,8 +61,10 @@ function paymentKey(payment) {
 }
 
 /**
- * checkAmendShape(oldBill, input) → null (ผ่าน) | 'line_mismatch' | 'qty_increase' | 'net_increase' | 'payment_mismatch' | 'nothing_changed'
+ * checkAmendShape(oldBill, input) → null (ผ่าน) | 'line_mismatch' | 'qty_increase' | 'net_increase' | 'net_decrease' | 'payment_mismatch' | 'nothing_changed'
  *   เรียงด่านตามสัญญาข้อ 7 · input ผ่าน SaleAmendRequest แล้ว (fromIndex ไม่ซ้ำ · ไม่มีเงินเซ็น)
+ *   net_decrease (B-4 · Pack เคาะ 2026-11-06): รายการและจำนวนเท่าเดิมทุกแถว แต่ moneyMustPaid ใหม่ < เดิม เกิน 0.005
+ *     = ลดราคาเอง ไม่ใช่ลดจำนวน/เปลี่ยนช่องจ่าย ⇒ ปัด (ลดจำนวนแล้วยอดลด ยังผ่านตามเดิม)
  */
 function checkAmendShape(oldBill, input) {
   const oldLines = Array.isArray(oldBill && oldBill.product) ? oldBill.product : [];
@@ -76,11 +78,12 @@ function checkAmendShape(oldBill, input) {
   const oldMust = toNumber(oldBill.moneyMustPaid);
   const newMust = toNumber(input.moneyMustPaid);
   if (newMust > oldMust + MONEY_EPS) return "net_increase";
-  if (Math.abs(paidNet(input.payment) - newMust) > MONEY_EPS) return "payment_mismatch";
-
   const sameLines =
     input.product.length === oldLines.length &&
     input.product.every((l) => qtyKey(l.qty) === qtyKey(oldLines[l.fromIndex].qty));
+  if (sameLines && newMust < oldMust - MONEY_EPS) return "net_decrease";
+  if (Math.abs(paidNet(input.payment) - newMust) > MONEY_EPS) return "payment_mismatch";
+
   if (sameLines && paymentKey(input.payment) === paymentKey(oldBill.payment)) return "nothing_changed";
   return null;
 }

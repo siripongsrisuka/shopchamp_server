@@ -282,3 +282,63 @@ test("floorRun · receipts อ่านไม่ได้ ⇒ ต่อจาก
   assert.equal(r.code, 200);
   assert.equal(r.body.receiptNumber, "202611000061");
 });
+
+// ── B-8 (Pack เคาะ 2026-11-06) บิลออฟไลน์ที่ soldAt ถูก clamp ⇒ ไม่ผูกกะใด ──
+test("B-8 · soldAt ย้อนเกิน 4 วัน + ป้ายรอบที่ปิดแล้ว ⇒ unassigned · บิลไม่มี shiftId/shiftOpenTime · ไม่บวก lateSales", async () => {
+  seed({ data: { shiftHistory: { h1: { shopId: "shopA", id: "sh1", openTime: ts("2026-11-05T01:00:00.000Z"), lateSales: 100 } } } });
+  const r = await call(body({ offline: true, soldAt: "2026-11-05T05:00:00.000Z", shiftOpenTime: "2026-11-05T01:00:00.000Z" }));
+  assert.equal(r.code, 200);
+  assert.deepEqual(r.body.shift, { status: "unassigned", reason: "soldAt_clamped" });
+  assert.equal(r.body.soldAtClamped, true);
+  const b = onlyBill();
+  assert.equal("shiftId" in b, false, "แอปเก่านับ shiftId == ⇒ ห้ามมี");
+  assert.equal("shiftOpenTime" in b, false);
+  assert.equal(b.shiftUnassigned, true);
+  assert.equal(b.shiftIdAtSale, "sh1");
+  assert.equal(DATA.shiftHistory.h1.lateSales, 100);
+  assert.equal(LOG.some((w) => w.c === "shiftHistory"), false);
+});
+
+test("B-8 · clamp แม้ป้ายตรงรอบที่เปิดอยู่ ⇒ ยัง unassigned (dateTime = now จะเข้ารอบเปิดของแอปเก่า)", async () => {
+  seed();
+  const r = await call(body({ offline: true, soldAt: "2026-11-01T05:00:00.000Z" }));
+  assert.equal(r.body.shift.status, "unassigned");
+  assert.equal("shiftId" in onlyBill(), false);
+});
+
+test("B-8 คู่ควบคุม · บิลออฟไลน์ในช่วง 4 วัน ⇒ ผูกกะตามเดิม (late) · บิลมี shiftId", async () => {
+  seed({ data: { shiftHistory: { h1: { shopId: "shopA", id: "sh1", openTime: ts("2026-11-09T01:00:00.000Z"), lateSales: 100 } } } });
+  const r = await call(body({ offline: true, soldAt: "2026-11-09T05:00:00.000Z", shiftOpenTime: "2026-11-09T01:00:00.000Z" }));
+  assert.equal(r.body.shift.status, "late");
+  assert.equal(r.body.shift.reason, undefined);
+  const b = onlyBill();
+  assert.equal(b.shiftId, "sh1");
+  assert.equal(b.shiftIdAtSale, undefined);
+  assert.equal(DATA.shiftHistory.h1.lateSales, 120);
+});
+
+test("B-8 · clamp + กะของร้านอื่น ⇒ ยัง 409 shift_other_shop (ไม่เปิดทางเลี่ยงด่าน)", async () => {
+  seed({ data: { shift: { sh1: { shopId: "shopB", status: true, openTime: ts("2026-11-10T01:00:00.000Z"), duringShift: [] } } } });
+  const r = await call(body({ offline: true, soldAt: "2026-11-01T05:00:00.000Z" }));
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_other_shop");
+});
+
+// ── C-1 คำขอไม่ส่ง pointDiscount campaign ⇒ บิลมีค่าว่างรูปแอปเก่า (จอพิมพ์ใบกำกับของแอปเก่าอ่านตรง) ──
+test("C-1 · ไม่ส่ง pointDiscount campaign ⇒ บิล pointDiscount {value:0, point:0} · campaign []", async () => {
+  seed();
+  await call(body());
+  const b = onlyBill();
+  assert.deepEqual(b.pointDiscount, { value: 0, point: 0 });
+  assert.deepEqual(b.campaign, []);
+});
+
+test("C-1 คู่ควบคุม · ส่งมา ⇒ ใช้ค่าที่ส่ง ไม่ทับ", async () => {
+  seed();
+  const camp = [{ id: "c1", name: "ลด 5", discount: 5 }];
+  const r = await call(body({ member: { id: "m1", name: "ลูกค้าเอ" }, pointDiscount: { value: 5, point: 10 }, campaign: camp, moneyMustPaid: 15, payment: [{ id: 1, amount: 15, name: "เงินสด" }] }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const b = onlyBill();
+  assert.deepEqual(b.pointDiscount, { value: 5, point: 10 });
+  assert.equal(b.campaign.length, 1);
+});

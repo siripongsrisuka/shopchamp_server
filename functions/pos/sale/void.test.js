@@ -162,7 +162,7 @@ test("#6: 2 คำขอยกเลิกบิลเดียวกัน ค�
   const again = await call(body(), OWNER);
   assert.equal(a.code, 200);
   assert.equal(b.code, 409); assert.equal(b.body.error, "already_void");
-  assert.deepEqual(again.body, { ok: true, billId: "b1", alreadyVoid: true, voidShift: { status: "none" } });
+  assert.deepEqual(again.body, { ok: true, billId: "b1", alreadyVoid: true, voidShift: { status: "none" }, refundCash: 0 }); // B-10
   assert.equal(DATA.stock["p-meat"].stock, 10.85);
   assert.equal(writesTo("stock").length, 1); assert.equal(writesTo("notification").length, 1);
 });
@@ -246,4 +246,61 @@ test("M3: ยิงซ้ำ requestId เดิม ตอบ taxNumber + voidSh
   const again2 = await call(body(), OWNER);
   assert.deepEqual(again2.body.voidShift, { status: "none" });
   assert.equal("taxNumber" in again2.body, false);
+});
+
+test("B-10: ยกเลิกครั้งแรกเก็บ voidRefundCash · ยิงซ้ำตอบ refundCash เดิม · บิลที่ยกเลิกก่อนมี field = ไม่มี refundCash", async () => {
+  seed({
+    bill: { b1: bill({ member: { id: "m1" }, moneyMustPaid: 100, payment: [{ id: 3, amount: 100 }] }) },
+    member: { m1: { shopId: "shopA", point: 0, creditArray: [{ billId: "b1", totalCredit: 100, remainCredit: 40 }] } },
+  });
+  const first = await call(body(), OWNER);
+  assert.equal(first.body.refundCash, 60);
+  assert.equal(DATA.bill.b1.voidRefundCash, 60);
+  // สมาชิกเปลี่ยนหลังยกเลิกแล้ว ยิงซ้ำยังได้ค่าครั้งแรก (ไม่คิดใหม่)
+  DATA.member.m1.creditArray = [];
+  const n = LOG.length;
+  const again = await call(body(), OWNER);
+  assert.equal(again.body.alreadyVoid, true); assert.equal(again.body.refundCash, 60); assert.equal(LOG.length, n);
+  // บิลเก่าที่ยกเลิกด้วย requestId นี้แต่ไม่มี voidRefundCash
+  seed({ bill: { b1: bill({ void: true, voidRequestId: RID }) } });
+  const old = await call(body(), OWNER);
+  assert.equal(old.body.alreadyVoid, true); assert.equal("refundCash" in old.body, false);
+});
+
+test("B-9: amend pending ของคำขอแก้ที่ยังไม่เกิน 5 นาที → 409 amend_in_progress ไม่เขียน · เกิน 5 นาที = ยกเลิกได้ · อ่านเวลาไม่ได้ = ยังค้าง", async () => {
+  const at = (iso) => ts(iso);
+  const cases = [
+    ["pending 1 นาที", { status: "pending", requestId: RID2, at: at("2026-11-10T02:59:00.000Z") }, 409],
+    ["pending 4:59", { status: "pending", requestId: RID2, at: at("2026-11-10T02:55:01.000Z") }, 409],
+    ["pending ไม่มีเวลา", { status: "pending", requestId: RID2 }, 409],
+    ["pending ครบ 5 นาที (ค้าง)", { status: "pending", requestId: RID2, at: at("2026-11-10T02:55:00.000Z") }, 200],
+    ["pending 1 ชม. (ค้าง)", { status: "pending", requestId: RID2, at: at("2026-11-10T02:00:00.000Z") }, 200],
+    ["amend done", { status: "done", requestId: RID2, at: at("2026-11-10T02:59:00.000Z") }, 200],
+  ];
+  for (const [why, amend, code] of cases) {
+    seed({ bill: { b1: bill({ amend }) } });
+    const r = await call(body(), OWNER);
+    assert.equal(r.code, code, why);
+    if (code === 409) { assert.equal(r.body.error, "amend_in_progress", why); assert.equal(LOG.length, 0, why); }
+  }
+  // คำขอยกเลิกของการแก้นั้นเอง (amendVoid + requestId ตรง) ผ่านแม้ pending สด
+  seed({ bill: { b1: bill({ amend: { status: "pending", requestId: RID, at: at("2026-11-10T02:59:00.000Z") } }) } });
+  const own = await callAmend(body(), OWNER);
+  assert.equal(own.code, 200, JSON.stringify(own.body));
+  // amendVoid แต่ requestId ไม่ตรง (เจ้าของ ผ่าน 116) = ยังโดน 409
+  seed({ bill: { b1: bill({ amend: { status: "pending", requestId: RID2, at: at("2026-11-10T02:59:00.000Z") } }) } });
+  const other = await callAmend(body(), OWNER);
+  assert.equal(other.code, 409); assert.equal(other.body.error, "amend_in_progress");
+});
+
+test("B-5: ยกเลิกจาก sale.amend (amendVoid ของคำขอนี้) ไม่เขียนแจ้งเตือนยกเลิกใบเสร็จ · ยกเลิกปกติยังเขียน 1 ใบ", async () => {
+  seed({ bill: { b1: bill({ amend: { status: "pending", requestId: RID, at: ts("2026-11-10T02:59:00.000Z") } }) } });
+  const r = await callAmend(body(), OWNER);
+  assert.equal(r.code, 200);
+  assert.equal(writesTo("notification").length, 0);
+  assert.equal(writesTo("bill").length, 1);
+  seed();
+  await call(body(), OWNER);
+  assert.equal(writesTo("notification").length, 1);
+  assert.equal(writesTo("notification")[0].v.categoryId, 1);
 });

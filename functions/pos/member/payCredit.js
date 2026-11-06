@@ -12,8 +12,9 @@
 //       เจ้าของ/ทีมงานผ่านทุกสิทธิ์ (hasRight) · verify W1
 //   3. transaction: อ่านครบ 4 ใบก่อนเขียน (shop · paidHistory/{payUUID} · member · shift)
 //      ร้านไม่มี 404 shop_not_found · payUUID เดิมของร้านนี้ 200 duplicate (ไม่ตัดหนี้ซ้ำ · ตรวจก่อนกะ เพราะส่งซ้ำหลังปิดกะได้)
+//        payUUID เดิมแต่ memberId หรือยอดต่าง 409 pay_uuid_mismatch (B-13)
 //      payUUID ของร้านอื่น 409 pay_uuid_other_shop · member 404/409 · shift 404/409 · กะปิด 409 shift_not_open (#17)
-//      คนรับไม่อยู่ในร้าน 409 staff_not_in_shop · เกินหนี้รวม 409 pay_over_total (logic.member.applyCreditPayment)
+//      คนรับไม่อยู่ในร้าน 409 staff_not_in_shop · อยู่แต่ไม่ active 409 staff_inactive (B-11) · เกินหนี้รวม 409 pay_over_total (logic.member.applyCreditPayment)
 //   4. เขียน (เพิ่ม field อย่างเดียว · แอปเก่าอ่านได้ตามเดิม):
 //      member: {credit, creditArray} จาก applyCreditPayment (แถวที่ชำระครบยังอยู่ remainCredit 0 · F22)
 //      paidHistory/{payUUID}: รูปเดิมของ app:modal/Modal_CreditMember.js:96-103 {shopId, paid, existCredit, memberId, timestamp, billDate}
@@ -31,7 +32,7 @@ const { MemberPayCreditRequest } = require("@shopchamp/schema");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc, staffInShop } = require("../_shared/auth");
+const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc, staffStatusOf } = require("../_shared/auth");
 const { billDateOf } = require("../_shared/billClock");
 
 const NOTI_HEADING = "ลูกค้าชำระเงินเซ็น";
@@ -89,6 +90,11 @@ function notificationContentOf(name, paid, existCredit) {
   return `ลูกค้า ${name === undefined ? "" : name}\nยอดเงินชำระ ${pay} บาท\nยอดค้างชำระคงเหลือ ${existCredit} บาท`;
 }
 
+/** sameRequest(prev, input) — paidHistory เดิมเป็นคำขอเดียวกันไหม (B-13): memberId ตรง และยอดตรงระดับสตางค์ */
+function sameRequest(prev, input) {
+  return prev.memberId === input.memberId && sat(prev.paid) === sat(input.amount);
+}
+
 class Refusal extends Error {
   constructor(d) { super(d.error); this.deny = d; }
 }
@@ -135,6 +141,8 @@ function payCredit(deps) {
         if (paidSnap.exists) {
           const prev = paidSnap.data() || {};
           if (!belongsToShop(prev.shopId, ref)) refuse(deny(409, "pay_uuid_other_shop", "รหัสรับชำระนี้เป็นของร้านอื่น"));
+          // B-13 (agent เลือก): payUUID เดิมแต่คนละสมาชิกหรือคนละยอด = ไม่ใช่การส่งซ้ำ ⇒ ปัด ไม่ตอบ duplicate ให้เครื่องเชื่อว่ารับแล้ว
+          if (!sameRequest(prev, input)) refuse(deny(409, "pay_uuid_mismatch", "รหัสรับชำระนี้ใช้กับรายการอื่นไปแล้ว"));
           return { duplicate: true };
         }
 
@@ -145,7 +153,10 @@ function payCredit(deps) {
         const sc = checkOwnedDoc("shift", shift, ref);
         if (!sc.ok) refuse(sc);
         if (shift.status !== true) refuse(deny(409, "shift_not_open", "กะปิดอยู่ กรุณาเปิดกะก่อนรับชำระ"));
-        if (!staffInShop(shop, input.staffId, access)) refuse(deny(409, "staff_not_in_shop", "ไม่พบพนักงานที่รับเงินในร้านนี้"));
+        // B-11 (Pack เคาะ 2026-11-06): คนรับต้อง status active · ไม่อยู่ในร้าน 409 staff_not_in_shop · อยู่แต่ไม่ active 409 staff_inactive
+        const staffState = staffStatusOf(shop, input.staffId, access);
+        if (staffState === "not_in_shop") refuse(deny(409, "staff_not_in_shop", "ไม่พบพนักงานที่รับเงินในร้านนี้"));
+        if (staffState !== "active") refuse(deny(409, "staff_inactive", "พนักงานที่รับเงินไม่ได้อยู่ในสถานะใช้งาน"));
 
         const r = logic.applyCreditPayment(member, input.amount);
         if (!r.ok) {
@@ -201,4 +212,4 @@ function payCredit(deps) {
   };
 }
 
-module.exports = { payCredit, paymentIdOf, paymentNameOf, cutBillsOf, notificationContentOf };
+module.exports = { payCredit, paymentIdOf, paymentNameOf, cutBillsOf, notificationContentOf, sameRequest };

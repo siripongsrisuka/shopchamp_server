@@ -11,13 +11,17 @@
 //      (sale.amend ประทับไว้ที่ ① หลังผ่านด่าน 143) ไม่ใช่ = 403 right_required เหมือนเดิม
 //   2. อ่าน bill · shop · shift (ถ้าส่ง) → ตัดสินสถานะบิล
 //   3. อ่าน stock ของทุกแถว แล้วอ่านสมาชิกในกลุ่มผูกที่ยังไม่ได้อ่าน · อ่าน member ถ้าบิลมีสมาชิก
+//   2b. บิลมี amend {status:pending} ของคำขอแก้อื่นที่ยังไม่เกิน 5 นาที (หรืออ่านเวลาไม่ได้) → 409 amend_in_progress (B-9 · 2026-11-06)
+//       ยกเว้นคำขอยกเลิกของการแก้นั้นเอง (req.amendVoid + amend.requestId ตรง) · pending เกิน 5 นาที = ค้าง ยกเลิกได้ตามปกติ
 //   4. เขียน: stock (คืนตาม logic.planVoidReturn + restoreOnVoid) · bill · member · notification
+//      เรียกจาก sale.amend (amendVoid ผ่าน) = ไม่เขียนแจ้งเตือน "ยกเลิกใบเสร็จ" · sale.amend เขียนหมวด "แก้ไขใบเสร็จ" เองที่ ⑤ (B-5)
 //
 // รูปที่เขียน = รูปที่แอปเก่าเขียน + field เพิ่มอย่างเดียว (แอปเก่ายังอ่านได้):
 //   แอปเก่า `shopchamp_app/src/screens/BillHistoryScreen.js:341-470`
 //     stock {stock, cost, updateTime} · bill {void:true, voidStaff, reason} · member {point, bought, creditArray, credit?}
 //     notification {heading:'ยกเลิกใบเสร็จ', shopId, notificationContent, categoryId:1, timestamp}
-//   เพิ่ม: bill voidAt voidStaffId voidRequestId voidShiftId voidShiftOpenTime · ทีมงาน byAdmin adminUid ทุกเอกสาร
+//   เพิ่ม: bill voidAt voidStaffId voidRequestId voidShiftId voidShiftOpenTime voidRefundCash · ทีมงาน byAdmin adminUid ทุกเอกสาร
+//     voidRefundCash = refundCash ของครั้งแรก (B-10) ⇒ ยิงซ้ำตอบ refundCash เดิม · บิลที่ยกเลิกก่อนมี field นี้ ยิงซ้ำไม่มี refundCash
 //   ต่างจากแอปเก่าโดยตั้งใจ:
 //     - `updateTime` `timestamp` = นาฬิกา server (deps.now) แทน serverTimestamp() เพราะไม่โหลด SDK ในไฟล์นี้
 //     - stock doc ที่ไม่มีแล้ว / เป็นของร้านอื่น = ข้ามแถวนั้นและ log (แอปเก่า throw ทั้งใบ ⇒ บิลที่สินค้าถูกลบยกเลิกไม่ได้เลย)
@@ -29,6 +33,7 @@ const logic = require("@shopchamp/logic");
 const { ok, sendDeny, deny, parseOr400, internalError, zodIssues } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
+const { AMEND_PENDING_TTL_MS } = require("../_shared/idempotency");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -70,13 +75,27 @@ function amendVoidAllowed(raw, requestId) {
   return isObj(a) && a.status === "pending" && isNonEmptyString(a.requestId) && a.requestId === requestId;
 }
 
+/**
+ * amendPendingFresh(raw, now) — บิลมีคำขอแก้ค้าง pending ที่ยังไม่ถือว่าค้างตาย (< 5 นาที · อ่านเวลาไม่ได้ = ยังค้าง fail-closed)
+ *   ใช้ตัดสิน 409 amend_in_progress ของ B-9 · ตัวเดียวกับ TTL ของ sale.amend (idempotency.AMEND_PENDING_TTL_MS)
+ */
+function amendPendingFresh(raw, now) {
+  const a = isObj(raw) ? raw.amend : undefined;
+  if (!isObj(a) || a.status !== "pending") return false;
+  const at = logic.toMillis(a.at);
+  const nowMs = now instanceof Date ? now.getTime() : NaN;
+  if (at === null || !Number.isFinite(nowMs)) return true;
+  return nowMs - at < AMEND_PENDING_TTL_MS;
+}
+
 /** replayResultOf(bill) — คำตอบของคำขอเดิมที่ยิงซ้ำ ประกอบจาก field ที่เขียนไว้ครั้งแรก (ไม่เขียนเพิ่ม)
  *   voidShift: open เมื่อครั้งแรกบันทึก voidShiftId (เขียนเฉพาะตอนกะเปิด) · taxNumber คงอยู่บนบิล (#21)
- *   refundCash ไม่ตอบ: ครั้งแรกคิดจากสมาชิก ณ ตอนนั้นและไม่ได้เก็บลงบิล ⇒ คิดซ้ำไม่ได้ (ดู chunk4-verify/sale.void.md ข้อที่ไม่ได้แก้)
+ *   refundCash: จาก bill.voidRefundCash ที่เก็บตอนยกเลิกครั้งแรก (B-10) · บิลที่ไม่มี field นี้ (ยกเลิกก่อน B-10) = ไม่ตอบ (คิดซ้ำไม่ได้)
  */
 function replayResultOf(bill) {
   const out = { replay: true, voidShift: { status: isNonEmptyString(bill && bill.voidShiftId) ? "open" : "none" } };
   if (isNonEmptyString(bill && bill.taxNumber)) out.taxNumber = bill.taxNumber;
+  if (bill && typeof bill.voidRefundCash === "number" && Number.isFinite(bill.voidRefundCash)) out.refundCash = bill.voidRefundCash;
   return out;
 }
 
@@ -146,7 +165,8 @@ function makeVoid(deps) {
         const raw = billSnap && billSnap.exists ? billSnap.data() : undefined;
         const owned = checkOwnedDoc("bill", raw, ref);
         if (!owned.ok) return { deny: owned };
-        if (!hasVoidRight && !amendVoidAllowed(raw, input.requestId)) return { deny: deny(403, "right_required") };
+        const ownAmend = viaAmend && amendVoidAllowed(raw, input.requestId);
+        if (!hasVoidRight && !ownAmend) return { deny: deny(403, "right_required") };
 
         const state = billStateForVoid(raw, input.requestId);
         if (state.ok === false) {
@@ -155,6 +175,7 @@ function makeVoid(deps) {
         }
         const bill = state.bill;
         if (state.kind === "replay") return replayResultOf(bill);
+        if (!ownAmend && amendPendingFresh(raw, now)) return { deny: deny(409, "amend_in_progress", "บิลนี้กำลังถูกแก้ไขจากเครื่องอื่น") };
 
         let shift = { status: "none" };
         if (shiftRef) {
@@ -223,13 +244,15 @@ function makeVoid(deps) {
           billUpdate.voidShiftId = input.shiftId;
           billUpdate.voidShiftOpenTime = shift.openTime;
         }
+        const refundCash = memberEffect.ok ? memberEffect.refundCash : 0;
+        billUpdate.voidRefundCash = refundCash;
         tx.update(billRef, billUpdate);
 
         if (memberRef && member && memberEffect.ok && memberEffect.update) {
           tx.update(memberRef, { ...memberEffect.update, ...trail });
         }
 
-        tx.set(db.collection("notification").doc(), {
+        if (!ownAmend) tx.set(db.collection("notification").doc(), {
           heading: NOTI_HEADING,
           shopId: ref.shopId || ref.id,
           notificationContent: notificationContentOf({
@@ -247,7 +270,7 @@ function makeVoid(deps) {
           voided: true,
           taxNumber: isNonEmptyString(bill.taxNumber) ? bill.taxNumber : undefined,
           voidShift: { status: shift.status },
-          refundCash: memberEffect.ok ? memberEffect.refundCash : 0,
+          refundCash,
         };
       });
 
@@ -255,6 +278,7 @@ function makeVoid(deps) {
       if (result.replay) {
         const again = { billId: input.billId, alreadyVoid: true, voidShift: result.voidShift, ...adminFlag(access) };
         if (result.taxNumber) again.taxNumber = result.taxNumber;
+        if (result.refundCash !== undefined) again.refundCash = result.refundCash;
         return ok(res, again);
       }
       const out = {
@@ -276,6 +300,7 @@ module.exports = {
   void: makeVoid,
   billStateForVoid,
   amendVoidAllowed,
+  amendPendingFresh,
   replayResultOf,
   shiftForVoid,
   notificationContentOf,

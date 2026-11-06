@@ -19,7 +19,7 @@ function makeDb() {
   // อ่านนอก transaction (auth.resolveShopRef พิสูจน์ field ของร้าน S5): doc.get · where(==).limit().get
   const ref = (c, id) => ({ c, id, get: async () => snapOf(c, id) });
   const where = (c, f, v) => ({
-    limit: (n) => ({ get: async () => ({ docs: Object.keys(DATA[c] || {}).filter((id) => DATA[c][id][f] === v).slice(0, n).map((id) => snapOf(c, id)) }) }),
+    limit: (n) => ({ isQuery: true, get: async () => ({ docs: Object.keys(DATA[c] || {}).filter((id) => DATA[c][id][f] === v).slice(0, n).map((id) => snapOf(c, id)) }) }),
   });
   return {
     collection: (c) => ({ doc: (id) => ref(c, id), where: (f, op, v) => where(c, f, v) }),
@@ -27,6 +27,7 @@ function makeDb() {
       const writes = [];
       const tx = {
         get: async (r) => {
+          if (r && r.isQuery) { if (writes.length) throw new Error("query หลังเขียน (Firestore ปัด)"); return r.get(); }
           if (writes.length) throw new Error(`อ่าน ${r.c}/${r.id} หลังเขียน (Firestore ปัด)`);
           const d = (DATA[r.c] || {})[r.id];
           return { exists: d !== undefined, id: r.id, data: () => d };
@@ -186,4 +187,34 @@ test("body มี key `__proto__` (จาก JSON) → ร่องรอยไ�
   assert.equal("body" in v, false);
   assert.equal(v.bodyJson, JSON.stringify(raw.body));
   assert.ok(v.bodyJson.includes("__proto__"));
+});
+
+// ── B-7 · รหัสรูป `<prefix><uuid>` ที่ prefix เป็นของร้านอื่น (agent เลือกทาง: ปัด · ไม่เปลี่ยน doc id ของร่องรอย) ──
+test("B-7 · ร้าน B จองรหัส `shopA<uuid>` (prefix = field ของร้าน A) → 409 receipt_uuid_other_shop · ไม่เขียน", async () => {
+  const r = await call(req({ shopId: "docB" }), { ...OWNER, shopId: "docB" });
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "receipt_uuid_other_shop");
+  assert.equal(LOG.length, 0);
+  // แล้วร้าน A ยังจองรหัสของตัวเองได้ (ทิศที่ควรผ่าน)
+  const a = await call(req(), OWNER);
+  assert.equal(a.code, 200);
+  assert.equal(LOG.length, 1);
+});
+
+test("B-7 · prefix = doc id ของร้านอื่น → 409 · prefix = doc id ของร้านนี้ → 200", async () => {
+  const other = await call(req({ receiptUUID: `docB${U}`, body: { receiptUUID: `docB${U}` } }), OWNER);
+  assert.equal(other.code, 409);
+  const mine = await call(req({ receiptUUID: `docA${U}` }), OWNER);
+  assert.equal(mine.code, 200);
+});
+
+test("B-7 · uuid ล้วน · prefix ที่ไม่ใช่ร้านใด → 200 (ไม่ปัดเกิน)", async () => {
+  assert.equal((await call(req({ receiptUUID: U }), OWNER)).code, 200);
+  assert.equal((await call(req({ receiptUUID: `ghost${U}` }), OWNER)).code, 200);
+});
+
+test("B-7 · prefix `undefined` จากร้านที่มี field → 409 · จากร้านที่ไม่มี field → 200", async () => {
+  assert.equal((await call(req({ receiptUUID: `undefined${U}` }), OWNER)).code, 409);
+  DATA.shop.docC = {};
+  assert.equal((await call(req({ shopId: "docC", receiptUUID: `undefined${U}` }), { ...OWNER, shopId: "docC" })).code, 200);
 });

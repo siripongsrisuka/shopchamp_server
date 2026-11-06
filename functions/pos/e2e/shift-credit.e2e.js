@@ -162,10 +162,9 @@ test("รับชำระเงินเซ็น: พนักงานไม
   assert.equal((await E.where("paidHistory", "memberId", f.id.m1)).length, 1);
 });
 
-// ❗ ข้อค้นพบ (todo · ยังไม่แก้ รอ Pack): ประวัติกะ = {...doc กะ} ⇒ doc กะรุ่นก่อน มี.ค. 2025 ไม่มี receiptNumber
-//   ⇒ ประวัติไม่มี receiptNumber ⇒ schema ShiftHistory (บังคับ string) ปัด · แอปเก่าปิดกะด้วย {...shift} รูปเดียวกัน (ShiftScreen.js:272-282)
-//   ทางแก้ที่เป็นไปได้: handler เติม '' ให้ช่องค่าตั้งต้นของ initialShift ที่ขาด หรือ schema ยอมให้ขาด · ข้อเสนออยู่ใน chunk4-case-additions.md
-test("doc กะรุ่นก่อน มี.ค. 2025 (ไม่มี receiptNumber status lastShiftDate shiftCount): เปิด-ปิดกะได้ · ประวัติผ่าน schema อ่าน", { todo: "ประวัติกะจาก doc รุ่นเก่าไม่มี receiptNumber · รอ Pack เลือกทางแก้" }, async () => {
+// C-2 (agent เลือกทางปลอดภัย · Pack ให้เลือกเอง 2026-11-06): ประวัติกะ = {...ค่าตั้งต้น initialShift ที่ขาด, ...doc กะ}
+//   doc กะรุ่นก่อน มี.ค. 2025 ไม่มี receiptNumber ⇒ handler เติม '' ให้ (ไม่ผ่อน schema) ⇒ ประวัติผ่าน schema ShiftHistory
+test("doc กะรุ่นก่อน มี.ค. 2025 (ไม่มี receiptNumber status lastShiftDate shiftCount): เปิด-ปิดกะได้ · ประวัติผ่าน schema อ่าน", async () => {
   const f = E.shopFixture();
   const { status, lastShiftDate, shiftCount, receiptNumber, ...pre } = E.INITIAL_SHIFT; // eslint-disable-line no-unused-vars
   f.data.shift[f.id.sh1] = { ...pre, shopId: f.id.shopA, posId: "pos-1" };

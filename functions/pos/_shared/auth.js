@@ -207,12 +207,30 @@ function checkOwnedDoc(name, data, shopRef) {
   return { ok: true };
 }
 
-/** staffInShop(shop, staffId, access) — staffId อยู่ใน humanResource · ทีมงานใช้ uid ตัวเองได้แม้ไม่อยู่ (สัญญาข้อ 3-2) */
-function staffInShop(shop, staffId, access) {
-  if (!isNonEmptyString(staffId)) return false;
-  if (access && access.byAdmin === true && staffId === access.uid) return true;
+/**
+ * staffStatusOf(shop, staffId, access) — สถานะของ staffId ในร้าน: 'active' | 'inactive' | 'not_in_shop'
+ *   ทีมงานใช้ uid ตัวเองได้แม้ไม่อยู่ (สัญญาข้อ 3-2) = 'active'
+ *   แถวที่ id ตรงและ status 'active' แถวไหนก็ได้ = 'active' · มีแถวแต่ไม่ active สักแถว = 'inactive' (Pack เคาะ B-11 2026-11-06)
+ *   ดู status ของแถวเท่านั้น (ไม่ดูแพ็กเกจ staff · คนเรียกผ่านด่านแพ็กเกจที่ requireShopAccess มาแล้ว)
+ */
+function staffStatusOf(shop, staffId, access) {
+  if (!isNonEmptyString(staffId)) return "not_in_shop";
+  if (access && access.byAdmin === true && staffId === access.uid) return "active";
   const hr = shop && Array.isArray(shop.humanResource) ? shop.humanResource : [];
-  return hr.some((p) => p && typeof p === "object" && p.id === staffId);
+  const rows = hr.filter((p) => p && typeof p === "object" && p.id === staffId);
+  if (!rows.length) return "not_in_shop";
+  return rows.some((p) => p.status === "active") ? "active" : "inactive";
+}
+
+/**
+ * staffInShop(shop, staffId, access, opts) — staffId อยู่ใน humanResource · ทีมงานใช้ uid ตัวเองได้แม้ไม่อยู่ (สัญญาข้อ 3-2)
+ *   opts.activeOnly = ต้อง status 'active' ด้วย (B-11 · ใช้ที่ shift.manage op open และ member.payCredit)
+ *   route ที่ใช้: shift.manage (open: activeOnly · during/close: อยู่ในร้านพอ) · member.payCredit (activeOnly)
+ */
+function staffInShop(shop, staffId, access, opts) {
+  const st = staffStatusOf(shop, staffId, access);
+  if (st === "not_in_shop") return false;
+  return opts && opts.activeOnly === true ? st === "active" : true;
 }
 
 // ── middleware ─────────────────────────────────────────────────────────────────
@@ -317,6 +335,7 @@ module.exports = {
   belongsToShop,
   checkOwnedDoc,
   staffInShop,
+  staffStatusOf,
   INITIAL_RIGHTS,
   OWNER_POSITION,
 };

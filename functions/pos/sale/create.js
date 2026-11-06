@@ -21,6 +21,8 @@
 //     - `bill.shopId` = field `shop.shopId` แบบแอปเก่า (ร้านเก่า ≠ doc id ได้ · ทุก query ของบิลใช้ค่านี้) · guard.shopId = shop doc id ตามสัญญา
 //     - `updateTime` `latestSaleDate` `lastTime` = นาฬิกา server (deps.now) แทน serverTimestamp()
 //     - ช่องที่ server คิดเอง ทับค่าจากเครื่องเสมอ: franchiseId (= shop.franchiseId | '') · gainPoint usedPoint (= ผล saleMemberEffect)
+//     - pointDiscount campaign ที่คำขอไม่ส่ง = เติม {value:0, point:0} และ [] (C-1 · แอปเก่าเขียน 2 ช่องนี้ทุกบิล)
+//     - บิลออฟไลน์ที่ soldAt ถูก clamp = unassigned · ไม่มี shiftId/shiftOpenTime · เก็บ shiftIdAtSale (B-8)
 //     - stock doc ที่ไม่มี / เป็นของร้านอื่น = ข้ามแถวนั้นและ log (แอปเก่า throw ทั้งใบ · สัญญา: ไม่ปัดการขาย · ติดลบได้ตอนซิงก์)
 //     - สต็อกตัดตามค่าตั้งใน stock doc ที่อ่านใน transaction (ไม่เชื่อ stockCountStatus/linkDetail จากเครื่อง · คำขอไม่มีช่องนี้)
 "use strict";
@@ -181,7 +183,10 @@ function create(deps) {
           tx.get(counterRef),
           memberId ? tx.get(db.collection("member").doc(memberId)) : Promise.resolve(null),
         ]);
-        const round = await readShiftRound(tx, { shiftId: input.shiftId, shiftOpenMs, shopRef });
+        const read = await readShiftRound(tx, { shiftId: input.shiftId, shiftOpenMs, shopRef });
+        // B-8 (Pack เคาะ 2026-11-06): บิลออฟไลน์ที่ soldAt ถูก clamp (ย้อนเกิน 4 วัน / ล่วงหน้าเกิน 5 นาที) ไม่ผูกกะใด
+        //   ยังอ่านกะเพื่อปัด shift_other_shop เหมือนบิลอื่น · ไม่บวก lateSales · บิลไม่ถือ shiftId/shiftOpenTime (ดูก้อนประกอบบิล)
+        const round = offline.soldAtClamped ? { status: "unassigned", reason: "soldAt_clamped" } : read;
         const stock = await readStock(tx, { product: input.product, shopRef });
 
         // ── ตัดสิน (ยังไม่เขียน) ──
@@ -257,8 +262,20 @@ function create(deps) {
           dateTime: offline.soldAt,
           existPoint,
           shiftOpenTime: shiftOpenAt,
+          // C-1: แอปเก่าพิมพ์ใบกำกับอ่าน pointDiscount.value และ campaign.length ตรง (main3 src/hook/usePrintAction.js:66-67 · :205-206)
+          //   คำขอไม่ส่ง = เติมค่าว่างรูปเดียวกับที่แอปเก่าเขียนเสมอ
+          pointDiscount: isObj(input.pointDiscount) ? input.pointDiscount : { value: 0, point: 0 },
+          campaign: Array.isArray(input.campaign) ? input.campaign : [],
         };
         if (round.status === "unassigned") bill.shiftUnassigned = true;
+        if (round.reason === "soldAt_clamped") {
+          // B-8: สรุปกะของแอปเก่านับ `shiftId == … and dateTime > openTime` (functions/apis/shift.js:246-249) · dateTime ของบิลนี้ = now
+          //   ⇒ ถ้าคง shiftId ไว้ บิลจะถูกนับเข้ารอบที่เปิดอยู่ของแอปเก่าด้วย · ไม่มี shiftId = ไม่มีกะไหน (แอปเก่าและใหม่) นับ
+          //   shiftId ที่เครื่องส่งมาเก็บไว้ที่ shiftIdAtSale เพื่อสอบย้อน (ไม่มีผู้อ่าน)
+          bill.shiftIdAtSale = input.shiftId;
+          delete bill.shiftId;
+          delete bill.shiftOpenTime;
+        }
         if (round.status === "late") bill.shiftHistoryId = round.shiftHistoryId;
         stampOfflineFields(bill, offline, now, { ref: input.offlineRef });
         applyAmendCarry(bill, req.amendCarry);
@@ -297,6 +314,7 @@ function create(deps) {
       }
       const shift = { status: out.round.status };
       if (out.round.shiftHistoryId) shift.shiftHistoryId = out.round.shiftHistoryId;
+      if (out.round.reason) shift.reason = out.round.reason;
       return ok(res, {
         duplicate: false,
         billId: out.billId,

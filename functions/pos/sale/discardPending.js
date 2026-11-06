@@ -11,7 +11,8 @@
 //   ④ transaction (อ่านครบก่อนเขียน): shop/{shopId} · pendingDiscard/{uuid} · receiptGuard/{uuid} · bill/{usedBy} เฉพาะ guard รูปแอปเก่า
 //      ร่องรอยหรือ guard เป็นของร้านอื่น → 409 receipt_uuid_other_shop (ไม่คืนอะไร)
 //      guard ของร้านนี้ → 409 already_synced {billId, receiptNumber} (แอปเปลี่ยนแถวเป็น synced · S-04)
-//      ร่องรอยของร้านนี้มีแล้ว → 200 duplicate:true
+//      ร่องรอยของร้านนี้มีแล้ว → 200 duplicate:true (B-6 คงลำดับ: guard ของร้านนี้ = already_synced มาก่อน duplicate)
+//      รหัสรูป `<prefix><uuid>` ที่ prefix เป็น doc id หรือ field shopId ของร้านอื่น → 409 receipt_uuid_other_shop ไม่เขียน (B-7)
 //      ไม่มีทั้งคู่ → เขียน pendingDiscard/{uuid} → 200 duplicate:false
 // แอปเก่า: ไม่เห็นอะไรเปลี่ยน (collection ใหม่ · ไม่แตะบิล กะ ยอด หรือ receiptGuard)
 "use strict";
@@ -20,7 +21,9 @@ const { SaleDiscardPendingRequest } = require("@shopchamp/schema");
 const { ok, fail, deny, sendDeny, parseOr400, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, isOwner, adminTrail, adminFlag, resolveShopRef } = require("../_shared/auth");
-const { discardDoc, decide } = require("./discardPendingDoc");
+const { discardDoc, decide, foreignPrefixOf } = require("./discardPendingDoc");
+
+const validDocId = (v) => typeof v === "string" && v !== "" && v.length <= 1500 && !v.includes("/") && v !== "." && v !== "..";
 
 const DISCARD_COLLECTION = "pendingDiscard";
 
@@ -58,6 +61,18 @@ function discardPending(deps) {
         if (d.kind === "need_bill") {
           const billSnap = await tx.get(db.collection("bill").doc(d.billId));
           d = decide({ ...seen, billOfGuard: billSnap.exists ? billSnap.data() : null });
+        }
+        // B-7: จองร่องรอยด้วยรหัสที่ prefix เป็นของร้านอื่น = ปัด (อ่านก่อนเขียน · ร้านที่ field ซ้ำ/ไม่ผูกก็ปัด)
+        if (d.kind === "write") {
+          const fp = foreignPrefixOf(uuid, ref);
+          if (fp && fp.refuse) d = { kind: "other_shop" };
+          else if (fp) {
+            const shops = db.collection("shop");
+            const sameId = validDocId(fp.prefix) ? await tx.get(shops.doc(fp.prefix)) : null;
+            const holders = await tx.get(shops.where("shopId", "==", fp.prefix).limit(2));
+            const others = ((holders && holders.docs) || []).filter((x) => x.id !== access.shopId);
+            if ((sameId && sameId.exists && sameId.id !== access.shopId) || others.length) d = { kind: "other_shop" };
+          }
         }
         // body ที่เก็บ = ตัวที่เครื่องส่งมาตรงตัว ไม่ใช่สำเนาของ Zod (z.record ทิ้ง key `__proto__` เงียบ ⇒ ร่องรอยไม่ตรงของจริง)
         //   Zod ตรวจแล้วว่าเป็น object ไม่ใช่ array · key ต้องห้ามของ Firestore ไปลง bodyJson ใน discardPendingDoc

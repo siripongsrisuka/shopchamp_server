@@ -233,3 +233,34 @@ test("paymentIdOf", () => {
   assert.deepEqual(P.paymentIdOf("03"), { ok: false });
   assert.deepEqual(P.paymentIdOf(" 1"), { ok: false });
 });
+
+// ── chunk4 รอบ 2: B-11 (Pack เคาะ) · B-13 (agent เลือก) ─────────────────────────
+test("B-11 staffId อยู่ในร้านแต่ inActive → 409 staff_inactive · ไม่เขียน · active → 200", async () => {
+  seed((d) => { d.shop.shopA.humanResource[1].status = "inActive"; });
+  const r = await call(body({ staffId: "u-staff", staffName: "พนักงาน" }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "staff_inactive");
+  assert.equal(LOG.length, 0);
+  seed();
+  assert.equal((await call(body({ staffId: "u-staff", staffName: "พนักงาน" }), OWNER)).code, 200);
+  seed();
+  assert.equal((await call(body({ staffId: "u-ghost" }), OWNER)).body.error, "staff_not_in_shop"); // ไม่อยู่ในร้านยังเป็นรหัสเดิม
+});
+
+test("B-13 payUUID เดิมคนละสมาชิก/คนละยอด → 409 pay_uuid_mismatch ไม่เขียน · ตรงกัน (ยอดเป็นข้อความ) → duplicate", async () => {
+  for (const [prev, code, err] of [
+    [{ memberId: "m9", paid: 100 }, 409, "pay_uuid_mismatch"],
+    [{ memberId: "m1", paid: 50 }, 409, "pay_uuid_mismatch"],
+    [{ memberId: "m1", paid: "100.00" }, 200, undefined],
+    [{ memberId: "m1", paid: 100 }, 200, undefined],
+  ]) {
+    seed((d) => { d.paidHistory[UUID] = { shopId: "shopA", ...prev }; });
+    const r = await call(body(), OWNER);
+    assert.equal(r.code, code, JSON.stringify(prev));
+    if (err) assert.equal(r.body.error, err);
+    else assert.equal(r.body.duplicate, true);
+    assert.equal(LOG.length, 0);
+  }
+  assert.equal(P.sameRequest({ memberId: "m1", paid: "1,000" }, { memberId: "m1", amount: 1000 }), true);
+  assert.equal(P.sameRequest({ memberId: "m1", paid: 100.01 }, { memberId: "m1", amount: 100 }), false);
+});

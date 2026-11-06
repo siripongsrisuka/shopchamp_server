@@ -126,6 +126,12 @@ test("checkAmendShape: ลำดับด่าน · ตัวเลขข้�
   assert.equal(checkAmendShape(b, { ...same, moneyMustPaid: 100.01, payment: [{ id: 1, amount: 100.01 }] }), "net_increase");
   assert.equal(checkAmendShape(b, { ...same, payment: [{ id: 1, amount: 99 }] }), "payment_mismatch");
   assert.equal(checkAmendShape(b, { ...same, payment: [{ id: 1, amount: 120, change: 20 }] }), null); // เงินทอนหักออก · ช่องเปลี่ยน
+  // B-4: จำนวนเท่าเดิมทุกแถว ยอดลด = net_decrease · ±0.005 ยังนับเท่าเดิม · ลดจำนวนแล้วยอดลด = ผ่าน
+  assert.equal(checkAmendShape(b, { ...same, moneyMustPaid: 90, payment: [{ id: 1, amount: 90 }] }), "net_decrease");
+  assert.equal(checkAmendShape(b, { ...same, moneyMustPaid: 99.99, payment: [{ id: 1, amount: 99.99 }] }), "net_decrease");
+  assert.equal(checkAmendShape(b, { ...same, moneyMustPaid: 99.996, payment: [{ id: 1, amount: 99.996 }] }), null);
+  assert.equal(checkAmendShape(b, { ...same, product: [{ fromIndex: 1, id: "p2", qty: 1 }, { fromIndex: 0, id: "p1", qty: 1 }], moneyMustPaid: 90, payment: [{ id: 1, amount: 90 }] }), null);
+  assert.equal(checkAmendShape(b, { ...same, product: [{ fromIndex: 0, id: "p1", qty: 2 }], moneyMustPaid: 60, payment: [{ id: 1, amount: 60 }] }), null); // ตัดแถว = ไม่ใช่จำนวนเท่าเดิม
   assert.equal(refundDueOf({ moneyMustPaid: "180" }, 90), 90);
   assert.equal(refundDueOf({ moneyMustPaid: 100 }, 100), 0);
 });
@@ -143,7 +149,13 @@ test("สำเร็จ: เขียนตามลำดับ ①→create�
     "set bill/b-new amendOf,amend",
     "voidSale amendedBy=-",
     "update bill/b1 amendedBy,amend.status,amend.newBillId,amend.newReceiptNumber,amend.refundDue,amend.doneAt",
+    "set notification/undefined heading,shopId,notificationContent,categoryId,timestamp", // B-5 · ใน txn ⑤ เดียวกัน
   ]);
+  const noti = DB.notification[undefined];
+  assert.equal(noti.categoryId, 8); assert.equal(noti.heading, "แก้ไขใบเสร็จ"); assert.equal(noti.shopId, "shopA");
+  assert.equal(noti.timestamp.getTime(), NOW.getTime());
+  assert.match(noti.notificationContent, /ใบเดิม 202611000010 → ใบใหม่ /);
+  assert.match(noti.notificationContent, /คืนลูกค้า 50\.00 บาท/);
   const b1 = DB.bill.b1;
   assert.equal(b1.amend.status, "done");
   assert.equal(b1.amend.requestId, RID);

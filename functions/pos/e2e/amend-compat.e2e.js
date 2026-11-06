@@ -75,6 +75,11 @@ test("แก้บิล: ใบเดิม void + ลิงก์ไปใบ�
   assert.equal(again.body.newBillId, a.body.newBillId);
   assert.equal((await E.where("bill", "shopId", f.id.shopA)).length, 2);
   assert.equal((await get("stock", f.id.pWater)).stock, 49);
+  // B-5: แจ้งเตือน "แก้ไขใบเสร็จ" หมวด 8 ใบเดียว (ยิงซ้ำไม่เพิ่ม) · ไม่มี "ยกเลิกใบเสร็จ" ซ้อนจากขั้นยกเลิกของการแก้
+  const notis = await E.where("notification", "shopId", f.id.shopA);
+  assert.deepEqual(notis.map((n) => [n.heading, n.categoryId]), [["แก้ไขใบเสร็จ", 8]], JSON.stringify(notis));
+  // B-10: บิลเดิมเก็บ voidRefundCash ตอนยกเลิก (ไม่มีสมาชิก = 0) และยังผ่าน Bill
+  assert.equal((await get("bill", s.body.billId)).voidRefundCash, 0);
 
   if (O.HAVE_OLD) {
     // จอประวัติบิลแอปเก่า (/bill/test) วันนี้ตามรอบตัดวัน 00:00 · เห็นใบใหม่ปกติ และใบเดิมในแท็บยกเลิก พร้อมเหตุผล
@@ -94,7 +99,8 @@ test("แก้บิล: ใบเดิม void + ลิงก์ไปใบ�
   }
 });
 
-test("พิมพ์ซ้ำ/ใบกำกับของแอปเก่า กับบิลที่คำขอไม่ส่ง pointDiscount campaign (schema ยอมให้ขาด)", { skip: O.skipOld, todo: "แอปเก่าอ่าน pointDiscount.value และ campaign.length ตรง ๆ · บิลขาด 2 ช่องนี้ = จอพิมพ์ใบกำกับแอปเก่า throw · รอ Pack เลือก: server เติมค่าตั้งต้น หรือบังคับแอปใหม่ส่ง" }, async () => {
+// C-1 (agent เลือกทางปลอดภัย 2026-11-06 · Pack ให้เลือกเอง): server เติม pointDiscount {value:0,point:0} และ campaign [] เมื่อคำขอไม่ส่ง
+test("พิมพ์ซ้ำ/ใบกำกับของแอปเก่า กับบิลที่คำขอไม่ส่ง pointDiscount campaign (schema ยอมให้ขาด) · server เติมค่าว่าง (C-1)", { skip: O.skipOld }, async () => {
   const f = await fresh();
   const body = saleBody(f);
   delete body.pointDiscount;
@@ -103,6 +109,8 @@ test("พิมพ์ซ้ำ/ใบกำกับของแอปเก่�
   assert.equal(s.status, 200, JSON.stringify(s.body));
   const bill = await get("bill", s.body.billId);
   parseOk(S.Bill, bill, "บิลไม่มี pointDiscount campaign");
+  assert.deepEqual(bill.pointDiscount, { value: 0, point: 0 });
+  assert.deepEqual(bill.campaign, []);
   assert.doesNotThrow(() => O.oldPrintFields(bill));
 });
 

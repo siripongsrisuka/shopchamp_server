@@ -1,4 +1,4 @@
-// เทสข้างไฟล์ pos/shift/manage.js — ส่วนที่ harness วัดไม่ได้ (harness เขียน = no-op)
+// เทสข้างไฟล์ pos/shift/manage.js — ส่วนที่ case ในสัญญาวัดยาก (harness บันทึกการเขียนแต่ไม่ลงฐาน · ไม่เห็นลำดับอ่าน/เขียน)
 //   รูปเอกสารที่เขียน · อ่านครบก่อนเขียนใน transaction · ไม่เขียนเมื่อถูกปัด/ซ้ำ
 "use strict";
 const test = require("node:test");
@@ -11,16 +11,28 @@ const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMilli
 function fakeDb(seed) {
   const log = [];
   const snap = (coll, id) => { const d = (seed[coll] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  // where รองรับ == >= > array-contains · เวลาเทียบเป็น ms (Timestamp ปลอมคนละ object แต่เวลาเดียวกัน = เท่ากัน)
+  const msOf = (v) => (v instanceof Date ? v.getTime() : v && typeof v.toMillis === "function" ? v.toMillis() : undefined);
+  const match = (dv, op, v) => {
+    const a = msOf(dv), b = msOf(v);
+    if (a !== undefined && b !== undefined) { dv = a; v = b; }
+    if (op === "==") return dv === v;
+    if (op === ">=") return dv !== undefined && dv >= v;
+    if (op === ">") return dv !== undefined && dv > v;
+    if (op === "array-contains") return Array.isArray(dv) && dv.includes(v);
+    throw new Error("fake where op " + op);
+  };
   const query = (coll, filters) => ({
-    where: (f, op, v) => query(coll, [...filters, [f, v]]),
+    where: (f, op, v) => query(coll, [...filters, [f, op, v]]),
     get: async () => {
-      const docs = Object.entries(seed[coll] || {}).filter(([, d]) => filters.every(([f, v]) => d[f] === v)).map(([id, d]) => ({ id, exists: true, data: () => d }));
+      const docs = Object.entries(seed[coll] || {}).filter(([, d]) => filters.every(([f, op, v]) => match(d[f], op, v))).map(([id, d]) => ({ id, exists: true, data: () => d }));
       return { docs, size: docs.length, empty: docs.length === 0 };
     },
     _q: coll,
   });
+  let auto = 0;
   const db = {
-    collection: (coll) => ({ doc: (id) => ({ _coll: coll, id, get: async () => snap(coll, id) }), where: (f, op, v) => query(coll, [[f, v]]) }),
+    collection: (coll) => ({ doc: (id) => ({ _coll: coll, id: id === undefined ? `__auto_${++auto}` : id, get: async () => snap(coll, id) }), where: (f, op, v) => query(coll, [[f, op, v]]) }),
     runTransaction: async (fn) => fn({
       get: async (ref) => { log.push(["get", ref._coll || ref._q]); return ref.get(); },
       set: (ref, data) => log.push(["set", ref._coll, ref.id, data]),
@@ -67,8 +79,10 @@ test("open: เขียน shift รูปเดิม + openRequestId · เ�
   const { res, log } = await call({ shop: shop(), shift: { sh1: s } }, { op: "open", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "เจ้าของ", requestId: "r1", openCash: "300" }, OWNER);
   assert.equal(res.code, 200);
   const w = log.filter((l) => l[0] !== "get");
-  assert.equal(w.length, 1);
+  assert.equal(w.length, 2); // shift + แจ้งเตือน (A-9)
   assert.deepEqual(w[0].slice(0, 3), ["update", "shift", "sh1"]);
+  assert.deepEqual(w[1].slice(0, 3), ["set", "notification", "sh1_open_r1"]);
+  assert.deepEqual({ ...w[1][3], timestamp: w[1][3].timestamp.toISOString() }, { heading: "เปิดกะที่ 1", notificationContent: "ยอดเงิน 300.00 บาท\nโดย เจ้าของ", shopId: "shopA", categoryId: 2, timestamp: "2026-11-10T03:00:00.000Z" });
   const p = w[0][3];
   assert.equal(p.status, true);
   assert.equal(p.openTime.toISOString(), "2026-11-10T03:00:00.000Z");
@@ -242,4 +256,92 @@ test("#5 ส่ง during ซ้ำหลังปิดกะ (รายกา�
   const other = await call({ shop: shop(), shift: { sh1: s }, shiftHistory: hist }, { ...body, requestId: "d-new" }, OWNER);
   assert.equal(other.res.code, 409);
   assert.equal(other.res.body.error, "shift_not_open");
+});
+
+// ── ก้อน 4 รอบ 2 (Pack เคาะ 2026-11-06 · chunk4-case-additions.md) ──
+const sets = (log, coll) => log.filter((l) => l[0] === "set" && l[1] === coll);
+
+test("A-8 close: บิลไม่มีป้ายที่ขายก่อน openTime (รอบก่อน shiftId เดียวกัน) ไม่นับ · หลัง openTime นับ · บิลมีป้ายรอบนี้แต่นาฬิกาเครื่องช้านับ", async () => {
+  const bill = {
+    b1: bills().b1,
+    old: { shopId: "shopA", shiftId: "sh1", dateTime: ts("2026-11-09T05:00:00.000Z"), moneyMustPaid: 999, product: [], payment: [{ id: 1, amount: 999 }] },
+    legacy: { shopId: "shopA", shiftId: "sh1", dateTime: ts("2026-11-10T02:10:00.000Z"), moneyMustPaid: 20, product: [], payment: [{ id: 1, amount: 20 }] },
+    // ป้ายรอบนี้ แต่ dateTime (= soldAt เครื่อง) ช้ากว่า openTime ของ server · ต้องได้จาก query ป้าย
+    skew: { shopId: "shopA", shiftId: "sh1", shiftOpenTime: ts("2026-11-10T01:00:00.000Z"), dateTime: ts("2026-11-10T00:55:00.000Z"), moneyMustPaid: 5, product: [], payment: [{ id: 1, amount: 5 }] },
+  };
+  const { res } = await call({ shop: shop(), shift: { sh1: openShift() }, bill }, closeBody({ closeCash: "675", expectedCash: 675 }), OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.equal(res.body.expectedCash, 675); // 500 + 50 + 100 + 20 + 5 · ไม่มี 999
+  assert.equal(res.body.summary.billQty, 3);
+});
+
+test("A-8 roundDocs: 2 query (ป้าย · เวลา) รวมด้วย doc id ไม่ซ้ำ · paidHistory ใช้ timestamp", async () => {
+  const asked = [];
+  const mk = (coll, f = []) => ({ where: (a, op, v) => mk(coll, [...f, `${a}${op}`]), _f: f, _c: coll });
+  const { db } = fakeDb({});
+  const M = load({ ...db, collection: (c) => ({ where: (a, op) => mk(c, [`${a}${op}`]) }) });
+  const docs = await M.roundDocs(async (q) => { asked.push(`${q._c}:${q._f.join("&")}`); return { docs: [{ id: "x" }, { id: q._f[1].startsWith("shiftOpenTime") ? "y" : "x" }] }; }, "paidHistory", "sh1", ts("2026-11-10T01:00:00.000Z"));
+  assert.deepEqual(asked.sort(), ["paidHistory:shiftId==&shiftOpenTime==", "paidHistory:shiftId==&timestamp>="]);
+  assert.deepEqual(docs.map((d) => d.id).sort(), ["x", "y"]);
+});
+
+test("A-9 แจ้งเตือนหมวด 2: during และ close รูปข้อความเดิม · ทีมงานติดรอย · ซ้ำไม่เขียน", async () => {
+  const d = await call({ shop: shop(), shift: { sh1: openShift() } }, { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-company", staffName: "ทีมงาน", requestId: "d1", type: 2, amount: "20", comment: "ซื้อน้ำแข็ง" }, ADMIN);
+  const n = sets(d.log, "notification");
+  assert.equal(n.length, 1);
+  assert.equal(n[0][2], "sh1_during_d1");
+  assert.deepEqual({ h: n[0][3].heading, c: n[0][3].notificationContent, k: n[0][3].categoryId, b: n[0][3].byAdmin, u: n[0][3].adminUid },
+    { h: "จัดการเงินระหว่างกะ (กะที่1)", c: "นำเงินออก\nจำนวนเงิน : 20 บาท\nเหตุผล: ซื้อน้ำแข็ง\nโดย ทีมงาน", k: 2, b: true, u: "u-company" });
+  const c = await call({ shop: shop(), shift: { sh1: openShift() }, bill: bills() }, closeBody({ closeCash: "640", closeWithDraw: "100", expectedCash: 650 }), OWNER);
+  const cn = sets(c.log, "notification");
+  assert.equal(cn.length, 1);
+  assert.equal(cn[0][3].heading, "ปิดกะที่ 1");
+  assert.equal(cn[0][3].notificationContent, [
+    "โดย เจ้าของ", "รายได้รวม : 100.00", "เงินสด : 100.00", "เงินสดเริ่มต้นเปิดกะ 500.00", "ยอดชำระเงินสด 100.00", "เงินสดรวมที่คาดไว้ 650.00",
+    "เงินสดที่นับได้จริง 640.00", "ยอดเงินขาด/เกิน -10.00", "เงินสดที่ถอนออก 100.00", "ยอดเงินสดคงเหลือในเครื่อง 540.00",
+    "ระหว่างกะ", "1. นำเงินเข้า 50.00 บาท", " โดย เจ้าของ, เหตุผล :  ", "เวลา 10/11/2026 08:30:00 น.",
+  ].join("\n"));
+  assert.equal("byAdmin" in cn[0][3], false);
+});
+
+test("B-11 open: พนักงาน inActive → 409 staff_inactive ไม่เขียน · active ผ่าน · inActive บันทึกเงินเข้าออก/ปิดกะได้", async () => {
+  const sh = () => ({ shopA: { shopId: "shopA", humanResource: [{ id: "u-owner", status: "active", position: ["001"] }, { id: "u-off", name: "ปิดแล้ว", status: "inActive" }] } });
+  const closed = { ...openShift(), status: false, lastShiftDate: "20261109" };
+  const open = (staffId) => ({ op: "open", shopId: "shopA", shiftId: "sh1", staffId, staffName: "", requestId: "r1", openCash: "0" });
+  const off = await call({ shop: sh(), shift: { sh1: closed } }, open("u-off"), OWNER);
+  assert.equal(off.res.code, 409);
+  assert.equal(off.res.body.error, "staff_inactive");
+  assert.deepEqual(off.log.filter((l) => l[0] !== "get"), []);
+  assert.equal((await call({ shop: sh(), shift: { sh1: closed } }, open("u-owner"), OWNER)).res.code, 200);
+  const dur = await call({ shop: sh(), shift: { sh1: openShift() } }, { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-off", staffName: "", requestId: "d9", type: 1, amount: "5", comment: "" }, OWNER);
+  assert.equal(dur.res.code, 200, JSON.stringify(dur.res.body));
+  const cl = await call({ shop: sh(), shift: { sh1: openShift() }, bill: bills() }, closeBody({ staffId: "u-off" }), OWNER);
+  assert.equal(cl.res.code, 200, JSON.stringify(cl.res.body));
+});
+
+test("B-12 close เขียน entryIds · during ซ้ำช้าหลังเปิดรอบใหม่ = duplicate ไม่ต่อท้ายรอบใหม่ · ประวัติจุดขายอื่น/ร้านอื่นไม่นับ", async () => {
+  const c = await call({ shop: shop(), shift: { sh1: openShift() }, bill: bills() }, closeBody(), OWNER);
+  assert.deepEqual(sets(c.log, "shiftHistory")[0][3].entryIds, ["d0"]);
+  const round2 = { ...openShift(), openTime: ts("2026-11-10T03:00:00.000Z"), duringShift: [], openRequestId: "r2" };
+  const body = { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "d0", type: 1, amount: "50", comment: "" };
+  const hist = { sh1_1794272400000: { id: "sh1", shopId: "shopA", entryIds: ["d0"] } };
+  const late = await call({ shop: shop(), shift: { sh1: round2 }, shiftHistory: hist }, body, OWNER, "2026-11-10T04:00:00.000Z");
+  assert.equal(late.res.code, 200);
+  assert.equal(late.res.body.duplicate, true);
+  assert.deepEqual(late.log.filter((l) => l[0] !== "get"), []);
+  for (const other of [{ sh2_1794272400000: { shopId: "shopA", entryIds: ["d0"] } }, { sh1_1794272400000: { shopId: "shopB", entryIds: ["d0"] } }]) {
+    const r = await call({ shop: shop(), shift: { sh1: round2 }, shiftHistory: other }, body, OWNER, "2026-11-10T04:00:00.000Z");
+    assert.equal(r.res.body.duplicate, false, JSON.stringify(other));
+  }
+});
+
+test("C-2 close doc กะรุ่นก่อน มี.ค. 2025: ช่อง initialShift ที่ขาดเติมค่าเดิม · ช่องที่มีอยู่ไม่ถูกทับ", async () => {
+  const { receiptNumber, posId, ...rest } = openShift(); // eslint-disable-line no-unused-vars
+  const s = { ...rest, openComment: "มีค่าเดิม" };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s }, bill: bills() }, closeBody(), OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  const h = sets(log, "shiftHistory")[0][3];
+  assert.deepEqual({ r: h.receiptNumber, p: h.posId, cb: h.closeBy, oc: h.openComment, od: h.openDiff, ow: h.openWithDraw, ob: h.openBy, cc: h.closeComment },
+    { r: "", p: "", cb: "", oc: "มีค่าเดิม", od: "", ow: "", ob: "", cc: "" });
+  assert.equal(h.openCash, "500");
 });

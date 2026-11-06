@@ -4,7 +4,7 @@
 // รูป: factory (deps) => handler(req, res) · deps: now · ยังไม่ export จาก index.js และยังไม่ deploy
 // route ผ่าน checkIfAuthenticated เท่านั้น (ยังไม่รู้ร้าน) · ตัวตน = req.auth.uid · ร้าน = profile.currentLogin.shopId ในฐาน
 // อ่านอย่างเดียว: ❌ ไม่เขียน currentLogin กลับแบบแอปเก่า (LoadingScreen.js:87)
-//   อ่าน profile/{uid} · admin/updateShopchamp · shop where shopId == · admin/adminConfig (ครั้งเดียว เมื่อเจอร้าน)
+//   อ่าน profile/{uid} · admin/updateShopchamp · admin/adminConfig (ครั้งเดียวต่อคำขอ) · shop where shopId ==
 // เทส: loading.test.js (ของที่ชุด case ของสัญญาไม่คุม)
 // ข้อมูลร้านที่คืน = รายการช่องที่อนุญาต (allowlist) · ❌ humanResource ดิบ (รหัสแคชเชียร์ข้อความล้วน #13) · line · taxCustomer
 //   ช่องเวลาของ Firestore แปลงเป็นข้อความ ISO ก่อนส่ง
@@ -24,10 +24,18 @@ const SHOP_FIELDS = Object.freeze([
   "receiptPattern", "amendBill", "POSs", "vip", "shift", "position",
   "shopchampPayment", "rounding", "shopchampVat", "tax", "receipt",
   "smartCategory", "smartPoint", "creditPoint", "cutOff",
+  // A-2 (Pack เคาะ 2026-11-06 คงแบบแอปเก่า): ช่องที่แอปเก่าอ่านจากก้อนร้าน (main3 src/config/initialShop.js · ผู้อ่านตรวจด้วย git grep main3)
+  //   ❌ lineNoti lineUsers (ยังไม่เปิดดูของจริงว่ามี token ไหม) · ❌ line taxCustomer humanResource ดิบ (เหมือนเดิม)
+  "smartCoupon", "smartReward", "categoryExpense", "soundPlayers", "soundStatus", "customerAds",
+  "imageUrl", "imageLimit", "imageMore", "totalMember", "printers", "payment", "receiptPay", "smartAddress",
+  "notiImport", "notiShift", "notiStaff", "notiStock", "notiSummary", "notiCancelBill", "notiCheckin", "notiCredit", "notiRequisition",
 ]);
 // ช่องของพนักงานแต่ละคนที่ส่งได้ · ❌ password (รหัสแคชเชียร์) · rights ของคนอื่น
 const STAFF_FIELDS = Object.freeze(["id", "name", "position", "status", "owner"]);
-const UPDATE_FIELDS = Object.freeze(["lastedVersion", "isMustUpdate", "appUrl", "detail"]);
+// A-3: isPackageOn แบบแอปเก่า (main3 LoadingScreen.js:57,192 · ใช้ที่ HomeScreen.js:175)
+const UPDATE_FIELDS = Object.freeze(["lastedVersion", "isMustUpdate", "appUrl", "detail", "isPackageOn"]);
+// B-3 (agent เลือก): จาก admin/adminConfig ส่งเฉพาะ 2 ช่องที่แอปเก่าอ่าน (redux/adminSlice.js:38-45) · ❌ รายชื่อ admin ไม่ออกเด็ดขาด
+const ADMIN_CONFIG_FIELDS = Object.freeze(["mainAds", "screenVedios"]);
 
 const isNonEmptyString = (v) => typeof v === "string" && v !== "";
 const isPlainObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -82,6 +90,11 @@ function updateView(updateDoc, platform) {
   return u ? pick(u, UPDATE_FIELDS) : null;
 }
 
+/** adminConfigView(cfg) — {mainAds, screenVedios} ที่มีจริง · ไม่มี doc = null (ไม่ส่ง key) */
+function adminConfigView(cfg) {
+  return isPlainObject(cfg) ? pick(cfg, ADMIN_CONFIG_FIELDS) : null;
+}
+
 function loading(deps) {
   return async function handler(req, res) {
     const uid = req && req.auth && isNonEmptyString(req.auth.uid) ? req.auth.uid : "";
@@ -91,10 +104,13 @@ function loading(deps) {
 
     try {
       const now = await readNow(deps);
-      const [profileSnap, updateSnap] = await Promise.all([
+      // adminConfig อ่านครั้งเดียวต่อคำขอ (แอปเก่าอ่านคู่กันตอนบูต LoadingScreen.js:49-53) · ใช้ทั้งคำตอบ (B-3) และตัดสินทีมงาน
+      const [profileSnap, updateSnap, configSnap] = await Promise.all([
         db.collection("profile").doc(uid).get(),
         db.collection("admin").doc("updateShopchamp").get(),
+        db.collection("admin").doc("adminConfig").get(),
       ]);
+      const cfg = configSnap.exists ? configSnap.data() : null;
       if (!profileSnap.exists) return fail(res, 404, "profile_not_found", "ไม่พบข้อมูลบัญชี");
 
       const profile = profileSnap.data() || {};
@@ -102,8 +118,11 @@ function loading(deps) {
         uid,
         serverTime: now.toISOString(),
         profile: profileView(profile),
+        // B-2 (agent เลือก): ไม่มี doc/ไม่มีแพลตฟอร์มนี้ = update:null · แอปใหม่ข้ามการเตือนอัปเดต (แอปเก่าค้างหน้าโหลด)
         update: updateView(updateSnap.exists ? updateSnap.data() : null, input.platform),
       };
+      const adminView = adminConfigView(cfg);
+      if (adminView) base.adminConfig = adminView;
 
       const shopField = isPlainObject(profile.currentLogin) && isNonEmptyString(profile.currentLogin.shopId)
         ? profile.currentLogin.shopId : "";
@@ -117,8 +136,7 @@ function loading(deps) {
 
       // ทีมงานมาก่อนสมาชิก (ตัดสินที่ _shared/auth.js › resolveShopAccess · แอปเก่า LoadingScreen.js:63,77,83)
       //   ทีมงานที่บังเอิญเป็นพนักงานในร้านได้ owner + byAdmin เหมือนทุก route (ผลตรวจ chunk4-verify/profile.loading.md W1)
-      const adminConfig = () => db.collection("admin").doc("adminConfig").get().then((s) => (s.exists ? s.data() : null));
-      const r = await resolveShopAccess({ shopDocId: shopDoc.id, shop, uid, now, adminConfig });
+      const r = await resolveShopAccess({ shopDocId: shopDoc.id, shop, uid, now, adminConfig: cfg });
       if (!r.ok) {
         const reason = r.extra && r.extra.reason === "inactive" ? "inactive" : "not_a_member";
         return ok(res, { ...base, access: { status: reason } });
@@ -139,4 +157,4 @@ function loading(deps) {
   };
 }
 
-module.exports = { loading, shopView, toPlain, SHOP_FIELDS, STAFF_FIELDS };
+module.exports = { loading, shopView, toPlain, adminConfigView, SHOP_FIELDS, STAFF_FIELDS, UPDATE_FIELDS, ADMIN_CONFIG_FIELDS };

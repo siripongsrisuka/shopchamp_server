@@ -85,4 +85,27 @@ function decide({ receiptUUID, shopRef, discard, guard, billOfGuard } = {}) {
   return { kind: "write" };
 }
 
-module.exports = { bodyStorable, bodyFields, discardDoc, decide, MAX_BODY_BYTES, MAX_DEPTH };
+const UUID_TAIL_LEN = 36;
+const UUID_TAIL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * foreignPrefixOf(receiptUUID, shopRef) — B-7 (agent เลือกทางปลอดภัย 2026-11-06 · Pack ให้เลือกเอง)
+ *   รหัสรูปแอปเก่า `<shop.shopId><uuid>` ที่ prefix ไม่ใช่ของร้านนี้ = ต้องตรวจว่าเป็นของร้านอื่นไหมก่อนจองร่องรอย
+ *   (doc id ร่องรอย = receiptUUID ร่วมทุกร้าน ⇒ ร้าน B จอง `shopA<uuid>` ได้ แล้วร้าน A ลบใบนั้นได้ 409 ตลอด)
+ * @returns {null} ไม่ต้องตรวจ (ไม่มี prefix · uuid ล้วน · prefix = doc id หรือ field ของร้านนี้)
+ *   | {{refuse:true}} prefix 'undefined'/'null' แต่ร้านนี้มี field (ไม่ใช่ prefix ของร้านนี้แน่ · ไม่ผูกร้านใด = ปัดเลย)
+ *   | {{prefix}} ให้ handler อ่าน shop/{prefix} และ shop where shopId == prefix
+ */
+function foreignPrefixOf(receiptUUID, shopRef) {
+  if (typeof receiptUUID !== "string" || receiptUUID.length <= UUID_TAIL_LEN) return null;
+  const tail = receiptUUID.slice(-UUID_TAIL_LEN);
+  if (!UUID_TAIL_RE.test(tail)) return null;
+  const prefix = receiptUUID.slice(0, -UUID_TAIL_LEN);
+  const ref = shopRef || {};
+  if (prefix === ref.id || (typeof ref.shopId === "string" && ref.shopId !== "" && prefix === ref.shopId)) return null;
+  if (prefix === "undefined") return ref.fieldState === "missing" ? null : { refuse: true };
+  if (prefix === "null") return ref.fieldState === "null" ? null : { refuse: true };
+  return { prefix };
+}
+
+module.exports = { bodyStorable, bodyFields, discardDoc, decide, foreignPrefixOf, MAX_BODY_BYTES, MAX_DEPTH };

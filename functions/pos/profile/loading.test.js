@@ -169,3 +169,49 @@ test("profile ที่คืน = 5 ช่องเท่านั้น (ไ�
   const r = await call("u-owner");
   assert.deepEqual(Object.keys(r.body.profile).sort(), ["email", "imageId", "name", "port", "tel"]);
 });
+
+// ── chunk4 รอบ 2 (Pack เคาะ 2026-11-06 · A-2 A-3 · agent เลือก B-2 B-3) ──
+test("A-2 ช่องร้านที่แอปเก่าอ่านออกครบ · lineNoti lineUsers line taxCustomer ไม่ออก", async () => {
+  seed({ shop: { shopA: shopDoc({ smartCoupon: [{ id: "c1" }], notiShift: ["p1"], receiptPay: { status: false }, totalMember: 3,
+    lineNoti: { shift: ["U1"] }, lineUsers: [{ id: "U1" }], taxCustomer: [{ taxId: "x" }] }) } });
+  const r = await call("u-owner");
+  assert.deepEqual(r.body.shop.smartCoupon, [{ id: "c1" }]);
+  assert.deepEqual(r.body.shop.notiShift, ["p1"]);
+  assert.deepEqual(r.body.shop.receiptPay, { status: false });
+  assert.equal(r.body.shop.totalMember, 3);
+  for (const k of ["lineNoti", "lineUsers", "line", "taxCustomer", "humanResource"]) assert.equal(k in r.body.shop, false, k);
+});
+
+test("A-3 update.isPackageOn ออกเมื่อมี · ไม่มีก็ไม่เติม", async () => {
+  seed();
+  DATA.admin.updateShopchamp.android.isPackageOn = true;
+  assert.equal((await call("u-owner")).body.update.isPackageOn, true);
+  delete DATA.admin.updateShopchamp.android.isPackageOn;
+  assert.equal("isPackageOn" in (await call("u-owner")).body.update, false);
+});
+
+test("B-2 ไม่มี admin/updateShopchamp → update:null แต่ยัง 200 active", async () => {
+  seed();
+  delete DATA.admin.updateShopchamp;
+  const r = await call("u-owner");
+  assert.equal(r.code, 200);
+  assert.equal(r.body.update, null);
+  assert.equal(r.body.access.status, "active");
+});
+
+test("B-3 adminConfig ออกแค่ mainAds screenVedios · รายชื่อ admin ไม่ออกทุกสถานะ · ไม่มี doc = ไม่มี key", async () => {
+  seed();
+  DATA.admin.adminConfig = { admin: ["u-company"], mainAds: [{ id: "a1" }], screenVedios: { HomeScreen: "v" }, secret: "x" };
+  for (const uid of ["u-owner", "u-company", "u-staff"]) {
+    const r = await call(uid);
+    assert.deepEqual(r.body.adminConfig, { mainAds: [{ id: "a1" }], screenVedios: { HomeScreen: "v" } }, uid);
+    assert.equal(JSON.stringify(r.body).includes("u-company\"]"), false);
+  }
+  DATA.profile["u-owner"] = profile("");
+  assert.deepEqual((await call("u-owner")).body.adminConfig.mainAds, [{ id: "a1" }]); // no_shop ก็ได้โฆษณา (แอปเก่าโหลดทุกกรณี)
+  delete DATA.admin.adminConfig;
+  seed(); delete DATA.admin.adminConfig;
+  const r = await call("u-owner");
+  assert.equal("adminConfig" in r.body, false);
+  assert.equal(r.body.access.status, "active"); // ไม่มี doc = ไม่มีทีมงาน แต่เจ้าของยังเข้าได้
+});

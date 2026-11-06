@@ -12,7 +12,8 @@
 //   ③ txn: บิลเดิม amend.newBillId/newReceiptNumber · บิลใหม่ amendOf + amend {status:done, requestId, ofReceiptNumber, ofBillId}
 //      (amend ต้องมี status + requestId ให้ผ่าน schema Bill · ไม่งั้น sale.void / sale.get อ่านใบใหม่ไม่ได้)
 //   ④ voidSale ({body, access, amendVoid:true}) · requestId เดียวกับคำขอแก้ ⇒ ยิงซ้ำได้ alreadyVoid
-//   ⑤ txn: amend.status done + amendedBy
+//   ⑤ txn: amend.status done + amendedBy + notification หมวด 8 "แก้ไขใบเสร็จ" (B-5 · 1 ใบต่อการแก้ · sale.void ที่เรียกจาก ④ ไม่เขียนหมวด 1 ซ้อน)
+//      เลข 8 = เลขว่างถัดไป: แอปเก่าใช้ 1-7 (main3 src/screens/NotificationHistory.js:52-60) และ 99 (PayScreen.js:158 ฯลฯ) · เว็บเจ้าของใช้ 4 99
 // ยิงซ้ำ requestId เดิมที่ค้าง pending = เดินต่อด้วย changes ที่ประทับไว้ (เปลี่ยนเนื้อไม่ได้) · ข้ามขั้นที่มีหลักฐานว่าทำแล้ว
 // amendedBy เขียนที่ ⑤ (หลังยกเลิก) ไม่ใช่ ③: สัญญา sale.void ตอบ already_void ให้บิลที่มี amendedBy
 //   ⇒ เขียนก่อน ④ = handler ยกเลิกตัวจริงจะปัดคำขอยกเลิกของการแก้เอง
@@ -44,6 +45,7 @@ const MESSAGES = {
   line_mismatch: "รายการไม่ตรงกับบิลเดิม",
   qty_increase: "เพิ่มจำนวนไม่ได้",
   net_increase: "ยอดใหม่มากกว่าเดิมไม่ได้",
+  net_decrease: "จำนวนเท่าเดิม ยอดใหม่ต้องเท่าเดิม (ลดราคาเองไม่ได้)",
   payment_mismatch: "ยอดช่องจ่ายไม่เท่ายอดใหม่",
   nothing_changed: "ไม่มีอะไรเปลี่ยน",
   amend_create_failed: "ออกบิลใหม่ไม่สำเร็จ กดยืนยันอีกครั้ง",
@@ -53,6 +55,17 @@ const MESSAGES = {
 // field ของบิลเดิมที่ส่งต่อให้ใบใหม่ (ผ่าน schema SaleCreateRequest ทีละช่อง · ไม่ผ่าน = ไม่ส่ง)
 const CARRY_BODY_FIELDS = ["manualDiscount", "posId", "posNumber", "cashierId", "cashierName", "vatType", "note", "franchiseId"];
 const MONEY_INPUT_FIELDS = ["moneyMustPaid", "productDiscount", "vatAmount", "rounding", "change"];
+const NOTI_HEADING_AMEND = "แก้ไขใบเสร็จ";
+const NOTI_CATEGORY_AMEND = 8; // B-5 · 7 = เบิกสินค้า ห้ามใช้ · ดูหัวไฟล์ ⑤
+
+const money2 = (v) => {
+  const n = toNumber(v);
+  return Number.isFinite(n) ? n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "";
+};
+/** ข้อความแจ้งเตือนการแก้ (โครงเดียวกับ "ยกเลิกใบเสร็จ" ของแอปเก่า BillHistoryScreen.js:393 + เลขใบใหม่และยอดคืน) */
+function amendNotificationContentOf({ reason, oldReceiptNumber, newReceiptNumber, oldMust, newMust, refundDue, staffName }) {
+  return `เหตุผล ${reason}  \nใบเดิม ${oldReceiptNumber} → ใบใหม่ ${newReceiptNumber} \nยอดเงิน ${money2(oldMust)} → ${money2(newMust)} บาท \nคืนลูกค้า ${money2(refundDue)} บาท \nโดย ${staffName} `;
+}
 
 class Deny extends Error {
   constructor(status, error, extra) {
@@ -402,6 +415,22 @@ function amend(deps) {
           "amend.refundDue": refundDue,
           "amend.doneAt": now,
         });
+        txn.set(db.collection("notification").doc(), {
+          heading: NOTI_HEADING_AMEND,
+          shopId: (step.shopRef && (step.shopRef.shopId || step.shopRef.id)) || access.shopId,
+          notificationContent: amendNotificationContentOf({
+            reason: prior.reason || input.reason,
+            oldReceiptNumber: oldBill.receiptNumber,
+            newReceiptNumber,
+            oldMust: oldBill.moneyMustPaid,
+            newMust: changes.moneyMustPaid,
+            refundDue,
+            staffName: stampedStaff(prior).name || input.staffName,
+          }),
+          categoryId: NOTI_CATEGORY_AMEND,
+          timestamp: now,
+          ...trail,
+        });
       });
     } catch (e) {
       log("pos/sale/amend: ปิดงานไม่สำเร็จ", e && e.message);
@@ -420,4 +449,4 @@ function amend(deps) {
   };
 }
 
-module.exports = { amend, createBodyOf, carryOf, checkShift };
+module.exports = { amend, createBodyOf, carryOf, checkShift, amendNotificationContentOf, NOTI_CATEGORY_AMEND };
