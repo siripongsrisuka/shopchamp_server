@@ -60,23 +60,30 @@ service cloud.firestore {
       return docId is string && docId != '' && existsAfter(docPath('shop', docId)) && shopRecordHasMe(getAfter(docPath('shop', docId)).data);
     }
     // ดัชนีร้านรุ่นเก่า: key = field shopId (uid เจ้าของ) · docIds = doc id ของร้านที่ถือค่านี้ (ราว 1% มีมากกว่า 1 ร้าน)
-    function aliasHasMe(a, after) {
+    function aliasHasMe(a) {
       return a.get('docIds', []) is list && (
-        (a.docIds.size() > 0 && (after ? shopDocHasMeAfter(a.docIds[0]) : shopDocHasMe(a.docIds[0])))
-        || (a.docIds.size() > 1 && (after ? shopDocHasMeAfter(a.docIds[1]) : shopDocHasMe(a.docIds[1])))
-        || (a.docIds.size() > 2 && (after ? shopDocHasMeAfter(a.docIds[2]) : shopDocHasMe(a.docIds[2]))));
+        (a.docIds.size() > 0 && shopDocHasMe(a.docIds[0]))
+        || (a.docIds.size() > 1 && shopDocHasMe(a.docIds[1]))
+        || (a.docIds.size() > 2 && shopDocHasMe(a.docIds[2])));
     }
-    // key = doc id ของร้าน หรือ field shopId ของร้าน · ดูดัชนีก่อนเสมอ (กันคนสร้าง shop/{uid เหยื่อ} มาครอบ)
-    //   after = true ใช้ในกฎเขียน (เห็นร้านที่สร้างใน transaction เดียวกัน)
-    function memberCheck(key, after) {
+    function aliasHasMeAfter(a) {
+      return a.get('docIds', []) is list && (
+        (a.docIds.size() > 0 && shopDocHasMeAfter(a.docIds[0]))
+        || (a.docIds.size() > 1 && shopDocHasMeAfter(a.docIds[1]))
+        || (a.docIds.size() > 2 && shopDocHasMeAfter(a.docIds[2])));
+    }
+    function memberOf(key) {
       return signedIn() && key is string && key != '' && (
         key == me()
         || staffTeam()
-        || (exists(docPath('shopAlias', key)) ? aliasHasMe(get(docPath('shopAlias', key)).data, after)
-            : (after ? shopDocHasMeAfter(key) : shopDocHasMe(key))));
+        || (exists(docPath('shopAlias', key)) ? aliasHasMe(get(docPath('shopAlias', key)).data) : shopDocHasMe(key)));
     }
-    function memberOf(key) { return memberCheck(key, false); }
-    function memberOfW(key) { return memberCheck(key, true); }
+    function memberOfW(key) {
+      return signedIn() && key is string && key != '' && (
+        key == me()
+        || staffTeam()
+        || (exists(docPath('shopAlias', key)) ? aliasHasMeAfter(get(docPath('shopAlias', key)).data) : shopDocHasMeAfter(key)));
+    }
     // แฟรนไชส์: franchise/{id}.humanResource = รายการ uid (Franchise StaffScreen.js:47 · FranchiseListScreen.js:65 array-contains)
     function franchiseMemberOf(fid) {
       return signedIn() && fid is string && fid != '' && (
@@ -106,186 +113,44 @@ service cloud.firestore {
     match /productCobrand/{id} { allow read, write: if staffTeam(); }
     match /checkout/{id} { allow read, write: if staffTeam(); }
 
-    // ---------------- collection ของร้าน · กฎแบบเดียวกัน (doc มี field shopId) ----------------
-    match /stock/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /notification/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /member/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /shift/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /importProduct/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /promotion/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /checkIn/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /expense/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /expenseReport/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /memberList/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /supplier/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /shiftHistory/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /hardwareOrder/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /imageOrder/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /packageOrder/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /stockOrder/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /requisition/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /stockReport/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
+    // ---------------- collection ของร้าน (doc มี field shopId) · กฎแบบเดียวกัน รวมไว้ match เดียว ----------------
+    //   รวมเพราะตัวคอมไพล์ของ Google กางฟังก์ชันทุกจุดที่เรียก · แยก 18 match เดิม = :test ตอบ 503 (chunk6-log "rules compile บน Google")
+    //   regex 1 expression ต่อคำขอ · กฎเพิ่มเฉพาะตัวอยู่ใน match ของ collection นั้นด้านล่าง (rules รวมแบบ OR)
+    match /{coll}/{id} {
+      allow get: if coll.matches('^(stock|notification|member|shift|importProduct|promotion|checkIn|expense|expenseReport|memberList|supplier|shiftHistory|hardwareOrder|imageOrder|packageOrder|stockOrder|requisition|stockReport|bill|paidHistory|checkInHistory|stockLink)$') && (absent() || readShopDoc(resource.data));
+      allow list: if coll.matches('^(stock|notification|member|shift|importProduct|promotion|checkIn|expense|expenseReport|memberList|supplier|shiftHistory|hardwareOrder|imageOrder|packageOrder|stockOrder|requisition|stockReport|bill|paidHistory|checkInHistory|stockLink|priceTag|uploadProduct)$') && readShopDoc(resource.data);
+      allow create: if coll.matches('^(stock|notification|member|shift|importProduct|promotion|checkIn|expense|expenseReport|memberList|supplier|shiftHistory|hardwareOrder|imageOrder|packageOrder|stockOrder|requisition|stockReport|bill|paidHistory|checkInHistory|stockLink|priceTag|uploadProduct)$') && createShopDoc();
+      allow update: if coll.matches('^(stock|notification|member|shift|importProduct|promotion|checkIn|expense|expenseReport|memberList|supplier|shiftHistory|hardwareOrder|imageOrder|packageOrder|stockOrder|requisition|stockReport|bill|paidHistory|checkInHistory|stockLink|priceTag|uploadProduct)$') && updateShopDoc();
+      allow delete: if coll.matches('^(stock|notification|member|shift|importProduct|promotion|checkIn|expense|expenseReport|memberList|supplier|shiftHistory|hardwareOrder|imageOrder|packageOrder|stockOrder|requisition|stockReport|bill|paidHistory|checkInHistory|stockLink|priceTag|uploadProduct)$') && deleteShopDoc();
     }
 
-    // bill: ร้านตัวเอง · แฟรนไชส์ของสาขา · ประวัติบิลของสมาชิก (main3:src/redux/memberSlice.js:49 query member.id อย่างเดียว)
+    // bill: + ประวัติบิลของสมาชิก (main3:src/redux/memberSlice.js:49 query member.id อย่างเดียว)
     function memberDocInMyShop(memberId) {
       return memberId is string && memberId != '' && exists(docPath('member', memberId))
         && memberOf(get(docPath('member', memberId)).data.get('shopId', ''));
     }
     match /bill/{billId} {
-      allow get: if absent() || readShopDoc(resource.data) || memberDocInMyShop(resource.data.get('member', {}).get('id', ''));
-      allow list: if readShopDoc(resource.data) || memberDocInMyShop(resource.data.member.id);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
+      allow get: if memberDocInMyShop(resource.data.get('member', {}).get('id', ''));
+      allow list: if memberDocInMyShop(resource.data.member.id);
     }
     // paidHistory: เหมือนกัน · จอประวัติชำระ query memberId อย่างเดียว (main3:src/screens/MemberPaidScreen.js:54)
     match /paidHistory/{id} {
-      allow get: if absent() || readShopDoc(resource.data) || memberDocInMyShop(resource.data.get('memberId', ''));
-      allow list: if readShopDoc(resource.data) || memberDocInMyShop(resource.data.memberId);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
+      allow get: if memberDocInMyShop(resource.data.get('memberId', ''));
+      allow list: if memberDocInMyShop(resource.data.memberId);
     }
     // checkInHistory: แอป query `id` = shopId + profileId อย่างเดียว (main3:src/screens/CheckInScreen.js:48) ⇒ ของตัวเองผ่านด้วยท้าย id = uid
     match /checkInHistory/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data) || (signedIn() && resource.data.id.matches('.+' + me()));
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
+      allow list: if signedIn() && resource.data.id.matches('.+' + me());
     }
-    // stockLink: ร้าน (shopId) หรือแฟรนไชส์ (franchiseId · Franchise StockLinkScreen.js:74)
+    // stockLink: + แฟรนไชส์ (franchiseId · Franchise StockLinkScreen.js:74)
     match /stockLink/{id} {
-      allow get: if absent() || readShopDoc(resource.data);
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc() || franchiseMemberOf(request.resource.data.get('franchiseId', ''));
-      allow update: if updateShopDoc()
-        || (franchiseMemberOf(resource.data.get('franchiseId', '')) && request.resource.data.get('franchiseId', '') == resource.data.get('franchiseId', ''));
-      allow delete: if deleteShopDoc() || franchiseMemberOf(resource.data.get('franchiseId', ''));
+      allow create: if franchiseMemberOf(request.resource.data.get('franchiseId', ''));
+      allow update: if franchiseMemberOf(resource.data.get('franchiseId', '')) && request.resource.data.get('franchiseId', '') == resource.data.get('franchiseId', '');
+      allow delete: if franchiseMemberOf(resource.data.get('franchiseId', ''));
     }
     // priceTag uploadProduct: แอปสร้าง · หน้าเว็บของรุ่นเดิมเปิดด้วย doc id ใน URL ผ่านบัญชีกลาง (#12) ⇒ get รายใบเปิดให้ผู้ login
-    match /priceTag/{id} {
-      allow get: if signedIn();
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
-    match /uploadProduct/{id} {
-      allow get: if signedIn();
-      allow list: if readShopDoc(resource.data);
-      allow create: if createShopDoc();
-      allow update: if updateShopDoc();
-      allow delete: if deleteShopDoc();
-    }
+    match /priceTag/{id} { allow get: if signedIn(); }
+    match /uploadProduct/{id} { allow get: if signedIn(); }
     // pgWebhook: อ่านเฉพาะร้านตัวเอง · เขียนจาก client ไม่ได้ (architecture-plan ก้อน 6 · gateway-pattern §2.2)
     match /pgWebhook/{id} {
       allow get: if absent() || memberOf(shopOf(resource.data));
