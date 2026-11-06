@@ -9,3 +9,10 @@ if [ ! -f "$GATE" ]; then
   exit 1
 fi
 node "$GATE" || exit 1
+# เทสข้าง handler ของ API ใหม่ (functions/pos/**/*.test.js) ต้องผ่านทุกตัว (ก้อน 4 · Pack อนุญาต 2026-11-06)
+POS_GATE="$ROOT/../shopchamp-center/gate/check-pos-tests.js"
+if [ ! -f "$POS_GATE" ]; then
+  echo "🔴 ไม่พบด่านเทส pos $POS_GATE · repo นี้ต้องอยู่ใน ~/shopchamp-workspace คู่กับ shopchamp-center" >&2
+  exit 1
+fi
+node "$POS_GATE" --root "$ROOT/functions" || exit 1
