@@ -11,6 +11,7 @@
 
 const { db } = require("../../firebase");
 const { deny } = require("../_shared/respond");
+const { MAX_LINK_MULTIPLY } = require("@shopchamp/logic");
 const F = require("./_franchise");
 
 function linkOf(snap, franchiseId) {
@@ -25,6 +26,14 @@ const linkSave = F.makeHandler("FranchiseLinkSaveRequest", async ({ uid, input, 
   const { access } = await F.readGate((r) => tx.get(r), input.franchiseId, uid, { rights: [F.RIGHT.WAREHOUSE] });
   const ids = input.members.map((m) => m.id);
   if (new Set(ids).size !== ids.length) F.refuse(deny(400, "link_invalid", "สินค้าซ้ำในกลุ่ม", { reason: "duplicate_member" }));
+  // ตัวคูณกติกาเดียวกับกลุ่มของร้าน (9a logic.buildLinkGroup): จำนวนเต็ม 1..MAX_LINK_MULTIPLY · ซ้ำในกลุ่มไม่ได้ (Pack ข้อ 12 ข)
+  const mults = new Set();
+  for (const m of input.members) {
+    const x = m.linkMultiply;
+    if (!Number.isInteger(x) || x < 1 || x > MAX_LINK_MULTIPLY) F.refuse(deny(400, "link_invalid", "ตัวคูณต้องเป็นจำนวนเต็ม 1 ถึง 100,000", { reason: "bad_link_multiply", itemId: m.id }));
+    if (mults.has(x)) F.refuse(deny(400, "link_invalid", "ตัวคูณซ้ำกันในกลุ่ม", { reason: "duplicate_multiply", itemId: m.id }));
+    mults.add(x);
+  }
   const ones = input.members.filter((m) => m.linkMultiply === 1).length;
   if (ones !== 1) F.refuse(deny(400, "link_invalid", "ต้องมีสินค้าอ้างอิงตัวคูณ 1 หนึ่งรายการ", { reason: ones ? "many_reference" : "no_reference" }));
 

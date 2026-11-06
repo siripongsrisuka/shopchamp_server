@@ -27,7 +27,9 @@ const staffFind = F.makeHandler("FranchiseStaffFindRequest", async ({ uid, input
 });
 
 // ── franchise.staffSave ──
-const has723 = (rows) => rows.some((r) => F.arr(r.rights).includes(F.RIGHT.STAFF));
+// นับเฉพาะแถวที่ใช้งานได้ (ไม่มีช่อง status หรือ 'active') · ด่านเดียวกับ franchiseAccessOf ⇒ แถวไม่ใช้งานตั้งสิทธิ์ไม่ได้อยู่แล้ว
+const isActiveRow = (r) => typeof r.status !== "string" || r.status === "active";
+const has723 = (rows) => rows.some((r) => isActiveRow(r) && F.arr(r.rights).includes(F.RIGHT.STAFF));
 
 const staffSave = F.makeHandler("FranchiseStaffSaveRequest", async ({ uid, input, now }) => db.runTransaction(async (tx) => {
   const pRef = db.collection("profile").doc(input.staffUid);
@@ -41,6 +43,8 @@ const staffSave = F.makeHandler("FranchiseStaffSaveRequest", async ({ uid, input
   const rights = input.rights ? [...new Set(input.rights)] : null;
   let after;
   if (input.op === "add") {
+    // กดซ้ำหลังคำตอบหาย: อยู่แล้วและสิทธิ์เท่าที่ขอ = สำเร็จไปแล้ว · สิทธิ์ต่าง = 409 ไม่ทับ (SF-32)
+    if (idx >= 0 && F.sameValue([...before[idx].rights].sort(), [...rights].sort())) return { op: "add", staffUid: input.staffUid, duplicate: true, ...F.adminFlag(access) };
     if (idx >= 0) F.refuse(deny(409, "staff_exists", "คนนี้อยู่ในรายชื่อแล้ว แก้สิทธิ์จากรายการแทน"));
     if (!pSnap.exists) F.refuse(deny(404, "profile_not_found", "ไม่พบบัญชีผู้ใช้"));
     const p = pSnap.data() || {};

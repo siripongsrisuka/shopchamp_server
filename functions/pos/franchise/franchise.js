@@ -98,24 +98,33 @@ function checkTree(levels) {
 const categorySave = F.makeHandler("FranchiseCategorySaveRequest", async ({ uid, input, now }) => db.runTransaction(async (tx) => {
   const { ref, franchise, access } = await F.readGate((r) => tx.get(r), input.franchiseId, uid, { rights: [F.RIGHT.WAREHOUSE] });
   const current = F.arr(franchise.warehouseCategory);
+  const { tree, ids, problem } = checkTree(input.warehouseCategory);
+  // ฐานเป็นต้นที่ส่งมาแล้ว (กดซ้ำหลังคำตอบหาย หรือคนอื่นแก้เป็นแบบเดียวกัน) = สำเร็จ ไม่ต้องเทียบ seen
+  if (!problem && F.sameValue(current, tree)) return { franchiseId: ref.id, unchanged: true, ...F.adminFlag(access) };
   // ต้นในฐานต้องเท่าที่จอเห็น ไม่งั้นทับของคนอื่น (DI-37 · WC-41 · WC-06)
   if (!F.sameValue(current, input.seenWarehouseCategory)) {
     F.refuse(deny(409, "category_changed", "มีคนแก้หมวดหมู่ไปก่อน กรุณาเปิดใหม่", { warehouseCategory: current }));
   }
-  const { tree, ids, problem } = checkTree(input.warehouseCategory);
   if (problem) F.refuse(deny(400, "category_invalid", "โครงหมวดหมู่ไม่ถูกต้อง", problem));
-  if (F.sameValue(current, tree)) return { franchiseId: ref.id, unchanged: true, ...F.adminFlag(access) };
 
-  // ลบหมวดที่สินค้ายังใช้อยู่ไม่ได้ (ST-048 · WC-37) · ดูทั้ง 2 รูปของ category (id / object · ST-107)
-  const removed = [...F.categoryNodes(current).keys()].filter((id) => !ids.has(id));
-  if (removed.length) {
+  // หมวดที่สินค้ายังใช้อยู่ ลบไม่ได้ (ST-048 · WC-37) และย้ายไปใต้แม่อื่นไม่ได้ (สินค้าจะถือสายหมวดที่ไม่มีแล้ว)
+  //   ดูทั้ง 2 รูปของ category (id / object · ST-107) · เปลี่ยนชื่อได้ (สินค้าถือ id)
+  const before = F.categoryNodes(current);
+  const after = new Map(tree.flatMap((lv) => lv.value.map((n) => [n.id, n])));
+  const pathOf = (n) => `${Number(n.level)}|${F.arr(n.aboveId).join("/")}`;
+  const why = new Map(); // id → 'removed' | 'moved'
+  for (const [id, n] of before) {
+    if (!ids.has(id)) why.set(id, "removed");
+    else if (pathOf(n) !== pathOf(after.get(id))) why.set(id, "moved");
+  }
+  if (why.size) {
     const items = await tx.get(db.collection("warehouseItem").where("franchiseId", "==", input.franchiseId));
-    const gone = new Set(removed);
     const counts = new Map();
-    for (const d of items.docs) for (const c of F.categoryIdsOf((d.data() || {}).category)) if (gone.has(c)) counts.set(c, (counts.get(c) || 0) + 1);
+    for (const d of items.docs) for (const c of F.categoryIdsOf((d.data() || {}).category)) if (why.has(c)) counts.set(c, (counts.get(c) || 0) + 1);
     if (counts.size) {
       const [categoryId, itemCount] = [...counts.entries()][0];
-      F.refuse(deny(409, "category_in_use", "ยังมีสินค้าใช้หมวดนี้ ย้ายสินค้าออกก่อน", { categoryId, itemCount }));
+      const reason = why.get(categoryId);
+      F.refuse(deny(409, "category_in_use", reason === "moved" ? "ยังมีสินค้าใช้หมวดนี้ ย้ายหมวดไม่ได้ ย้ายสินค้าออกก่อน" : "ยังมีสินค้าใช้หมวดนี้ ย้ายสินค้าออกก่อน", { categoryId, itemCount, reason }));
     }
   }
   tx.update(ref, { warehouseCategory: tree, updateTime: now, updatedBy: uid, ...F.adminTrail(access) });

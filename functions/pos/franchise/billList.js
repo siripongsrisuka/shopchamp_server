@@ -5,7 +5,7 @@
 //   ผู้ใช้: Dashboard (100) · ยอดตามร้าน (103) · ยอดตามสินค้า (104) ⇒ ต้องมีสิทธิ์ตัวใดตัวหนึ่ง
 // ที่เปลี่ยน:
 //   WR-01 ฝั่งแฟรนไชส์: วันของบิล = วันธุรกิจตาม cutOff ของสาขาที่ขาย (logic.reportRange ตัวเดียวกับรายงานร้าน 9e) ไม่ใช่วันปฏิทิน
-//     ⇒ ค้น billDate (วันปฏิทิน) ตั้งแต่ fromDay ถึง toDay+1 แล้วกรองด้วยเวลาขาย start < เวลา <= end ของสาขานั้น
+//     ⇒ ค้น billDate (วันปฏิทิน) ตั้งแต่ fromDay-1 ถึง toDay+2 แล้วกรองด้วยเวลาขาย start < เวลา <= end ของสาขานั้น (billDate เพี้ยน ±1 วันไม่หลุด)
 //     สาขาที่ออกจากแฟรนไชส์แล้ว (บิลยังถือ franchiseId เดิม · WR-72 คงเดิม) อ่าน cutOff จาก doc ร้าน · หาร้านไม่เจอ = ตัดเที่ยงคืน
 //   WR-04: ใบยกเลิก (logic.isVoidedBill) ไม่อยู่ในรายการ · นับแยกใน voided {count, net}
 //   shopId (ไม่ส่งได้) = สาขาเดียว · ไม่ใช่สาขาของแฟรนไชส์ตอนนี้ = 409 shop_not_in_franchise
@@ -51,8 +51,10 @@ const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }
     F.refuse(deny(409, "shop_not_in_franchise", "ร้านนี้ไม่ใช่สาขาของแฟรนไชส์นี้"));
   }
 
-  // วันปฏิทิน fromDay..toDay+1 (cutOff หลังเที่ยงคืนทำให้วันธุรกิจกินเช้าวันถัดไป)
-  const keys = calendarKeys(input.fromDay, nextKey(input.toDay));
+  // วันปฏิทิน fromDay-1..toDay+2: วันธุรกิจ D กินเวลาไทยวัน D และ D+1 (cutOff หลังเที่ยงคืน)
+  //   และแอปเก่าใส่ billDate เป็นวันของเครื่อง (main3 CheckoutScreen.js:755 stringYMDHMS3(new Date()) · dateTime จากเวลาเดียวกัน)
+  //   เครื่องที่ตั้งเขตเวลาอื่นได้วันต่างจากวันไทยไม่เกิน ±1 ⇒ ค้นกว้าง 1 วันทั้ง 2 ข้าง แล้วตัดสินด้วยเวลาขายอย่างเดียว (ตัวเดียวกับ 9e)
+  const keys = calendarKeys(shiftKey(input.fromDay, -1), shiftKey(input.toDay, 2));
   const snaps = [];
   for (let i = 0; i < keys.length; i += IN_MAX) {
     snaps.push(db.collection("bill").where("franchiseId", "==", input.franchiseId).where("billDate", "in", keys.slice(i, i + IN_MAX)).get());
@@ -102,8 +104,8 @@ const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }
   return { fromDay: input.fromDay, toDay: input.toDay, bills: rows, count: rows.length, voided, ...(input.shopId ? { shopId: input.shopId } : {}) };
 });
 
-function nextKey(k) {
-  const d = new Date(Date.UTC(Number(k.slice(0, 4)), Number(k.slice(4, 6)) - 1, Number(k.slice(6, 8))) + 86400000);
+function shiftKey(k, days) {
+  const d = new Date(Date.UTC(Number(k.slice(0, 4)), Number(k.slice(4, 6)) - 1, Number(k.slice(6, 8))) + days * 86400000);
   return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
