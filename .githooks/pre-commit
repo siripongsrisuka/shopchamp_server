@@ -1,0 +1,11 @@
+#!/usr/bin/env sh
+# pre-commit ของ shopchamp_server · เรียกด่านแช่แข็งของเดิมจากบ้าน (ก้อน 0 · DEV-0001)
+# ตั้งหลัง clone: git -C shopchamp_server config core.hooksPath .githooks
+# หาด่านไม่เจอ = ปัด (ไม่ปล่อยผ่านเงียบ)
+ROOT=$(git rev-parse --show-toplevel) || exit 2
+GATE="$ROOT/../shopchamp-center/gate/check-legacy-freeze.js"
+if [ ! -f "$GATE" ]; then
+  echo "🔴 ไม่พบด่านแช่แข็ง $GATE · repo นี้ต้องอยู่ใน ~/shopchamp-workspace คู่กับ shopchamp-center" >&2
+  exit 1
+fi
+node "$GATE" || exit 1

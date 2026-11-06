@@ -1,0 +1,19 @@
+legacy-deployed/ — โค้ดของ function ที่ deploy อยู่บน shopcham-24b0b แต่ไม่ตรงกับ commit ไหนเลย
+เอกสารอ้างอิงอย่างเดียว · ไม่ถูก deploy (อยู่นอก functions/) · ด่านแช่แข็งให้เพิ่มไฟล์ได้อย่างเดียว ห้ามแก้ ลบ ย้าย
+(ก้อน 0 · DEV-0001 · 2026-11-06)
+
+ที่มา: zip จาก bucket gcf-sources-955470064375-<region> รุ่นที่ versionId ตรงกับตัว live
+รายละเอียดรุ่นและการเทียบ commit: ~/shopchamp-workspace/lanes/dev/source/deployed-server-match.md
+
+  users              asia-southeast2 · nodejs18 · deploy 2025-04-09 · v29
+  line               asia-southeast2 · nodejs18 · deploy 2025-06-24 · v9
+  delDeleteSkuStock  us-central1     · nodejs16 · deploy 2023-12-11 · v9 (schedule)
+  helloWorld         asia-southeast2 · nodejs16 · deploy 2023-01-03 · v21
+
+ไม่ได้คัดลอก (ข้ามโดยตั้งใจ):
+  */apis/line.js              มี token แบบ Bearer ฝังในโค้ด (users และ line)
+  */apis/chunkLoadBarcode.js  มี token แบบ Bearer ฝังในโค้ด (users และ line)
+  */apis/assets/              รูปภาพและไฟล์ข้อมูลบาร์โค้ด ไม่ใช่โค้ด
+  .DS_Store
+  ไฟล์กุญแจ adminsdk และ env.json ไม่มีใน zip ตั้งแต่ต้น · index.js ยัง require ชื่อไฟล์นั้นอยู่ ⇒ โฟลเดอร์นี้รันไม่ได้
+ถ้าจะแก้ 4 function นี้ ต้องเริ่มจาก zip บน bucket (architecture-plan.md §3) ไม่ใช่จากโฟลเดอร์นี้
