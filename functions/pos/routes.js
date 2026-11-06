@@ -64,6 +64,9 @@ const ROUTES = Object.freeze([
   { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
   { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
   { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
+  // ก้อน 10 รอบ 2c: LINE token เข้าที่ลับ + สำเนาเดิม (LS-033) · เข้าครั้งแรกของร้านรุ่นแรก (LD-029 · auth user ตัดสินเจ้าของจาก shop.shopId == uid)
+  { contract: "shop.lineSettings", path: "/shop/line-settings", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/lineSettings").lineSettings },
+  { contract: "profile.claimLegacyShop", path: "/profile/claim-legacy-shop", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/claimLegacyShop").claimLegacyShop },
   // ก้อน 10 รอบ 2a: จุดขายพร้อม doc shift ใน transaction เดียว · ย้ายโครงร้านรุ่นแรก (U20)
   { contract: "pos.manage", path: "/pos/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/posManage").posManage },
   { contract: "shop.migrateLegacy", path: "/shop/migrate-legacy", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/shopMigrateLegacy").shopMigrateLegacy },
