@@ -14,7 +14,7 @@
 //   ③ ไฟล์ยาม (guard.file) ต้องมีจริงและยังมีข้อความ guard.contains ทุกตัว (ถอดการถามผู้ให้บริการซ้ำ = แดง)
 //   ทะเบียนผิด = makeGatewayRouter โยนตอนสร้าง (deploy แล้วไม่ขึ้น ดีกว่าขึ้นแบบไม่มีด่าน)
 // webhook: เก็บ req.rawBody ไว้ (Beam ตรวจลายเซ็นจากไบต์ดิบ) · บน Cloud Functions framework ใส่ rawBody ให้เองแล้ว
-// ❌ ไม่ผูก functions/index.js ที่นี่ (แม่ผูกเอง)
+// ผูกเป็น function ที่ gateway/app.js → pos/functions.js → functions/index.js (exports.pos_gateway)
 "use strict";
 
 const express = require("express");
@@ -122,8 +122,9 @@ function registryProblems(routes, publicRoutes) {
  * makeGatewayRouter({deps, checkIfAuthenticated, requireShopAccess, routes, publicRoutes}) → express.Router
  *   deps = ส่งเข้า factory ของทุก handler · ด่านไม่ส่ง = ตัวจริงจาก _shared/auth.js
  *   routes / publicRoutes ไม่ส่ง = ทะเบียนจริง (เทสส่งตัวกลายพันธุ์มาพิสูจน์ว่าด่านจับได้)
+ *   readiness = middleware ที่วางหลังด่านร้าน ก่อน handler ของเส้นแอป (gateway/app.js: ระบบยังไม่มีกุญแจ = 503 gateway_not_configured) · ไม่ส่ง = ไม่มีด่านนี้
  */
-function makeGatewayRouter({ deps, checkIfAuthenticated, requireShopAccess, routes = GATEWAY_ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
+function makeGatewayRouter({ deps, checkIfAuthenticated, requireShopAccess, readiness, routes = GATEWAY_ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
   const problems = registryProblems(routes, publicRoutes);
   if (problems.length) throw new Error("gateway/routes: ทะเบียน route ผิด · " + problems.join(" · "));
   let authn = checkIfAuthenticated;
@@ -148,7 +149,9 @@ function makeGatewayRouter({ deps, checkIfAuthenticated, requireShopAccess, rout
         handler,
       );
     } else {
-      router.post(r.path, scrubInternal, authn, express.json({ limit: APP_LIMIT }), stripBody, shopz, handler);
+      const chain = [scrubInternal, authn, express.json({ limit: APP_LIMIT }), stripBody, shopz];
+      if (typeof readiness === "function") chain.push(readiness);
+      router.post(r.path, ...chain, handler);
     }
   }
   router.use((req, res) => fail(res, 404, "not_found", "ไม่พบเส้นทางนี้"));
@@ -164,4 +167,4 @@ function makeGatewayRouter({ deps, checkIfAuthenticated, requireShopAccess, rout
   return router;
 }
 
-module.exports = { GATEWAY_ROUTES, PUBLIC_ROUTES, CORE_GUARD, INTERNAL_FIELDS, makeGatewayRouter, registryProblems, scrubInternal, keepRawBody };
+module.exports = { GATEWAY_ROUTES, PUBLIC_ROUTES, CORE_GUARD, INTERNAL_FIELDS, APP_LIMIT, HOOK_LIMIT, makeGatewayRouter, registryProblems, scrubInternal, keepRawBody };

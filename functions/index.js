@@ -111,3 +111,5 @@ exports.delDeleteSkuStock = functions.pubsub.schedule('0 3 1 * *').timeZone('Asi
 const posFunctions = require("./pos/functions");
 exports.pos = posFunctions.pos;
 exports.pos_heavy = posFunctions.pos_heavy;
+// ── เกตเวย์รับเงิน (DEV-0001 ก้อน 7) · gen2 · asia-southeast2 · ต่อท้ายอย่างเดียว · deploy: --only functions:pos_gateway
+exports.pos_gateway = posFunctions.pos_gateway;

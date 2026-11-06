@@ -1,4 +1,4 @@
-// pos/functions.js — Cloud Functions gen2 ของ API ใหม่ (ก้อน 4 · DEV-0001) · index.js ต่อท้ายด้วย exports.pos / exports.pos_heavy
+// pos/functions.js — Cloud Functions gen2 ของ API ใหม่ (ก้อน 4 · DEV-0001) · index.js ต่อท้ายด้วย exports.pos / exports.pos_heavy / exports.pos_gateway
 //
 // gen2 (Cloud Run) · region asia-southeast2 เดียวกับ function เดิม · config ต่อ function = workloads.js FUNCTION_CONFIG
 //   URL: https://asia-southeast2-shopcham-24b0b.cloudfunctions.net/pos/<path> · /pos_heavy/<path>
@@ -8,7 +8,7 @@
 "use strict";
 
 const { onRequest } = require("firebase-functions/v2/https");
-const { REGION, FN, FUNCTION_CONFIG } = require("./workloads");
+const { REGION, FN, FUNCTION_CONFIG, GATEWAY_CONFIG } = require("./workloads");
 
 function lazyApp(fnName) {
   let app = null;
@@ -18,10 +18,22 @@ function lazyApp(fnName) {
   };
 }
 
+/** pos_gateway: app แยก (gateway/app.js) · สร้างตอนคำขอแรกเหมือนกัน */
+function lazyGatewayApp() {
+  let app = null;
+  return (req, res) => {
+    if (!app) app = require("./gateway/app").makeGatewayApp({});
+    return app(req, res);
+  };
+}
+
 const mk = (fnName) => onRequest({ region: REGION, invoker: "public", ...FUNCTION_CONFIG[fnName] }, lazyApp(fnName));
 
 module.exports = {
   pos: mk(FN.POS),
   pos_heavy: mk(FN.HEAVY),
+  // URL: …/pos_gateway/<path> · webhook ของผู้ให้บริการต้องยิงได้โดยไม่มี token ⇒ invoker public (ด่านอยู่ในโค้ด)
+  pos_gateway: onRequest({ region: REGION, invoker: "public", ...GATEWAY_CONFIG }, lazyGatewayApp()),
   lazyApp,
+  lazyGatewayApp,
 };

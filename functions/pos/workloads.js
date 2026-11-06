@@ -4,7 +4,7 @@
 //   segment ของ function อื่น = 404 wrong_function + serve:<ชื่อที่ถูก> (ชี้ผิดที่จะเห็นทันที ไม่เงียบ)
 //   segment ที่ไม่รู้จัก = 404 not_found
 //   segment ที่ route ตั้ง fn '*' (system) = ทุก function รับ (ใช้ ping ยืนยันว่า function ขึ้นแล้ว)
-// แยกตั้งแต่วันแรก: pos = เงินและหน้าร้าน · pos_heavy = รายงานและนำเข้า (route รายงาน 9e + ซ่อมร้าน clone 9a · ก้อน 9) · pos_gateway มาในก้อน 7
+// แยกตั้งแต่วันแรก: pos = เงินและหน้าร้าน · pos_heavy = รายงานและนำเข้า (route รายงาน 9e + ซ่อมร้าน clone 9a · ก้อน 9) · pos_gateway (ก้อน 7) เป็น app แยก ดูท้ายไฟล์
 // ❌ ไม่ยก DUAL_SERVE ของพี่น้อง
 //
 // config ต่อ function (gen2 · Cloud Run):
@@ -53,4 +53,10 @@ function gateFor(fnName, routes = ROUTES) {
   };
 }
 
-module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, gateFor, segmentOf, segmentMap };
+// pos_gateway = app แยก (gateway/app.js · ทะเบียน gateway/routes.js) ไม่ผ่าน gateFor · config อยู่ที่นี่ให้เห็นคู่กับ 2 ตัวบน
+//   512MiB · concurrency 40 · maxInstances 20 · timeout 60 วิ (ยิงผู้ให้บริการนานสุด 20 วิ kbank-qr) · ไม่ตั้ง minInstances
+//   ❌ ยังไม่ผูก secrets (เหตุผลที่หัว gateway/app.js) · ผูกเมื่อ Pack สร้าง secret: เติม secrets: [ชื่อ env] ที่นี่
+const GATEWAY_FN = "pos_gateway";
+const GATEWAY_CONFIG = Object.freeze({ memory: "512MiB", concurrency: 40, maxInstances: 20, timeoutSeconds: 60 });
+
+module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, gateFor, segmentOf, segmentMap };
