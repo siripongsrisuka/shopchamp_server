@@ -16,9 +16,14 @@ let DATA = {};
 let LOG = [];
 function makeDb() {
   let auto = 0;
-  const ref = (c, id) => ({ c, id });
+  const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  // อ่านนอก transaction (auth.resolveShopRef พิสูจน์ field ของร้าน S5): doc.get · where(==).limit().get
+  const ref = (c, id) => ({ c, id, get: async () => snapOf(c, id) });
+  const where = (c, f, v) => ({
+    limit: (n) => ({ get: async () => ({ docs: Object.keys(DATA[c] || {}).filter((id) => DATA[c][id][f] === v).slice(0, n).map((id) => snapOf(c, id)) }) }),
+  });
   return {
-    collection: (c) => ({ doc: (id) => ref(c, id !== undefined ? id : `auto${++auto}`) }),
+    collection: (c) => ({ doc: (id) => ref(c, id !== undefined ? id : `auto${++auto}`), where: (f, op, v) => where(c, f, v) }),
     runTransaction: async (fn) => {
       const writes = [];
       const tx = {

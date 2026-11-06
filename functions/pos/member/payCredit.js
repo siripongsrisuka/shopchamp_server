@@ -31,7 +31,7 @@ const { MemberPayCreditRequest } = require("@shopchamp/schema");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, hasRight, adminTrail, adminFlag, shopRefOf, belongsToShop, checkOwnedDoc, staffInShop } = require("../_shared/auth");
+const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc, staffInShop } = require("../_shared/auth");
 const { billDateOf } = require("../_shared/billClock");
 
 const NOTI_HEADING = "ลูกค้าชำระเงินเซ็น";
@@ -130,7 +130,7 @@ function payCredit(deps) {
         ]);
         if (!shopSnap.exists) refuse(deny(404, "shop_not_found"));
         const shop = shopSnap.data() || {};
-        const ref = shopRefOf(shopDocId, shop);
+        const ref = await resolveShopRef({ db, shopDocId, shop });
 
         if (paidSnap.exists) {
           const prev = paidSnap.data() || {};

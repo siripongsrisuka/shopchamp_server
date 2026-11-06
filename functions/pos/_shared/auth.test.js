@@ -35,6 +35,18 @@ function fakeDb(data) {
           return { exists: d !== undefined, id, data: () => d };
         },
       }),
+      // resolveShopRef: where(field == v).limit(n).get
+      where: (f, op, v) => ({
+        limit: (n) => ({
+          get: async () => {
+            reads.push(`${c}?${f}${op}${v}`);
+            if (data.__throw) throw new Error("db down");
+            const docs = Object.keys(data[c] || {}).filter((id) => (data[c][id] || {})[f] === v).slice(0, n)
+              .map((id) => ({ id, exists: true, data: () => data[c][id] }));
+            return { docs, empty: docs.length === 0, size: docs.length };
+          },
+        }),
+      }),
     }),
   };
 }
@@ -51,13 +63,13 @@ async function runShop(db, req) {
 const ADMIN = { admin: { adminConfig: { admin: ["u-company"] } } };
 
 // ── requireShopAccess: ต้องผ่าน ──
-test("ผ่าน: เจ้าของ (position 001) → role owner rights [] · ไม่อ่าน adminConfig", async () => {
+test("ผ่าน: เจ้าของ (position 001) → role owner rights [] · อ่าน adminConfig ก่อน (ทีมงานมาก่อนสมาชิก)", async () => {
   const db = fakeDb({ shop: { shopA: shopA() }, ...ADMIN });
   const { nexted, req, r } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-owner" } });
   assert.equal(nexted, true);
   assert.equal(r.code, 0);
   assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] });
-  assert.deepEqual(db.reads, ["shop/shopA"]);
+  assert.deepEqual(db.reads, ["shop/shopA", "admin/adminConfig"]);
 });
 
 test("ผ่าน: เจ้าของ index 0 เข้าได้แม้แพ็กเกจ staff หมด (กติกาแอปเก่า)", async () => {
@@ -84,6 +96,27 @@ test("ผ่าน: ทีมงานเข้าได้แม้ร้าน
   const { nexted, req } = await runShop(fakeDb({ shop: { shopA: { shopId: "shopA" } }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
   assert.equal(nexted, true);
   assert.equal(req.shopAccess.byAdmin, true);
+});
+
+test("ผ่าน: ทีมงานที่เป็นพนักงานในร้านด้วย → owner + byAdmin สิทธิ์เต็ม ไม่ใช่สิทธิ์พนักงาน (แอปเก่า LoadingScreen.js:83)", async () => {
+  const shop = shopA();
+  shop.humanResource.push({ id: "u-company", name: "ทีมงาน", position: ["002"], status: "active", rights: ["116"] });
+  const { nexted, req } = await runShop(fakeDb({ shop: { shopA: shop }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
+  assert.equal(nexted, true);
+  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true });
+  assert.equal(A.hasRight(req.shopAccess, "143"), true);
+});
+
+test("ผ่าน: ทีมงานที่เป็นพนักงาน inActive / แพ็กเกจ staff หมด → ยังเข้าได้แบบทีมงาน", async () => {
+  const shop = shopA([]);
+  shop.humanResource.push({ id: "u-company", position: ["002"], status: "inActive" });
+  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop, uid: "u-company", now: NOW, adminConfig: { admin: ["u-company"] } });
+  assert.deepEqual(r, { ok: true, access: { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true } });
+});
+
+test("ทีมงานมาก่อนสมาชิก ไม่ทำให้คนทั่วไปได้ byAdmin: พนักงานปกติยังได้ rights ของตัวเอง", async () => {
+  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-staff", now: NOW, adminConfig: { admin: ["u-company"] } });
+  assert.deepEqual(r.access, { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["116"] });
 });
 
 // ── requireShopAccess: ต้องปัด ──
@@ -216,9 +249,8 @@ test("adminTrail / adminFlag: ทีมงานได้ {byAdmin, adminUid} ·
   assert.deepEqual(A.adminFlag({ uid: "u-owner", byAdmin: "true" }), {});
 });
 
-test("checkOwnedDoc / belongsToShop: ไม่มี = 404 · ร้านอื่น = 409 · ตรง doc id หรือ field shopId = ผ่าน", () => {
-  const ref = A.shopRefOf("docX", { shopId: "uidOwner" });
-  assert.deepEqual(ref, { id: "docX", shopId: "uidOwner" });
+test("checkOwnedDoc / belongsToShop: ไม่มี = 404 · ร้านอื่น = 409 · ตรง doc id หรือ field ที่พิสูจน์แล้ว = ผ่าน", () => {
+  const ref = { id: "docX", shopId: "uidOwner", fieldState: "present", fieldVerified: true }; // รูปที่ resolveShopRef คืนเมื่อพิสูจน์ field ผ่าน
   assert.deepEqual(A.checkOwnedDoc("bill", undefined, ref), { ok: false, status: 404, error: "bill_not_found" });
   assert.deepEqual(A.checkOwnedDoc("bill", { shopId: "shopB" }, ref), { ok: false, status: 409, error: "bill_other_shop" });
   assert.equal(A.checkOwnedDoc("member", { shopId: "uidOwner" }, ref).ok, true);
@@ -226,6 +258,63 @@ test("checkOwnedDoc / belongsToShop: ไม่มี = 404 · ร้านอื
   assert.equal(A.checkOwnedDoc("shift", {}, ref).error, "shift_other_shop"); // ไม่มี shopId = ไม่ใช่ของร้านนี้
   assert.equal(A.belongsToShop("", ref), false);
   assert.equal(A.belongsToShop(null, A.shopRefOf("docX", {})), false);
+});
+
+// ── ร้าน S5 (doc id ≠ field shop.shopId) · ข้ามร้านผ่าน field (chunk4-verify/sale.get.md ข้อ 1) ──
+test("shopRefOf ไม่อ่านฐาน: field ≠ doc id ไม่ถูกเชื่อ (fail-closed) · field = doc id เชื่อได้ · บอกสภาพ field", () => {
+  assert.deepEqual(A.shopRefOf("docX", { shopId: "uidOwner" }), { id: "docX", shopId: null, fieldState: "present" });
+  assert.deepEqual(A.shopRefOf("docX", { shopId: "docX" }), { id: "docX", shopId: "docX", fieldState: "present" });
+  assert.equal(A.shopRefOf("docX", {}).fieldState, "missing");
+  assert.equal(A.shopRefOf("docX", { shopId: null }).fieldState, "null");
+  assert.equal(A.shopRefOf("docX", { shopId: 5 }).fieldState, "invalid");
+  assert.equal(A.checkOwnedDoc("bill", { shopId: "uidOwner" }, A.shopRefOf("docX", { shopId: "uidOwner" })).error, "bill_other_shop");
+});
+
+test("🔴 รั่วข้ามร้าน: ร้าน A ตั้ง field shopId = doc id ของร้าน B → บิลร้าน B = 409 (ไม่ใช่ของร้าน A)", async () => {
+  const data = { shop: { shopA: { shopId: "shopB" }, shopB: { shopId: "shopB" } } };
+  const ref = await A.resolveShopRef({ db: fakeDb(data), shopDocId: "shopA", shop: data.shop.shopA });
+  assert.equal(ref.shopId, null);
+  assert.deepEqual(A.checkOwnedDoc("bill", { shopId: "shopB" }, ref), { ok: false, status: 409, error: "bill_other_shop" });
+  assert.equal(A.belongsToShop("shopB", ref), false);
+  assert.equal(A.belongsToShop("shopA", ref), true); // เอกสารที่ถือ doc id ของตัวเองยังเป็นของร้าน A
+});
+
+test("🔴 รั่วข้ามร้าน: field ชี้ doc id ร้าน B ที่เป็น S5 เอง (field ร้าน B ไม่ใช่ doc id) → ยังปัด", async () => {
+  const data = { shop: { shopA: { shopId: "shopB" }, shopB: { shopId: "uidOwnerB" } } };
+  const ref = await A.resolveShopRef({ db: fakeDb(data), shopDocId: "shopA", shop: data.shop.shopA });
+  assert.equal(ref.shopId, null); // shop/shopB มีอยู่ = ค่า field เป็น doc id ของร้านอื่น
+  assert.equal(A.belongsToShop("shopB", ref), false);
+});
+
+test("🔴 รั่วข้ามร้าน: ร้าน A ตั้ง field ซ้ำกับร้าน S5 อื่น (uid เจ้าของร้านเหยื่อ) → ทั้ง 2 ร้านไม่ได้ field (fail-closed)", async () => {
+  const data = { shop: { shopA: { shopId: "uidVictim" }, shopV: { shopId: "uidVictim" } } };
+  const db = fakeDb(data);
+  const refA = await A.resolveShopRef({ db, shopDocId: "shopA", shop: data.shop.shopA });
+  const refV = await A.resolveShopRef({ db, shopDocId: "shopV", shop: data.shop.shopV });
+  assert.equal(refA.shopId, null);
+  assert.equal(refV.shopId, null);
+  assert.equal(A.checkOwnedDoc("bill", { shopId: "uidVictim" }, refA).error, "bill_other_shop");
+  assert.equal(A.belongsToShop("shopV", refV), true); // ของที่ถือ doc id ยังเป็นของร้านเหยื่อ
+});
+
+test("ร้าน S5 ของจริง: field = uid เจ้าของ ไม่มี doc ร้านชื่อนั้น และมีร้านเดียวที่ถือค่า → อ่านของตัวเองได้", async () => {
+  const data = { shop: { docOld: { shopId: "uidOwner28charsxxxxxxxxxxxxx" }, shopB: { shopId: "shopB" } } };
+  const db = fakeDb(data);
+  const ref = await A.resolveShopRef({ db, shopDocId: "docOld", shop: data.shop.docOld });
+  assert.deepEqual(ref, { id: "docOld", shopId: "uidOwner28charsxxxxxxxxxxxxx", fieldState: "present", fieldVerified: true });
+  assert.equal(A.checkOwnedDoc("bill", { shopId: "uidOwner28charsxxxxxxxxxxxxx" }, ref).ok, true);
+  assert.equal(A.checkOwnedDoc("bill", { shopId: "docOld" }, ref).ok, true);
+  assert.equal(A.checkOwnedDoc("bill", { shopId: "shopB" }, ref).error, "bill_other_shop");
+  assert.deepEqual(db.reads.sort(), ["shop/uidOwner28charsxxxxxxxxxxxxx", "shop?shopId==uidOwner28charsxxxxxxxxxxxxx"].sort());
+});
+
+test("resolveShopRef: ร้านปกติ (field = doc id) / ไม่มี field ไม่อ่านฐานเพิ่ม · field รูปผิดไม่อ่านและไม่เชื่อ · ฐานล้ม = โยนต่อ", async () => {
+  const db = fakeDb({ shop: { shopA: { shopId: "shopA" } } });
+  assert.deepEqual(await A.resolveShopRef({ db, shopDocId: "shopA", shop: { shopId: "shopA" } }), { id: "shopA", shopId: "shopA", fieldState: "present" });
+  assert.deepEqual(await A.resolveShopRef({ db, shopDocId: "shopA", shop: {} }), { id: "shopA", shopId: null, fieldState: "missing" });
+  assert.equal((await A.resolveShopRef({ db, shopDocId: "shopA", shop: { shopId: "a/b" } })).shopId, null);
+  assert.deepEqual(db.reads, []);
+  await assert.rejects(A.resolveShopRef({ db: fakeDb({ __throw: true }), shopDocId: "docOld", shop: { shopId: "uidOwner" } }), /db down/);
 });
 
 test("staffInShop: อยู่ใน humanResource · ทีมงานใช้ uid ตัวเองได้ · คนอื่นไม่ได้", () => {

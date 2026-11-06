@@ -21,7 +21,7 @@ const { ShiftManageRequest } = require("@shopchamp/schema");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, deny, parseOr400, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, shopRefOf, belongsToShop, checkOwnedDoc, staffInShop, adminTrail, adminFlag } = require("../_shared/auth");
+const { callerAccess, resolveShopRef, belongsToShop, checkOwnedDoc, staffInShop, adminTrail, adminFlag } = require("../_shared/auth");
 const { shiftHistoryDocId } = require("../_shared/idempotency");
 
 const SHIFT_MESSAGES = {
@@ -137,7 +137,7 @@ async function readCommon(tx, access, input) {
   const shopSnap = await tx.get(db.collection("shop").doc(access.shopId));
   if (!shopSnap.exists) return { refusal: deny(404, "shop_not_found") };
   const shop = shopSnap.data() || {};
-  const shopRef = shopRefOf(access.shopId, shop);
+  const shopRef = await resolveShopRef({ db, shopDocId: access.shopId, shop });
   const shiftRef = db.collection("shift").doc(input.shiftId);
   const shiftSnap = await tx.get(shiftRef);
   const shift = shiftSnap.exists ? shiftSnap.data() : undefined;

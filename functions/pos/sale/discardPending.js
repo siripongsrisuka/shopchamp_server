@@ -19,7 +19,7 @@
 const { SaleDiscardPendingRequest } = require("@shopchamp/schema");
 const { ok, fail, deny, sendDeny, parseOr400, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, isOwner, adminTrail, adminFlag, shopRefOf } = require("../_shared/auth");
+const { callerAccess, isOwner, adminTrail, adminFlag, resolveShopRef } = require("../_shared/auth");
 const { discardDoc, decide } = require("./discardPendingDoc");
 
 const DISCARD_COLLECTION = "pendingDiscard";
@@ -47,7 +47,7 @@ function discardPending(deps) {
       const result = await db.runTransaction(async (tx) => {
         const [shopSnap, discardSnap, guardSnap] = [await tx.get(shopRef), await tx.get(discardRef), await tx.get(guardRef)];
         if (!shopSnap.exists) return { kind: "shop_not_found" };
-        const ref = shopRefOf(access.shopId, shopSnap.data());
+        const ref = await resolveShopRef({ db, shopDocId: access.shopId, shop: shopSnap.data() });
         const seen = {
           receiptUUID: uuid,
           shopRef: ref,

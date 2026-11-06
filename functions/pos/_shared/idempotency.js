@@ -6,6 +6,7 @@
 //   รูปใหม่     {createdAt, usedBy:<receiptNumber>, billId, shopId:<shop doc id>}   (+ byAdmin adminUid เมื่อทีมงานทำ)
 // ด่านข้ามร้าน (architecture-plan ก้อน 4 · พี่น้องไม่ตรวจข้อนี้):
 //   มี shopId = เทียบกับ shop doc id ของผู้เรียก · ไม่มี shopId = doc id ต้องเป็น `<shop.shopId ของผู้เรียก><uuid>`
+//     (ร้านไม่มี field shopId = `undefined<uuid>` · field ของร้าน S5 ต้องผ่าน auth.resolveShopRef ก่อน)
 //   ไม่ผ่าน = other_shop ⇒ handler ตอบ 409 receipt_uuid_other_shop โดย ❌ ไม่คืน billId / receiptNumber
 // ทุกตัวในไฟล์นี้ pure (ไม่แตะฐาน) · handler อ่าน doc ใน transaction แล้วส่ง data เข้ามา
 "use strict";
@@ -24,19 +25,37 @@ function readReceiptUUID(body) {
   return typeof v === "string" && v.trim() !== "" ? v : null;
 }
 
-/** doc id รูปแอปเก่าเป็นของร้านนี้ไหม: `${shopField}${uuid}` เป๊ะ (prefix อย่างเดียวไม่พอ · shopId ร้านหนึ่งเป็น prefix ของอีกร้านได้) */
-function legacyGuardIdOfShop(guardId, shopField) {
-  if (typeof guardId !== "string" || typeof shopField !== "string" || shopField === "") return false;
-  if (!guardId.startsWith(shopField)) return false;
-  return UUID_RE.test(guardId.slice(shopField.length));
+/**
+ * legacyGuardPrefix(shopField, shopFieldState) — ข้อความหน้า uuid ที่แอปเก่าเขียนเป็น doc id: `${shop.shopId}${uuid}`
+ *   (`main3:src/screens/CheckoutScreen.js:113,710` · shopId มาจาก state.shop)
+ *   field มีค่า = ค่านั้น · ร้านไม่มี field = 'undefined' · field เป็น null = 'null' (ตามที่ template string ของ JS ให้)
+ *   shopFieldState มาจาก shopRef.fieldState (auth.js) · ไม่ส่ง = ใช้ shopField อย่างเดียว (พฤติกรรมเดิม)
+ *   field มีค่าแต่ยังไม่ผ่านการพิสูจน์ (shopField null + state 'present') = null ⇒ ไม่รับ guard รูปแอปเก่า (fail-closed)
+ */
+function legacyGuardPrefix(shopField, shopFieldState) {
+  if (typeof shopField === "string" && shopField !== "") return shopField;
+  if (shopFieldState === "missing") return "undefined";
+  if (shopFieldState === "null") return "null";
+  return null;
+}
+
+/** doc id รูปแอปเก่าเป็นของร้านนี้ไหม: `${prefix}${uuid}` เป๊ะ (prefix อย่างเดียวไม่พอ · shopId ร้านหนึ่งเป็น prefix ของอีกร้านได้) */
+function legacyGuardIdOfShop(guardId, shopField, shopFieldState) {
+  const prefix = legacyGuardPrefix(shopField, shopFieldState);
+  if (typeof guardId !== "string" || prefix === null) return false;
+  if (!guardId.startsWith(prefix)) return false;
+  return UUID_RE.test(guardId.slice(prefix.length));
 }
 
 /**
- * classifyGuard({guardId, guard, shopDocId, shopField})
+ * classifyGuard({guardId, guard, shopDocId, shopField, shopFieldState})
  * @param {string} p.guardId receiptUUID (= doc id)
  * @param {object|null|undefined} p.guard `snap.data()` · ไม่มี doc = null/undefined
  * @param {string} p.shopDocId shop doc id ที่ผ่านด่าน (req.shopAccess.shopId)
- * @param {string} p.shopField field `shop.shopId` ของร้านนั้น (จาก doc ร้านที่อ่านในฐาน)
+ * @param {string|null} p.shopField shopRef.shopId (field shop.shopId ที่เชื่อได้ · จาก resolveShopRef)
+ * @param {string} [p.shopFieldState] shopRef.fieldState · 'missing' = ร้านไม่มี field ⇒ guard แอปเก่ามี id `undefined<uuid>`
+ *   guard `undefined<uuid>` ไม่ผูกร้าน (ทุกร้านที่ไม่มี field ใช้ prefix เดียวกัน) ⇒ หลักฐานคือรู้ uuid + บิลที่ guard ชี้ต้องไม่ใช่ของร้านอื่น
+ *   (legacyDuplicateFromBill ตรวจ · บิลไม่มีให้อ่าน = duplicate ที่ไม่มีเลข)
  * @returns
  *   {kind:'none'}                                     ยังไม่มีบิลจาก uuid นี้ ⇒ ออกบิลใหม่ได้
  *   {kind:'other_shop'}                               ⇒ 409 receipt_uuid_other_shop (ไม่คืนอะไร)
@@ -45,7 +64,7 @@ function legacyGuardIdOfShop(guardId, shopField) {
  *   {kind:'duplicate', shape:'legacyApp', billId, receiptNumber:null, needsBillRead:true}
  *       ⇒ อ่าน bill/{billId} ใน transaction แล้วใช้ legacyDuplicateFromBill
  */
-function classifyGuard({ guardId, guard, shopDocId, shopField } = {}) {
+function classifyGuard({ guardId, guard, shopDocId, shopField, shopFieldState } = {}) {
   if (guard === undefined || guard === null) return { kind: "none" };
   if (typeof guard !== "object" || Array.isArray(guard)) return { kind: "other_shop" }; // รูปเพี้ยน = ไม่คืนอะไร (fail-closed)
   const hasShop = typeof guard.shopId === "string" && guard.shopId !== "";
@@ -57,7 +76,7 @@ function classifyGuard({ guardId, guard, shopDocId, shopField } = {}) {
     }
     return { kind: "duplicate", shape: "route", billId: null, receiptNumber };
   }
-  if (!legacyGuardIdOfShop(guardId, shopField)) return { kind: "other_shop" };
+  if (!legacyGuardIdOfShop(guardId, shopField, shopFieldState)) return { kind: "other_shop" };
   const billId = typeof guard.usedBy === "string" && guard.usedBy && !guard.usedBy.includes("/") ? guard.usedBy : null;
   return { kind: "duplicate", shape: "legacyApp", billId, receiptNumber: null, needsBillRead: billId !== null };
 }
@@ -130,6 +149,7 @@ function amendLockState(amend, requestId, now) {
 
 module.exports = {
   readReceiptUUID,
+  legacyGuardPrefix,
   legacyGuardIdOfShop,
   classifyGuard,
   legacyDuplicateFromBill,

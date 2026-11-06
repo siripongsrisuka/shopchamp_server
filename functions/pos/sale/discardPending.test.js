@@ -15,9 +15,14 @@ const RID = `shopA${U}`; // รูป receiptUUID ของแอป: `${shop.sh
 let DATA = {};
 let LOG = [];
 function makeDb() {
-  const ref = (c, id) => ({ c, id });
+  const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  // อ่านนอก transaction (auth.resolveShopRef พิสูจน์ field ของร้าน S5): doc.get · where(==).limit().get
+  const ref = (c, id) => ({ c, id, get: async () => snapOf(c, id) });
+  const where = (c, f, v) => ({
+    limit: (n) => ({ get: async () => ({ docs: Object.keys(DATA[c] || {}).filter((id) => DATA[c][id][f] === v).slice(0, n).map((id) => snapOf(c, id)) }) }),
+  });
   return {
-    collection: (c) => ({ doc: (id) => ref(c, id) }),
+    collection: (c) => ({ doc: (id) => ref(c, id), where: (f, op, v) => where(c, f, v) }),
     runTransaction: async (fn) => {
       const writes = [];
       const tx = {
@@ -107,6 +112,31 @@ test("guard รูปแอปเก่าของร้านนี้ + ม�
   assert.equal(r.body.billId, "billX");
   assert.equal(r.body.receiptNumber, "202611000010");
   assert.equal(LOG.length, 0);
+});
+
+test("ร้านที่ doc ไม่มี field shopId: guard แอปเก่า `undefined<uuid>` ของตัวเอง → 409 already_synced (ไม่ใช่ร้านอื่น)", async () => {
+  DATA.shop.docN = { name: "ร้านไม่มี field" };
+  const gid = `undefined${U}`;
+  DATA.receiptGuard = { [gid]: { createdAt: 1, usedBy: "billN" } };
+  DATA.bill = { billN: { receiptNumber: "202611000011" } };
+  const r = await call(req({ shopId: "docN", receiptUUID: gid }), { ...OWNER, shopId: "docN" });
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "already_synced");
+  assert.equal(r.body.billId, "billN");
+  assert.equal(r.body.receiptNumber, "202611000011");
+  assert.equal(LOG.length, 0);
+});
+
+test("🔴 ร้าน A ตั้ง field shopId = ค่าของร้าน S5 อื่น → guard แอปเก่าของร้านนั้น = receipt_uuid_other_shop", async () => {
+  DATA.shop.docA = { shopId: "uidVictim" };
+  DATA.shop.docV = { shopId: "uidVictim" };
+  const gid = `uidVictim${U}`;
+  DATA.receiptGuard = { [gid]: { createdAt: 1, usedBy: "billV" } };
+  DATA.bill = { billV: { shopId: "uidVictim", receiptNumber: "R-V" } };
+  const r = await call(req({ receiptUUID: gid }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "receipt_uuid_other_shop");
+  assert.equal("receiptNumber" in r.body, false);
 });
 
 test("guard รูปแอปเก่า doc id ขึ้นต้นด้วยร้านอื่น → 409 receipt_uuid_other_shop · ไม่คืนเลข · ไม่เขียน", async () => {

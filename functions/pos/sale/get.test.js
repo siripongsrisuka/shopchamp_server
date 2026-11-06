@@ -9,10 +9,13 @@ const path = require("path");
 const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMillis: () => d.getTime(), seconds: Math.floor(d.getTime() / 1000), nanoseconds: 0 }; };
 
 let DATA = {};
+const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
 const db = {
   collection: (c) => ({
-    doc: (id) => ({
-      get: async () => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; },
+    doc: (id) => ({ get: async () => snapOf(c, id) }),
+    // auth.resolveShopRef พิสูจน์ field ของร้าน S5: where(shopId ==).limit(2).get
+    where: (f, op, v) => ({
+      limit: (n) => ({ get: async () => ({ docs: Object.keys(DATA[c] || {}).filter((id) => DATA[c][id][f] === v).slice(0, n).map((id) => snapOf(c, id)) }) }),
     }),
   }),
 };
@@ -93,6 +96,21 @@ test("ร้านเก่าที่ doc id ≠ field shopId (schema/shop.md 
   const r = await call({ shopId: "shopA", billId: "b1" }, OWNER);
   assert.equal(r.code, 200);
   assert.equal(r.body.bill.id, "b1");
+});
+
+test("🔴 ร้าน A ตั้ง field shopId = doc id ร้าน B แล้วขอบิลร้าน B → 409 ไม่คืนเนื้อ (chunk4-verify/sale.get.md ข้อ 1 · X2)", async () => {
+  seed({ bB: bill({ shopId: "shopB", moneyMustPaid: 999 }) }, { shopA: { shopId: "shopB" }, shopB: { shopId: "shopB" } });
+  const r = await call({ shopId: "shopA", billId: "bB" }, OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "bill_other_shop");
+  assert.equal(r.body.bill, undefined);
+});
+
+test("🔴 ร้าน A ตั้ง field ซ้ำกับร้าน S5 อื่น → บิลที่ถือค่านั้น = 409", async () => {
+  seed({ bV: bill({ shopId: "uid-victim" }) }, { shopA: { shopId: "uid-victim" }, shopV: { shopId: "uid-victim" } });
+  const r = await call({ shopId: "shopA", billId: "bV" }, OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.bill, undefined);
 });
 
 test("ไม่มี shopAccess + body ผิด → 401 ก่อน 400", async () => {

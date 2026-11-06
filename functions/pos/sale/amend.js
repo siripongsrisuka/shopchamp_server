@@ -26,7 +26,7 @@ const { db } = require("../../firebase");
 const { SaleAmendRequest, SaleCreateRequest } = require("@shopchamp/schema");
 const { isVoidedBill, toMillis, toNumber } = require("@shopchamp/logic");
 const { ok, fail, sendDeny, parseOr400, internalError } = require("../_shared/respond");
-const { callerAccess, hasRight, shopRefOf, checkOwnedDoc, belongsToShop, adminTrail, adminFlag } = require("../_shared/auth");
+const { callerAccess, hasRight, resolveShopRef, checkOwnedDoc, belongsToShop, adminTrail, adminFlag } = require("../_shared/auth");
 const { readNow, depOr } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
 const { amendReceiptUUID, amendLockState, sameRequestId } = require("../_shared/idempotency");
@@ -228,7 +228,7 @@ function amend(deps) {
         // ── อ่านครบแล้ว · ต่อจากนี้ตรวจแล้วเขียน ──
         if (!shopSnap.exists) refuse(404, "shop_not_found");
         const shop = shopSnap.data();
-        const shopRef = shopRefOf(access.shopId, shop);
+        const shopRef = await resolveShopRef({ db, shopDocId: access.shopId, shop });
         if (!isPremiumActive(shop, now)) refuse(403, "premium_required");
         if (shop.amendBill !== true) refuse(403, "feature_disabled");
 

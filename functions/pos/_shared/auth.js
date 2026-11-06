@@ -11,17 +11,18 @@
 //   requireShopAccess(req,res,next)   ร้านเป้าหมาย = body.shopId = shop **doc id**
 //     body.shopId ไม่มี/รูปผิด → 400 missing_shop_id · ไม่มี req.auth → 401 no_auth
 //     ① shop/{shopId} ไม่มี → 404 shop_not_found
-//     ② ผู้เรียกอยู่ใน shop.humanResource และ status 'active'
+//     ② uid อยู่ใน admin/adminConfig.admin (ทีมงาน Shopchamp · Pack เคาะ 2026-11-06 ข้อ 3-2 · มาก่อนสมาชิกเหมือนแอปเก่า)
+//        → req.shopAccess = {shopId, uid, role:'owner', rights:[], byAdmin:true}
+//        doc admin/adminConfig ไม่มี หรือช่อง admin ไม่ใช่ array = ไม่มีใครเป็นทีมงาน (fail-closed)
+//     ③ ผู้เรียกอยู่ใน shop.humanResource และ status 'active'
 //        คนที่ไม่ใช่ index 0 นับ active ได้เมื่อแพ็กเกจ staff (แถวแรก) ยังไม่หมด ไม่งั้นถือเป็น inActive (กติกาแอปเก่า)
 //        → req.shopAccess = {shopId, uid, role:'owner'|'staff', rights}   owner = position มี '001'
 //          rights: staff = rights ของคนนั้น · owner = [] (เจ้าของผ่านทุกสิทธิ์ด้วย hasRight ไม่ต้องดู rights)
-//     ③ ไม่ผ่าน ② แต่ uid อยู่ใน admin/adminConfig.admin (ทีมงาน Shopchamp · Pack เคาะ 2026-11-06 ข้อ 3-2)
-//        → req.shopAccess = {shopId, uid, role:'owner', rights:[], byAdmin:true}
-//        doc admin/adminConfig ไม่มี หรือช่อง admin ไม่ใช่ array = ไม่มีใครเป็นทีมงาน (fail-closed)
 //     ④ ไม่ผ่านทั้งคู่ → 403 {ok:false, error:"not_shop_member", reason:'not_a_member'|'inactive'}
 //
 // ในตัว handler (ด่านซ้ำ เพราะ harness ส่ง req.shopAccess มาเอง):
 //   callerAccess(req, body.shopId) → ไม่มี req.shopAccess = 401 no_shop_access · body.shopId ≠ ร้านที่ผ่านด่าน = 403 wrong_shop
+//   resolveShopRef({db, shopDocId, shop}) → shopRef (พิสูจน์ field ของร้าน S5 ก่อนเชื่อ)
 //   checkOwnedDoc('bill', data, shopRef) → ไม่มี = 404 bill_not_found · ร้านอื่น = 409 bill_other_shop (ไม่คืนเนื้อ)
 //   adminTrail(access) ใส่ทุกเอกสารที่เขียน · adminFlag(access) ใส่คำตอบ 2xx
 "use strict";
@@ -83,19 +84,22 @@ function memberStatusOf(shop, uid, now) {
 
 /**
  * resolveShopAccess({shopDocId, shop, uid, now, adminConfig}) — ตัดสิน ②③④ ของ requireShopAccess
- *   adminConfig: data ของ admin/adminConfig หรือฟังก์ชัน async ที่คืน data (อ่านเฉพาะเมื่อไม่ผ่าน ②)
+ *   adminConfig: data ของ admin/adminConfig หรือฟังก์ชัน async ที่คืน data (อ่านทุกคำขอ · ทีมงานมาก่อนสมาชิก)
+ *   ลำดับตามแอปเก่า (`main3:src/screens/LoadingScreen.js:63,77,83` IsAdmin → initialRights ไม่ว่าอยู่ใน humanResource ตำแหน่งไหน)
+ *     ทีมงาน (Pack เคาะ 2026-11-06 ข้อ 3-2) → owner + byAdmin + สิทธิ์เต็ม แม้เป็นพนักงานหรือ inActive ในร้านนั้น
+ *     ไม่ใช่ทีมงาน → ด่านสมาชิก ③
  * @returns {Promise<{ok:true, access}> | {ok:false, status:403, error:'not_shop_member', extra:{reason}}>}
  */
 async function resolveShopAccess({ shopDocId, shop, uid, now, adminConfig } = {}) {
+  const cfg = typeof adminConfig === "function" ? await adminConfig() : adminConfig;
+  if (isShopchampAdmin(cfg, uid)) {
+    return { ok: true, access: { shopId: shopDocId, uid, role: "owner", rights: [], byAdmin: true } };
+  }
   const m = memberStatusOf(shop, uid, now);
   if (m.status === "active") {
     const role = roleOf(m.person);
     const rights = role === "staff" && Array.isArray(m.person.rights) ? m.person.rights.filter((r) => typeof r === "string") : [];
     return { ok: true, access: { shopId: shopDocId, uid, role, rights } };
-  }
-  const cfg = typeof adminConfig === "function" ? await adminConfig() : adminConfig;
-  if (isShopchampAdmin(cfg, uid)) {
-    return { ok: true, access: { shopId: shopDocId, uid, role: "owner", rights: [], byAdmin: true } };
   }
   return deny(403, "not_shop_member", undefined, { reason: m.status });
 }
@@ -137,14 +141,56 @@ function adminFlag(access) {
   return access && access.byAdmin === true ? { byAdmin: true } : {};
 }
 
-/** shopRefOf(shopDocId, shopData) — {id: doc id, shopId: field shop.shopId} (ร้านเก่า 2 ค่านี้ต่างกันได้ · schema/shop.md S5) */
+/** fieldStateOf(shopData) — สภาพ field shop.shopId: 'present' (string ไม่ว่าง) · 'missing' (ไม่มี) · 'null' · 'invalid' (อย่างอื่น) */
+function fieldStateOf(shopData) {
+  const raw = shopData && typeof shopData === "object" ? shopData.shopId : undefined;
+  if (raw === undefined) return "missing";
+  if (raw === null) return "null";
+  return isNonEmptyString(raw) ? "present" : "invalid";
+}
+
+/**
+ * shopRefOf(shopDocId, shopData) — ตัวอ้างร้านแบบไม่อ่านฐาน · **ไม่เชื่อ field ที่ต่างจาก doc id** (fail-closed)
+ *   {id: doc id, shopId: field เมื่อ field === doc id ไม่งั้น null, fieldState}
+ *   ร้านเก่าที่ doc id ≠ field (ร้าน S5) ต้องใช้ resolveShopRef ซึ่งพิสูจน์ field ก่อน
+ */
 function shopRefOf(shopDocId, shopData) {
-  return { id: shopDocId, shopId: shopData && isNonEmptyString(shopData.shopId) ? shopData.shopId : null };
+  const fieldState = fieldStateOf(shopData);
+  const field = fieldState === "present" ? shopData.shopId : null;
+  return { id: shopDocId, shopId: field !== null && field === shopDocId ? field : null, fieldState };
+}
+
+/**
+ * resolveShopRef({db, shopDocId, shop}) — ตัวอ้างร้านที่ทุก route ใช้ · async (อ่านฐานเฉพาะร้าน S5)
+ *   ร้าน S5 = doc id ≠ field shop.shopId (วัด 2026-11-06 สุ่ม 2,000 จาก 57,360 ร้าน: 19% · field เป็น uid เจ้าของ 28 ตัว)
+ *     แอปเก่าเขียน bill/shift/member/paidHistory .shopId = field (`main3:src/screens/CheckoutScreen.js:113,757`)
+ *   field มาจาก doc ร้านที่เจ้าของแก้เองได้ (rules เปิด) ⇒ เชื่อ field ได้เมื่อพิสูจน์ว่าค่านั้นผูกกับร้านนี้ร้านเดียว:
+ *     ① ไม่มี doc shop/{field} (ค่าไม่ใช่ doc id ของร้านอื่น · กันตั้ง field = doc id ร้านเหยื่อ)
+ *     ② shop where shopId == field ได้ 1 doc พอดีและเป็นร้านนี้ (กันตั้ง field ซ้ำกับร้าน S5 อื่น)
+ *   ไม่ผ่าน = shopId:null ⇒ เอกสารที่ถือค่า field ถือเป็นร้านอื่น (409) · เจ้าของ S5 ที่ field ชนร้านอื่นเห็นแค่ของที่ถือ doc id
+ *   อ่านพลาด = โยนต่อ (handler ตอบ 500 · ไม่เดาว่าเป็นของร้าน)
+ *   อ่านนอก transaction (db ตรง) ⇒ ไม่เพิ่มล็อกใน transaction ของ handler · ไม่ขัดกฎอ่านก่อนเขียน
+ * @returns {Promise<{id, shopId: string|null, fieldState, fieldVerified?: true}>}
+ */
+async function resolveShopRef({ db, shopDocId, shop } = {}) {
+  const base = shopRefOf(shopDocId, shop);
+  if (base.fieldState !== "present" || base.shopId !== null) return base;
+  const field = shop.shopId;
+  if (!validDocId(field)) return base;
+  const shops = db.collection("shop");
+  const [sameIdSnap, holders] = await Promise.all([
+    shops.doc(field).get(),
+    shops.where("shopId", "==", field).limit(2).get(),
+  ]);
+  if (sameIdSnap.exists) return base;
+  const docs = holders && Array.isArray(holders.docs) ? holders.docs : [];
+  if (docs.length !== 1 || docs[0].id !== shopDocId) return base;
+  return { ...base, shopId: field, fieldVerified: true };
 }
 
 /**
  * belongsToShop(docShopId, shopRef) — เอกสาร (bill shift member paidHistory …) เป็นของร้านนี้ไหม
- *   ตรง doc id หรือตรง field shop.shopId (แอปเก่าเขียน member/paidHistory ด้วย field) · ว่าง/ไม่มี = ไม่ใช่ (fail-closed)
+ *   ตรง doc id · หรือตรง shopRef.shopId (มีค่าเมื่อ field = doc id หรือ resolveShopRef พิสูจน์แล้ว) · ว่าง/ไม่มี = ไม่ใช่ (fail-closed)
  */
 function belongsToShop(docShopId, shopRef) {
   if (!isNonEmptyString(docShopId) || !shopRef) return false;
@@ -266,6 +312,8 @@ module.exports = {
   adminTrail,
   adminFlag,
   shopRefOf,
+  resolveShopRef,
+  fieldStateOf,
   belongsToShop,
   checkOwnedDoc,
   staffInShop,

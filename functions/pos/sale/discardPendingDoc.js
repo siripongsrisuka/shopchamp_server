@@ -73,7 +73,7 @@ function decide({ receiptUUID, shopRef, discard, guard, billOfGuard } = {}) {
   if (discard !== undefined && discard !== null && !belongsToShop(discard && discard.shopId, shopRef)) {
     return { kind: "other_shop" };
   }
-  let g = classifyGuard({ guardId: receiptUUID, guard, shopDocId: shopRef.id, shopField: shopRef.shopId });
+  let g = classifyGuard({ guardId: receiptUUID, guard, shopDocId: shopRef.id, shopField: shopRef.shopId, shopFieldState: shopRef.fieldState });
   if (g.kind === "other_shop") return { kind: "other_shop" };
   if (g.kind === "duplicate" && g.needsBillRead) {
     if (billOfGuard === undefined) return { kind: "need_bill", billId: g.billId };

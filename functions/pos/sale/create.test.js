@@ -20,13 +20,20 @@ const OPS = {
 };
 function makeDb() {
   let auto = 0;
-  const ref = (c, id) => ({ c, id });
+  const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  const run = (c, filters, n) => Object.entries(DATA[c] || {})
+    .filter(([, d]) => filters.every(([f, op, v]) => OPS[op](d[f], v)))
+    .slice(0, n === undefined ? Infinity : n)
+    .map(([id, d]) => ({ id, exists: true, data: () => d }));
+  // อ่านนอก transaction (auth.resolveShopRef พิสูจน์ field ของร้าน S5): doc.get · where().limit().get
+  const ref = (c, id) => ({ c, id, get: async () => snapOf(c, id) });
   const query = (c, filters) => ({
     c, filters,
     where: (f, op, v) => {
       if (!OPS[op]) throw new Error(`op ${op} ไม่รองรับในฐานปลอม`);
       return query(c, [...filters, [f, op, v]]);
     },
+    limit: (n) => ({ get: async () => ({ docs: run(c, filters, n) }) }),
   });
   return {
     collection: (c) => ({

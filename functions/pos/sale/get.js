@@ -8,7 +8,7 @@
 //        → อ่าน shop + bill พร้อมกัน (อ่านอย่างเดียว ไม่มีการเขียน) → 404 bill_not_found / 409 bill_other_shop
 //        → 200 {bill:{id, ...field · เวลาเป็น ISO}, shape, canVoid}
 // อ่าน shop ด้วยเพื่อรู้ field shop.shopId: ร้านเก่า doc id ≠ shopId ได้ (schema/shop.md S5) และบิลอาจเก็บค่าแบบใดแบบหนึ่ง
-//   ⇒ belongsToShop รับทั้ง 2 ค่า · ไม่อ่าน shop = บิลของร้านเก่าจะได้ 409 ผิด
+//   ⇒ resolveShopRef พิสูจน์ field ก่อน (ค่าต้องผูกกับร้านนี้ร้านเดียว) แล้ว belongsToShop รับทั้ง 2 ค่า · ไม่อ่าน shop = บิลของร้านเก่าจะได้ 409 ผิด
 // shape: Bill → current · BillLegacyV1 → legacyV1 · ไม่ผ่านทั้งคู่ → unknown (log issues ไม่ปัด)
 // canVoid: shape current และยังไม่ยกเลิก (logic.isVoidedBill) · บิลรุ่นแรกดูได้อย่างเดียว (decision 2026-11-06)
 "use strict";
@@ -17,7 +17,7 @@ const { db } = require("../../firebase");
 const { Bill, BillLegacyV1, SaleGetRequest } = require("@shopchamp/schema");
 const { isVoidedBill } = require("@shopchamp/logic");
 const { ok, fail, sendDeny, parseOr400, internalError, zodIssues } = require("../_shared/respond");
-const { callerAccess, shopRefOf, checkOwnedDoc, adminFlag } = require("../_shared/auth");
+const { callerAccess, resolveShopRef, checkOwnedDoc, adminFlag } = require("../_shared/auth");
 const { toClientJson } = require("./getSerialize");
 
 /** shapeOf(data) → {shape, issues?} · ไม่ throw */
@@ -46,7 +46,7 @@ function get(deps) { // eslint-disable-line no-unused-vars
         db.collection("bill").doc(input.billId).get(),
       ]);
       if (!shopSnap.exists) return fail(res, 404, "shop_not_found");
-      const shopRef = shopRefOf(access.shopId, shopSnap.data());
+      const shopRef = await resolveShopRef({ db, shopDocId: access.shopId, shop: shopSnap.data() });
 
       const data = billSnap.exists ? billSnap.data() : undefined;
       const owned = checkOwnedDoc("bill", data, shopRef);

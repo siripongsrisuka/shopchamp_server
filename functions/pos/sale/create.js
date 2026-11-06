@@ -30,7 +30,7 @@ const logic = require("@shopchamp/logic");
 const { SaleCreateRequest, CREDIT_PAYMENT_ID } = require("@shopchamp/schema");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, adminTrail, adminFlag, shopRefOf, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
+const { callerAccess, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { nextBillNumber, billDateOf, billReceiptTypeOf, receiptTypeOf } = require("../_shared/billClock");
 const { resolveOfflineSync, stampOfflineFields } = require("../_shared/offlineSync");
 const { readReceiptUUID, classifyGuard, legacyDuplicateFromBill, guardDoc } = require("../_shared/idempotency");
@@ -164,9 +164,9 @@ function create(deps) {
         const [guardSnap, shopSnap] = await Promise.all([tx.get(guardRef), tx.get(shopRefDoc)]);
         const shop = dataOf(shopSnap);
         if (shop === undefined) refuse(404, "shop_not_found");
-        const shopRef = shopRefOf(shopDocId, shop);
+        const shopRef = await resolveShopRef({ db, shopDocId, shop });
 
-        let g = classifyGuard({ guardId: receiptUUID, guard: dataOf(guardSnap), shopDocId, shopField: shopRef.shopId });
+        let g = classifyGuard({ guardId: receiptUUID, guard: dataOf(guardSnap), shopDocId, shopField: shopRef.shopId, shopFieldState: shopRef.fieldState });
         if (g.kind === "duplicate" && g.needsBillRead) {
           const bill = dataOf(await tx.get(db.collection("bill").doc(g.billId)));
           g = legacyDuplicateFromBill(g, bill, shopRef);

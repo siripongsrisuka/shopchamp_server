@@ -47,6 +47,31 @@ test("ร้านเก่าที่ doc id ≠ field shopId: guard รูป
   assert.equal(I.classifyGuard({ guardId: "x", guard: { usedBy: "1", billId: "b", shopId: "uidOwner123" }, ...ref }).kind, "other_shop");
 });
 
+test("ร้านไม่มี field shopId: guard แอปเก่า `undefined<uuid>` (CheckoutScreen.js:113,710) = duplicate ของร้านนี้", () => {
+  const ref = { shopDocId: "docN", shopField: null, shopFieldState: "missing" };
+  const c = I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "bN" }, ...ref });
+  assert.deepEqual(c, { kind: "duplicate", shape: "legacyApp", billId: "bN", receiptNumber: null, needsBillRead: true });
+  // บิลไม่มี shopId (แอปเก่าเขียน field ร้านที่ไม่มี) หรือเป็นของร้านนี้ = เติมเลข · บิลของร้านอื่น = other_shop
+  assert.equal(I.legacyDuplicateFromBill(c, { receiptNumber: "R1" }, { id: "docN", shopId: null }).receiptNumber, "R1");
+  assert.equal(I.legacyDuplicateFromBill(c, { shopId: "docN", receiptNumber: "R1" }, { id: "docN", shopId: null }).receiptNumber, "R1");
+  assert.deepEqual(I.legacyDuplicateFromBill(c, { shopId: "shopB", receiptNumber: "RB" }, { id: "docN", shopId: null }), { kind: "other_shop" });
+  // field เป็น null = `null<uuid>`
+  assert.equal(I.classifyGuard({ guardId: `null${UUID}`, guard: { usedBy: "b" }, shopDocId: "docN", shopField: null, shopFieldState: "null" }).kind, "duplicate");
+  assert.equal(I.legacyGuardPrefix(null, "missing"), "undefined");
+  assert.equal(I.legacyGuardPrefix(null, "null"), "null");
+});
+
+test("guard `undefined<uuid>` ไม่ใช่ของร้านที่มี field · field ที่ยังไม่พิสูจน์ (S5 ไม่ผ่าน resolveShopRef) ไม่รับ guard แอปเก่า", () => {
+  assert.equal(I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "b" }, shopDocId: "shopA", shopField: "shopA", shopFieldState: "present" }).kind, "other_shop");
+  assert.equal(I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "b" }, ...SHOP }).kind, "other_shop");
+  // S5 ไม่ผ่านการพิสูจน์: shopRef.shopId = null · state present ⇒ prefix ไม่มี ⇒ ทุก guard แอปเก่าเป็นร้านอื่น
+  assert.equal(I.classifyGuard({ guardId: `uidVictim${UUID}`, guard: { usedBy: "b" }, shopDocId: "docA", shopField: null, shopFieldState: "present" }).kind, "other_shop");
+  assert.equal(I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "b" }, shopDocId: "docA", shopField: null, shopFieldState: "present" }).kind, "other_shop");
+  assert.equal(I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "b" }, shopDocId: "docA", shopField: null, shopFieldState: "invalid" }).kind, "other_shop");
+  // ไม่ส่ง state (ผู้เรียกแบบเดิม) = ไม่รับ `undefined<uuid>`
+  assert.equal(I.classifyGuard({ guardId: `undefined${UUID}`, guard: { usedBy: "b" }, shopDocId: "docN", shopField: undefined }).kind, "other_shop");
+});
+
 test("ต้องเป็น other_shop: guard มี shopId ร้านอื่น · รูปแอปเก่า prefix ร้านอื่น (สัญญา 2 case)", () => {
   assert.deepEqual(I.classifyGuard({ guardId: `shopA${UUID}`, guard: { usedBy: "202611000003", billId: "bB", shopId: "shopB" }, ...SHOP }), { kind: "other_shop" });
   assert.deepEqual(I.classifyGuard({ guardId: `shopB${UUID}`, guard: { usedBy: "bB" }, ...SHOP }), { kind: "other_shop" });

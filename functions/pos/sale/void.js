@@ -28,7 +28,7 @@ const { SaleVoidRequest, Bill, BillLegacyV1 } = require("@shopchamp/schema");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, deny, parseOr400, internalError, zodIssues } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, hasRight, adminTrail, adminFlag, shopRefOf, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
+const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -141,7 +141,7 @@ function makeVoid(deps) {
         ]);
         const shop = shopSnap && shopSnap.exists ? shopSnap.data() : undefined;
         if (!shop) return { deny: deny(404, "shop_not_found") };
-        const ref = shopRefOf(access.shopId, shop);
+        const ref = await resolveShopRef({ db, shopDocId: access.shopId, shop });
 
         const raw = billSnap && billSnap.exists ? billSnap.data() : undefined;
         const owned = checkOwnedDoc("bill", raw, ref);
