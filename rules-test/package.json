@@ -1,0 +1,13 @@
+{
+  "name": "shopchamp-rules-test",
+  "private": true,
+  "type": "module",
+  "description": "เทส firestore.rules บน Firestore emulator (DEV-0001 ก้อน 6)",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.2.0"
+  }
+}

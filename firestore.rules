@@ -1,39 +1,405 @@
 rules_version = '2';
+// firestore.rules — แยกร้าน · DEV-0001 ก้อน 6 (2026-11-06)
+//
+// หลัก (Pack เคาะ):
+//   ① แอปเก่าไม่บังคับอัป ⇒ ทุกจุดเขียนเดิมของร้านตัวเองต้องผ่านต่อ · ปิดได้แค่ข้ามร้าน · collection ใหม่ปัดเป็นค่าตั้งต้น
+//   ② จออ่าน realtime จาก Firestore ต่อได้ภายใต้ rules แยกร้าน
+//   ③ ทีมงานใน admin/adminConfig.admin (และ admin/admin.value ของเว็บ) เข้าได้ทุกร้าน
+//   ④ ของเกตเวย์: pgWebhook แอปอ่านได้เฉพาะร้านตัวเอง เขียนไม่ได้ · กุญแจและ shop/*/meta ปิดจาก client ทั้งหมด
+//   ⑤ #12 #13 คงสำเนาเดิมให้แอปเก่า ⇒ doc ร้านยังอ่านได้ทุกคนที่ login · บัญชีกลางของเว็บยังเขียนได้เฉพาะที่หน้าอัปสินค้าใช้
+// ตารางจุดเรียก → กฎ → เทส: lanes/dev/source/chunk6-log.md (บ้าน) · เทส: rules-test/
+//
+// "ร้าน" ในเอกสารอื่นถูกอ้างได้ 2 แบบ (schema/shop.md S5 · chunk4-verify/sale.get.md):
+//   - doc id ของ shop (billId/{docId} · ร้านใหม่ที่ field shopId = doc id)
+//   - field shopId ของ shop · ร้านรุ่นเก่า (~19%) field นี้ = uid เจ้าของ ไม่ใช่ doc id
+//     ⇒ เจ้าของผ่านด้วย key == uid · พนักงานผ่านด้วยดัชนี shopAlias/{shopId} = { docIds:[...] } ที่ server เขียน (สคริปต์ rules-test/backfill-shop-alias.js)
+// สมาชิกของร้าน = uid อยู่ใน humanResource[].id (ไม่ดู status · หลวมกว่าแอปเก่าที่ดู status และแพ็กเกจพนักงาน ⇒ ไม่ทำให้แอปเก่าพัง)
+//   rules วนลูปไม่ได้ ⇒ ไล่ทีละช่อง 80 ช่องแรก (hrGroup0..7) · ร้านที่มีรายชื่อเกิน 80 คน คนที่ 81 ขึ้นไปถูกปัด (ยังไม่ได้วัดว่ามีร้านแบบนี้กี่ร้าน)
 service cloud.firestore {
-  // match /databases/{database}/documents {
-  //   match /{document=**} {
-  //     allow read, write: if true;
-  //   }
-  // }
-  
-  
-    match /databases/{database}/documents {
-      match /{document=**} {
-        allow write, read: if request.auth.uid != null;
-      }
+  match /databases/{database}/documents {
+
+    // ---------------- ตัวตน ----------------
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function docPath(c, id) { return /databases/$(database)/documents/$(c)/$(id); }
+
+    // ทีมงาน Shopchamp · แอปอ่าน admin/adminConfig.admin (main3:src/screens/LoadingScreen.js:50,57) · เว็บอ่าน admin/admin.value (WebOwner ShopListScreen.js:40)
+    function staffTeam() {
+      return signedIn() && (
+        me() in get(docPath('admin', 'adminConfig')).data.get('admin', [])
+        || me() in get(docPath('admin', 'admin')).data.get('value', []));
+    }
+
+    // บัญชีกลางของเว็บ (#12 · คงไว้ให้หน้าป้ายราคา อัปสินค้า สแกนเข้าเว็บ ของรุ่นเดิม · Pack เลือก §6 ข้อ 1 ทาง 2)
+    function sharedWebAccount() {
+      return signedIn() && request.auth.token.get('email', '') in [
+        'anonymoususer@gmail.com', 'owner@gmail.com', 'owner2@gmail.com', 'owner3@gmail.com', 'owner4@gmail.com',
+        'owner5@gmail.com', 'owner6@gmail.com', 'owner7@gmail.com', 'owner8@gmail.com', 'owner9@gmail.com', 'owner10@gmail.com'];
+    }
+
+    // ---------------- สมาชิกร้าน ----------------
+    // ช่องเกินขนาด list หรือไม่มี id = error ⇒ `error || true` = true จึงไล่ต่อได้ · เพดาน rules 1,000 expression ต่อเอกสาร
+    //   ⇒ ไม่ใส่ size()/is map รายช่อง (เปลือง) · กันเป็นกลุ่มละ 10 · เพดานจริงวัดบน emulator: 100 ช่องเกินงบเมื่อรวมกฎอื่น ⇒ ใช้ 80 ช่อง (เทส index 79 ผ่าน · 80 ถูกปัด · คนนอกบนร้าน 101 คนยังไม่ชนเพดาน)
+    function hrGroup0(hr, u) { return (hr[0].id == u || hr[1].id == u || hr[2].id == u || hr[3].id == u || hr[4].id == u || hr[5].id == u || hr[6].id == u || hr[7].id == u || hr[8].id == u || hr[9].id == u); }
+    function hrGroup1(hr, u) { return hr.size() > 10 && (hr[10].id == u || hr[11].id == u || hr[12].id == u || hr[13].id == u || hr[14].id == u || hr[15].id == u || hr[16].id == u || hr[17].id == u || hr[18].id == u || hr[19].id == u); }
+    function hrGroup2(hr, u) { return hr.size() > 20 && (hr[20].id == u || hr[21].id == u || hr[22].id == u || hr[23].id == u || hr[24].id == u || hr[25].id == u || hr[26].id == u || hr[27].id == u || hr[28].id == u || hr[29].id == u); }
+    function hrGroup3(hr, u) { return hr.size() > 30 && (hr[30].id == u || hr[31].id == u || hr[32].id == u || hr[33].id == u || hr[34].id == u || hr[35].id == u || hr[36].id == u || hr[37].id == u || hr[38].id == u || hr[39].id == u); }
+    function hrGroup4(hr, u) { return hr.size() > 40 && (hr[40].id == u || hr[41].id == u || hr[42].id == u || hr[43].id == u || hr[44].id == u || hr[45].id == u || hr[46].id == u || hr[47].id == u || hr[48].id == u || hr[49].id == u); }
+    function hrGroup5(hr, u) { return hr.size() > 50 && (hr[50].id == u || hr[51].id == u || hr[52].id == u || hr[53].id == u || hr[54].id == u || hr[55].id == u || hr[56].id == u || hr[57].id == u || hr[58].id == u || hr[59].id == u); }
+    function hrGroup6(hr, u) { return hr.size() > 60 && (hr[60].id == u || hr[61].id == u || hr[62].id == u || hr[63].id == u || hr[64].id == u || hr[65].id == u || hr[66].id == u || hr[67].id == u || hr[68].id == u || hr[69].id == u); }
+    function hrGroup7(hr, u) { return hr.size() > 70 && (hr[70].id == u || hr[71].id == u || hr[72].id == u || hr[73].id == u || hr[74].id == u || hr[75].id == u || hr[76].id == u || hr[77].id == u || hr[78].id == u || hr[79].id == u); }
+    function inHr(hr) { let u = request.auth.uid; return hr is list && (hrGroup0(hr, u) || hrGroup1(hr, u) || hrGroup2(hr, u) || hrGroup3(hr, u) || hrGroup4(hr, u) || hrGroup5(hr, u) || hrGroup6(hr, u) || hrGroup7(hr, u)); }
+
+    // doc ร้านนี้มีฉันไหม · field shopId == uid = เจ้าของร้านรุ่นเก่า (main3:src/screens/LoadingScreen.js:91-103)
+    function shopRecordHasMe(d) { return d.get('shopId', '') == me() || inHr(d.get('humanResource', [])); }
+    function shopDocHasMe(docId) {
+      return docId is string && docId != '' && exists(docPath('shop', docId)) && shopRecordHasMe(get(docPath('shop', docId)).data);
+    }
+    // ตอนเขียน ดู doc ร้าน "หลังคำขอนี้" (getAfter) · สร้างร้านพร้อมกะและ profile ใน transaction เดียว (NewShopScreen.js:57-110)
+    function shopDocHasMeAfter(docId) {
+      return docId is string && docId != '' && existsAfter(docPath('shop', docId)) && shopRecordHasMe(getAfter(docPath('shop', docId)).data);
+    }
+    // ดัชนีร้านรุ่นเก่า: key = field shopId (uid เจ้าของ) · docIds = doc id ของร้านที่ถือค่านี้ (ราว 1% มีมากกว่า 1 ร้าน)
+    function aliasHasMe(a, after) {
+      return a.get('docIds', []) is list && (
+        (a.docIds.size() > 0 && (after ? shopDocHasMeAfter(a.docIds[0]) : shopDocHasMe(a.docIds[0])))
+        || (a.docIds.size() > 1 && (after ? shopDocHasMeAfter(a.docIds[1]) : shopDocHasMe(a.docIds[1])))
+        || (a.docIds.size() > 2 && (after ? shopDocHasMeAfter(a.docIds[2]) : shopDocHasMe(a.docIds[2]))));
+    }
+    // key = doc id ของร้าน หรือ field shopId ของร้าน · ดูดัชนีก่อนเสมอ (กันคนสร้าง shop/{uid เหยื่อ} มาครอบ)
+    //   after = true ใช้ในกฎเขียน (เห็นร้านที่สร้างใน transaction เดียวกัน)
+    function memberCheck(key, after) {
+      return signedIn() && key is string && key != '' && (
+        key == me()
+        || staffTeam()
+        || (exists(docPath('shopAlias', key)) ? aliasHasMe(get(docPath('shopAlias', key)).data, after)
+            : (after ? shopDocHasMeAfter(key) : shopDocHasMe(key))));
+    }
+    function memberOf(key) { return memberCheck(key, false); }
+    function memberOfW(key) { return memberCheck(key, true); }
+    // แฟรนไชส์: franchise/{id}.humanResource = รายการ uid (Franchise StaffScreen.js:47 · FranchiseListScreen.js:65 array-contains)
+    function franchiseMemberOf(fid) {
+      return signedIn() && fid is string && fid != '' && (
+        (exists(docPath('franchise', fid)) && me() in get(docPath('franchise', fid)).data.get('humanResource', []))
+        || staffTeam());
+    }
+
+    // ---------------- เอกสารของร้าน (มี field shopId) ----------------
+    function shopOf(d) { return d.get('shopId', ''); }
+    // แฟรนไชส์ก่อน (ถูก) แล้วค่อยไล่รายชื่อร้าน (แพง) · ลำดับนี้กันชนเพดาน 1,000 expression
+    function readShopDoc(d) { return franchiseMemberOf(d.get('franchiseId', '')) || memberOf(shopOf(d)); }
+    function createShopDoc() { return memberOfW(shopOf(request.resource.data)); }
+    function updateShopDoc() {
+      return memberOfW(shopOf(resource.data)) && shopOf(request.resource.data) == shopOf(resource.data);
+    }
+    function deleteShopDoc() { return memberOfW(shopOf(resource.data)); }
+    // อ่าน doc ที่ยังไม่มี (transaction.get / .get() ก่อนสร้าง) = รู้แค่ว่าไม่มี · แอปเก่าทำแบบนี้ทุกที่ที่ "สร้างถ้ายังไม่มี"
+    function absent() { return signedIn() && resource == null; }
+
+    // ทีมงาน: collection ของร้านผ่านทาง memberOf (มี staffTeam ข้างใน) · collection อื่นใส่ `|| staffTeam()` รายตัว
+    //   ❌ ไม่ทำ match /{coll}/{doc} รวม เพราะรายชื่อ collection ยาวกินงบ 1,000 expression ของทุกคำขอ (วัดแล้ว)
+    // collection ที่มีแต่หลังบ้าน care ใช้ (shopchamp_care/src) = ทีมงานเท่านั้น
+    match /adjustStock/{id} { allow read, write: if staffTeam(); }
+    match /importStock/{id} { allow read, write: if staffTeam(); }
+    match /mainAds/{id} { allow read, write: if staffTeam(); }
+    match /renter/{id} { allow read, write: if staffTeam(); }
+    match /productCobrand/{id} { allow read, write: if staffTeam(); }
+    match /checkout/{id} { allow read, write: if staffTeam(); }
+
+    // ---------------- collection ของร้าน · กฎแบบเดียวกัน (doc มี field shopId) ----------------
+    match /stock/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /notification/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /member/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /shift/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /importProduct/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /promotion/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /checkIn/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /expense/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /expenseReport/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /memberList/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /supplier/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /shiftHistory/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /hardwareOrder/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /imageOrder/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /packageOrder/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /stockOrder/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /requisition/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /stockReport/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+
+    // bill: ร้านตัวเอง · แฟรนไชส์ของสาขา · ประวัติบิลของสมาชิก (main3:src/redux/memberSlice.js:49 query member.id อย่างเดียว)
+    function memberDocInMyShop(memberId) {
+      return memberId is string && memberId != '' && exists(docPath('member', memberId))
+        && memberOf(get(docPath('member', memberId)).data.get('shopId', ''));
+    }
+    match /bill/{billId} {
+      allow get: if absent() || readShopDoc(resource.data) || memberDocInMyShop(resource.data.get('member', {}).get('id', ''));
+      allow list: if readShopDoc(resource.data) || memberDocInMyShop(resource.data.member.id);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    // paidHistory: เหมือนกัน · จอประวัติชำระ query memberId อย่างเดียว (main3:src/screens/MemberPaidScreen.js:54)
+    match /paidHistory/{id} {
+      allow get: if absent() || readShopDoc(resource.data) || memberDocInMyShop(resource.data.get('memberId', ''));
+      allow list: if readShopDoc(resource.data) || memberDocInMyShop(resource.data.memberId);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    // checkInHistory: แอป query `id` = shopId + profileId อย่างเดียว (main3:src/screens/CheckInScreen.js:48) ⇒ ของตัวเองผ่านด้วยท้าย id = uid
+    match /checkInHistory/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data) || (signedIn() && resource.data.id.matches('.+' + me()));
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    // stockLink: ร้าน (shopId) หรือแฟรนไชส์ (franchiseId · Franchise StockLinkScreen.js:74)
+    match /stockLink/{id} {
+      allow get: if absent() || readShopDoc(resource.data);
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc() || franchiseMemberOf(request.resource.data.get('franchiseId', ''));
+      allow update: if updateShopDoc()
+        || (franchiseMemberOf(resource.data.get('franchiseId', '')) && request.resource.data.get('franchiseId', '') == resource.data.get('franchiseId', ''));
+      allow delete: if deleteShopDoc() || franchiseMemberOf(resource.data.get('franchiseId', ''));
+    }
+    // priceTag uploadProduct: แอปสร้าง · หน้าเว็บของรุ่นเดิมเปิดด้วย doc id ใน URL ผ่านบัญชีกลาง (#12) ⇒ get รายใบเปิดให้ผู้ login
+    match /priceTag/{id} {
+      allow get: if signedIn();
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    match /uploadProduct/{id} {
+      allow get: if signedIn();
+      allow list: if readShopDoc(resource.data);
+      allow create: if createShopDoc();
+      allow update: if updateShopDoc();
+      allow delete: if deleteShopDoc();
+    }
+    // pgWebhook: อ่านเฉพาะร้านตัวเอง · เขียนจาก client ไม่ได้ (architecture-plan ก้อน 6 · gateway-pattern §2.2)
+    match /pgWebhook/{id} {
+      allow get: if absent() || memberOf(shopOf(resource.data));
+      allow list: if memberOf(shopOf(resource.data));
+    }
+    // (ทีมงานอ่าน pgWebhook ได้ผ่าน memberOf · เขียนไม่ได้แม้ทีมงาน = server เท่านั้น)
+
+    // ---------------- ตัวนับเลขเอกสารของร้าน (doc id = ร้าน) ----------------
+    // billId billDayId: doc id = doc id ของร้าน (schema/billId.md:38) · taxId: doc id = field shopId (BillHistoryScreen.js:521)
+    match /billId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
+    match /billDayId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
+    match /taxId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
+
+    // receiptGuard: แอปเก่าเขียน { createdAt, usedBy:<bill id> } ใน transaction เดียวกับบิล (main3:src/Utility/function.js:309)
+    //   ⇒ ผูกกับร้านผ่านบิลที่กำลังสร้าง (getAfter) · อ่าน (ตรวจซ้ำก่อนขาย) ให้ผู้ login · ห้ามแก้หรือลบ
+    match /receiptGuard/{uuid} {
+      allow get: if signedIn();
+      allow list, update, delete: if staffTeam();
+      allow create: if signedIn() && request.resource.data.keys().hasOnly(['createdAt', 'usedBy'])
+        && request.resource.data.usedBy is string
+        && memberOfW(getAfter(docPath('bill', request.resource.data.usedBy)).data.get('shopId', ''));
+    }
+
+    // ---------------- shop ----------------
+    // อ่าน: ผู้ login ทุกคน (#13 คงไว้ · แอปเก่าค้นร้านจากเบอร์ main3:src/Modal/Modal_FindShop.js:60 แล้วตัดสินสิทธิ์ในเครื่อง)
+    // สร้าง: doc id อัตโนมัติ 20 ตัว · shopId = doc id · ผู้สร้างอยู่ใน humanResource (main3:src/screens/NewShopScreen.js:63-100)
+    // แก้: สมาชิกร้าน · ห้ามเปลี่ยน field shopId · แฟรนไชส์ผูกสาขาได้แค่ franchiseId (Franchise BranchScreen.js:62)
+    //      · บัญชีกลางแก้ได้แค่ smartCategory (WebOwner UploadProductScreen.js:201 · #12)
+    match /shop/{shopDoc} {
+      allow read: if signedIn();
+      allow create: if signedIn() && shopDoc.size() == 20 && shopOf(request.resource.data) == shopDoc
+        && !exists(docPath('shopAlias', shopDoc)) && inHr(request.resource.data.get('humanResource', []));
+      allow update: if signedIn() && shopOf(request.resource.data) == shopOf(resource.data) && (
+        shopRecordHasMe(resource.data)
+        || memberOf(shopOf(resource.data))
+        || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['franchiseId'])
+            && franchiseMemberOf(request.resource.data.franchiseId))
+        || (sharedWebAccount() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['smartCategory'])));
+      allow create, update, delete: if staffTeam();
+    }
+
+    // ---------------- ของกลาง ----------------
+    // stock: ของร้าน + บัญชีกลางสร้างสินค้าให้ร้านจากหน้าอัปสินค้า (WebOwner UploadProductScreen.js:171 · #12)
+    match /stock/{id} {
+      allow create: if sharedWebAccount() && shopOf(request.resource.data) != '';
+    }
+    // profile: doc id = uid · อ่านได้ทุกคนที่ login (แอปค้นพนักงานจากเบอร์ main3:src/Modal/Modal_Human.js:59 · StaffScreen.js:157)
+    match /profile/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && uid == me();
+      allow write: if staffTeam();
+    }
+    // admin: อ่านได้ทุกคนที่ login · ตัวนับเลขคำสั่งซื้อ +1 ครั้งละ 1 (PayScreen.js:129 · HardwareSummaryScreen.js:122 · ImageLimitScreen.js:113 · ImportStockPayScreen.js:110)
+    match /admin/{docId} {
+      allow read: if signedIn();
+      allow update: if signedIn() && docId in ['packageNumber', 'hardwareNumber', 'imageNumber', 'stockNumber']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['value', 'timestamp'])
+        && request.resource.data.value == resource.data.value + 1;
+      allow write: if staffTeam();
+    }
+    // เลขร้าน: +1 ตอนสร้างร้าน (NewShopScreen.js:60,97)
+    match /shopchamShopId/{docId} {
+      allow read: if signedIn();
+      allow update: if signedIn() && docId == 'numOfStore'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['total'])
+        && request.resource.data.total == resource.data.total + 1;
+      allow write: if staffTeam();
+    }
+    // product: แคตตาล็อกกลางที่ทุกร้านอ่านและเติม (ProductSetting.js:676,679 · CashierScreen.js:446)
+    match /product/{id} {
+      allow read: if signedIn();
+      allow create, update: if signedIn();
+      allow delete: if staffTeam();
+    }
+    // buildings: ตำแหน่งร้านบนแผนที่ (db/firestore.js:14,19 · Utility/function.js:1984)
+    match /buildings/{id} {
+      allow read, create, update: if signedIn();
+      allow delete: if staffTeam();
+    }
+    // deletedUser: บันทึกคำขอลบบัญชีของตัวเอง (db/firestore.js:223,234)
+    match /deletedUser/{id} {
+      allow create: if signedIn() && request.resource.data.get('uid', '') == me();
+      allow update: if signedIn() && resource.data.get('uid', '') == me()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isDeleteSuccess']);
+      allow read, write: if staffTeam();
+    }
+    // loginByScan: เว็บสร้างห้องรอแล้วฟัง · แอปเขียน uid ของตัวเองเท่านั้น (LinkingWebsiteScreen.js:48 · WebOwner HomeScreen.js:168,183)
+    match /loginByScan/{id} {
+      allow read, create, delete: if signedIn();
+      allow update: if signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uid'])
+        && request.resource.data.uid == me();
+      allow write: if staffTeam();
+    }
+    // franchise: รายการ uid ใน humanResource · ใบที่เพิ่งสร้างยังว่าง ⇒ ผู้ login แตะได้จนกว่าจะมีคน (Franchise FranchiseListScreen.js:174)
+    function franchiseOpen(d) { return d.get('humanResource', []).size() == 0; }
+    match /franchise/{fid} {
+      allow get: if absent() || (signedIn() && (me() in resource.data.get('humanResource', []) || franchiseOpen(resource.data)));
+      allow list: if signedIn() && me() in resource.data.humanResource;
+      allow create: if signedIn();
+      allow update: if signedIn() && (me() in resource.data.get('humanResource', []) || franchiseOpen(resource.data));
+      allow read, write: if staffTeam();
+    }
+    // warehouseItem: ของแฟรนไชส์ (Franchise WarehouseScreen.js:102-133 · warehouseSlice.js:16)
+    match /warehouseItem/{id} {
+      allow get: if absent() || franchiseMemberOf(resource.data.get('franchiseId', ''));
+      allow list: if franchiseMemberOf(resource.data.franchiseId);
+      allow create: if franchiseMemberOf(request.resource.data.get('franchiseId', ''));
+      allow update: if franchiseMemberOf(resource.data.get('franchiseId', ''))
+        && request.resource.data.get('franchiseId', '') == resource.data.get('franchiseId', '');
+      allow delete: if franchiseMemberOf(resource.data.get('franchiseId', ''));
+    }
+
+    // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
+    // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex
+    //   masterStock masterSectionStock order replyControl memberProvider testCron userMetadata) — server ใช้ Admin SDK ไม่ผ่าน rules
   }
-  // match /databases/{database}/documents {
-  //   match /{document=**} {
-  //     allow read, write: if request.auth.uid == 'p66TDQgliCUPTM8AayzWtICfx9c2'
-  //   }
-  // }
-  
-  
-  //HYoXUJXmk0YW65VUUaXABzM5OrA2
-  //HYoXUJXmk0YW65VUUaXABzM5OrA2
-  
-  
-  // match /databases/{database}/documents {
-  //   match /{document=**} {
-  //     allow read, write: if request.auth.uid == 'HYoXUJXmk0YW65VUUaXABzM5OrA2'
-  //   }
-  // }
-  
-    // match /databases/{database}/documents {
-    // match /{document=**} {
-    //   allow read, write: if request.auth.uid == 'HYoXUJXmk0YW65VUUaXABzM5OrA2'
-    //   allow read, write: if request.auth.uid == 'z5eH5R4KQnd1YZB04vLtsBFWWn52'
-    // }
-  // }
-  
 }
