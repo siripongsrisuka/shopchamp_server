@@ -115,6 +115,25 @@
       "density": "SPARSE_ALL"
     },
     {
+      "collectionGroup": "bill",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "shopId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "taxNumber",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
       "collectionGroup": "checkInHistory",
       "queryScope": "COLLECTION",
       "fields": [

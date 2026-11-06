@@ -14,6 +14,8 @@
 //      ร้านไม่มี 404 shop_not_found · payUUID เดิมของร้านนี้ 200 duplicate (ไม่ตัดหนี้ซ้ำ · ตรวจก่อนกะ เพราะส่งซ้ำหลังปิดกะได้)
 //        payUUID เดิมแต่ memberId หรือยอดต่าง 409 pay_uuid_mismatch (B-13)
 //      payUUID ของร้านอื่น 409 pay_uuid_other_shop · member 404/409 · shift 404/409 · กะปิด 409 shift_not_open (#17)
+//        ด่านกะ 3 ข้อหลังใช้กับร้านที่ shop.shift === true เท่านั้น · ร้านไม่ใช้ระบบกะ (ก้อน 5 ข้อ ①) = ปัดแค่ shift ของร้านอื่น
+//        ไม่ส่ง shiftId / shift ไม่มีในฐาน = paidHistory.shiftId null (กะไหนก็ไม่นับ · แอปเก่าไม่เคยเขียนช่องนี้)
 //      คนรับไม่อยู่ในร้าน 409 staff_not_in_shop · อยู่แต่ไม่ active 409 staff_inactive (B-11) · เกินหนี้รวม 409 pay_over_total (logic.member.applyCreditPayment)
 //   4. เขียน (เพิ่ม field อย่างเดียว · แอปเก่าอ่านได้ตามเดิม):
 //      member: {credit, creditArray} จาก applyCreditPayment (แถวที่ชำระครบยังอยู่ remainCredit 0 · F22)
@@ -126,13 +128,13 @@ function payCredit(deps) {
       const shopRef = db.collection("shop").doc(shopDocId);
       const paidRef = db.collection("paidHistory").doc(input.payUUID);
       const memberRef = db.collection("member").doc(input.memberId);
-      const shiftRef = db.collection("shift").doc(input.shiftId);
+      const shiftRef = input.shiftId === undefined ? null : db.collection("shift").doc(input.shiftId);
       const notiRef = db.collection("notification").doc();
 
       const out = await db.runTransaction(async (tx) => {
         // อ่านครบก่อนเขียน
         const [shopSnap, paidSnap, memberSnap, shiftSnap] = await Promise.all([
-          tx.get(shopRef), tx.get(paidRef), tx.get(memberRef), tx.get(shiftRef),
+          tx.get(shopRef), tx.get(paidRef), tx.get(memberRef), shiftRef ? tx.get(shiftRef) : Promise.resolve(null),
         ]);
         if (!shopSnap.exists) refuse(deny(404, "shop_not_found"));
         const shop = shopSnap.data() || {};
@@ -149,10 +151,23 @@ function payCredit(deps) {
         const member = memberSnap.exists ? memberSnap.data() : undefined;
         const mc = checkOwnedDoc("member", member, ref);
         if (!mc.ok) refuse(mc);
-        const shift = shiftSnap.exists ? shiftSnap.data() : undefined;
-        const sc = checkOwnedDoc("shift", shift, ref);
-        if (!sc.ok) refuse(sc);
-        if (shift.status !== true) refuse(deny(409, "shift_not_open", "กะปิดอยู่ กรุณาเปิดกะก่อนรับชำระ"));
+        const shift = shiftSnap && shiftSnap.exists ? shiftSnap.data() : undefined;
+        // ก้อน 5 ข้อ ① (Pack เคาะ 2026-11-06): ร้านไม่ใช้ระบบกะ (shop.shift ไม่ใช่ true) รับชำระได้เหมือนแอปเก่า
+        //   (main3 src/Modal/Modal_CreditMember.js:40-112 ไม่ดูกะเลย) · ยังปัด shift ของร้านอื่น · shift ที่ไม่มีในฐาน = ไม่ผูกกะ
+        //   ร้านใช้ระบบกะ = ต้องเข้ากะที่เปิดอยู่ตามเดิม (#17)
+        const usesShift = shop.shift === true;
+        let shiftForRow = null; // {shiftId, openTime} ที่เขียนลง paidHistory · null = ไม่ผูกกะ
+        if (usesShift) {
+          if (!shiftRef) refuse(deny(409, "shift_not_open", "กะปิดอยู่ กรุณาเปิดกะก่อนรับชำระ"));
+          const sc = checkOwnedDoc("shift", shift, ref);
+          if (!sc.ok) refuse(sc);
+          if (shift.status !== true) refuse(deny(409, "shift_not_open", "กะปิดอยู่ กรุณาเปิดกะก่อนรับชำระ"));
+          shiftForRow = { shiftId: input.shiftId, openTime: shift.openTime };
+        } else if (shift !== undefined) {
+          if (!belongsToShop(shift.shopId, ref)) refuse(deny(409, "shift_other_shop"));
+          // กะเปิดอยู่จริง (ร้านปิดสวิตช์กลางกะ) = ผูกรอบนั้นตามเดิม · ไม่เปิด = ผูก doc ประจำจุดแบบไม่มีเวลาเปิดรอบ
+          shiftForRow = { shiftId: input.shiftId, openTime: shift.status === true ? shift.openTime : undefined };
+        }
         // B-11 (Pack เคาะ 2026-11-06): คนรับต้อง status active · ไม่อยู่ในร้าน 409 staff_not_in_shop · อยู่แต่ไม่ active 409 staff_inactive
         const staffState = staffStatusOf(shop, input.staffId, access);
         if (staffState === "not_in_shop") refuse(deny(409, "staff_not_in_shop", "ไม่พบพนักงานที่รับเงินในร้านนี้"));
@@ -176,8 +191,8 @@ function payCredit(deps) {
           timestamp: now,
           billDate: billDateOf(now),
           receiptUUID: input.payUUID,
-          shiftId: input.shiftId,
-          shiftOpenTime: shift.openTime === undefined ? null : shift.openTime,
+          shiftId: shiftForRow ? shiftForRow.shiftId : null,
+          shiftOpenTime: shiftForRow && shiftForRow.openTime !== undefined ? shiftForRow.openTime : null,
           staffId: input.staffId,
           staffName: input.staffName,
           paymentId: input.paymentId,

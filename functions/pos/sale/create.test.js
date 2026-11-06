@@ -342,3 +342,49 @@ test("C-1 คู่ควบคุม · ส่งมา ⇒ ใช้ค่า�
   assert.deepEqual(b.pointDiscount, { value: 5, point: 10 });
   assert.equal(b.campaign.length, 1);
 });
+
+// ── ก้อน 5 ข้อ ①: ร้านไม่ใช้ระบบกะ (shop.shift ไม่ใช่ true) ขายได้ รูปบิลส่วนกะเท่าแอปเก่า (main3 CheckoutScreen.js:146,763) ──
+test("ข้อ ① · ร้านไม่ใช้กะ ส่ง shiftId ไม่ส่ง shiftOpenTime ⇒ off · บิลมี shiftId ประจำจุด · ไม่มี shiftOpenTime/shiftUnassigned", async () => {
+  seed({ data: { shift: { sh1: { shopId: "shopA", status: false, openTime: "", duringShift: [] } } } });
+  const { shiftOpenTime, ...b0 } = body({});
+  const r = await call(b0);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.shift, { status: "off" });
+  const b = onlyBill();
+  assert.equal(b.shiftId, "sh1");
+  assert.equal("shiftOpenTime" in b, false);
+  assert.equal("shiftUnassigned" in b, false);
+  assert.equal(LOG.some((w) => w.c === "shift" || w.c === "shiftHistory"), false);
+});
+
+test("ข้อ ① · ร้านไม่ใช้กะ ไม่ส่ง shiftId เลย ⇒ off · บิลไม่มีช่องกะ", async () => {
+  seed({ shop: { shift: false } });
+  const { shiftOpenTime, shiftId, ...b0 } = body({});
+  const r = await call(b0);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.shift, { status: "off" });
+  const b = onlyBill();
+  for (const k of ["shiftId", "shiftOpenTime", "shiftUnassigned"]) assert.equal(k in b, false, k);
+});
+
+test("ข้อ ① คู่ควบคุม · ร้านใช้กะ (shop.shift true) ไม่ส่ง shiftOpenTime ⇒ unassigned + ป้าย · ไม่เขียน shiftOpenTime 1970", async () => {
+  seed({ shop: { shift: true } });
+  const { shiftOpenTime, ...b0 } = body({});
+  const r = await call(b0);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.shift, { status: "unassigned" });
+  const b = onlyBill();
+  assert.equal(b.shiftUnassigned, true);
+  assert.equal("shiftOpenTime" in b, false);
+});
+
+test("ข้อ ① · ร้านไม่ใช้กะ + บิลออฟไลน์ clamp ไม่มี shiftOpenTime ⇒ ยัง clamp ตาม B-8 · shiftIdAtSale เก็บค่าเดิม", async () => {
+  seed();
+  const { shiftOpenTime, ...b0 } = body({ offline: true, soldAt: "2026-11-01T05:00:00.000Z" });
+  const r = await call(b0);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(r.body.shift.reason, "soldAt_clamped");
+  const b = onlyBill();
+  assert.equal("shiftId" in b, false);
+  assert.equal(b.shiftIdAtSale, "sh1");
+});

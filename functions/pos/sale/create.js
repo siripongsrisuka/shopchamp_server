@@ -17,6 +17,7 @@
 //     stock {stock, updateTime, latestSaleDate?} · member {point, bought, lastTime, creditArray?}
 //   เพิ่ม: bill receiptUUID shiftOpenTime shiftUnassigned? shiftHistoryId? stockSnapshot ในแถวสินค้า · ตระกูล offline
 //          ตัวนับ serverKey serverRun · guard billId shopId · shiftHistory lateSales lateBillQty · ทีมงาน byAdmin adminUid ทุกเอกสาร
+//   ร้านไม่ใช้ระบบกะ (ก้อน 5 ข้อ ①): รูปบิลเท่าแอปเก่าเป๊ะในส่วนกะ = shiftId ประจำจุดขาย (ถ้าส่ง) · ไม่มี shiftOpenTime/shiftUnassigned
 //   ต่างจากแอปเก่าโดยตั้งใจ:
 //     - `bill.shopId` = field `shop.shopId` แบบแอปเก่า (ร้านเก่า ≠ doc id ได้ · ทุก query ของบิลใช้ค่านี้) · guard.shopId = shop doc id ตามสัญญา
 //     - `updateTime` `latestSaleDate` `lastTime` = นาฬิกา server (deps.now) แทน serverTimestamp()
@@ -69,11 +70,19 @@ function applyAmendCarry(bill, carry) {
 // ── รอบกะ (#18) ─────────────────────────────────────────────────────────────
 // shift.status && openTime == shiftOpenTime ⇒ open · ไม่งั้นหา shiftHistory ที่ id==shiftId และ openTime == shiftOpenTime ⇒ late
 // ไม่เจอ / ไม่มี shift doc ⇒ unassigned (ไม่ปัดการขาย) · เทียบ ms ในโค้ด ไม่ใช้ == กับ Timestamp
-async function readShiftRound(tx, { shiftId, shiftOpenMs, shopRef }) {
+// ก้อน 5 ข้อ ① (Pack เคาะ 2026-11-06): ไม่ส่ง shiftOpenTime = ไม่อ้างรอบเปิด
+//   ร้านไม่ใช้ระบบกะ (shop.shift ไม่ใช่ true · ค่าตั้งต้นแอปเก่า main3 src/config/initialShop.js:75) ⇒ 'off' เหมือนแอปเก่า
+//     (ขายได้ · บิลถือ shiftId ประจำจุดขาย · ไม่มี shiftOpenTime · ไม่ติดป้าย shiftUnassigned)
+//   ร้านใช้ระบบกะ ⇒ 'unassigned' ตามเดิม (เงินต้องไม่หาย ตามรอยได้)
+//   ยังอ่าน shift doc เมื่อมี shiftId เพื่อปัด shift_other_shop (สรุปกะแอปเก่า query bill ด้วย shiftId อย่างเดียว ไม่กรองร้าน)
+async function readShiftRound(tx, { shiftId, shiftOpenMs, shopRef, shopUsesShift }) {
+  const noRound = () => (shopUsesShift ? { status: "unassigned" } : { status: "off" });
+  if (shiftId === undefined) return noRound();
   const shiftRef = db.collection("shift").doc(shiftId);
   const shift = dataOf(await tx.get(shiftRef));
-  if (shift === undefined) return { status: "unassigned" };
+  if (shift === undefined) return shiftOpenMs === null ? noRound() : { status: "unassigned" };
   if (!belongsToShop(shift.shopId, shopRef)) refuse(409, "shift_other_shop");
+  if (shiftOpenMs === null) return noRound();
   if (shift.status && logic.toMillis(shift.openTime) === shiftOpenMs) return { status: "open" };
   // shiftHistory.shopId คัดลอกจาก shift.shopId (`schema/shiftHistory.md` แถว 2) ⇒ query ด้วยค่าเดียวกัน
   const q = db.collection("shiftHistory").where("shopId", "==", shift.shopId).where("id", "==", shiftId);
@@ -156,8 +165,8 @@ function create(deps) {
       const shopDocId = access.shopId;
       const trail = adminTrail(access);
       const offline = resolveOfflineSync({ flag: input.offline, soldAt: input.soldAt, trusted: !!req.shopAccess, now });
-      const shiftOpenAt = new Date(input.shiftOpenTime);
-      const shiftOpenMs = shiftOpenAt.getTime();
+      const shiftOpenAt = input.shiftOpenTime === undefined ? null : new Date(input.shiftOpenTime);
+      const shiftOpenMs = shiftOpenAt === null ? null : shiftOpenAt.getTime();
 
       const out = await db.runTransaction(async (tx) => {
         // ── อ่าน ──
@@ -183,7 +192,7 @@ function create(deps) {
           tx.get(counterRef),
           memberId ? tx.get(db.collection("member").doc(memberId)) : Promise.resolve(null),
         ]);
-        const read = await readShiftRound(tx, { shiftId: input.shiftId, shiftOpenMs, shopRef });
+        const read = await readShiftRound(tx, { shiftId: input.shiftId, shiftOpenMs, shopRef, shopUsesShift: shop.shift === true });
         // B-8 (Pack เคาะ 2026-11-06): บิลออฟไลน์ที่ soldAt ถูก clamp (ย้อนเกิน 4 วัน / ล่วงหน้าเกิน 5 นาที) ไม่ผูกกะใด
         //   ยังอ่านกะเพื่อปัด shift_other_shop เหมือนบิลอื่น · ไม่บวก lateSales · บิลไม่ถือ shiftId/shiftOpenTime (ดูก้อนประกอบบิล)
         const round = offline.soldAtClamped ? { status: "unassigned", reason: "soldAt_clamped" } : read;
@@ -261,18 +270,18 @@ function create(deps) {
           receiptUUID,
           dateTime: offline.soldAt,
           existPoint,
-          shiftOpenTime: shiftOpenAt,
           // C-1: แอปเก่าพิมพ์ใบกำกับอ่าน pointDiscount.value และ campaign.length ตรง (main3 src/hook/usePrintAction.js:66-67 · :205-206)
           //   คำขอไม่ส่ง = เติมค่าว่างรูปเดียวกับที่แอปเก่าเขียนเสมอ
           pointDiscount: isObj(input.pointDiscount) ? input.pointDiscount : { value: 0, point: 0 },
           campaign: Array.isArray(input.campaign) ? input.campaign : [],
         };
+        if (shiftOpenAt !== null) bill.shiftOpenTime = shiftOpenAt;
         if (round.status === "unassigned") bill.shiftUnassigned = true;
         if (round.reason === "soldAt_clamped") {
           // B-8: สรุปกะของแอปเก่านับ `shiftId == … and dateTime > openTime` (functions/apis/shift.js:246-249) · dateTime ของบิลนี้ = now
           //   ⇒ ถ้าคง shiftId ไว้ บิลจะถูกนับเข้ารอบที่เปิดอยู่ของแอปเก่าด้วย · ไม่มี shiftId = ไม่มีกะไหน (แอปเก่าและใหม่) นับ
           //   shiftId ที่เครื่องส่งมาเก็บไว้ที่ shiftIdAtSale เพื่อสอบย้อน (ไม่มีผู้อ่าน)
-          bill.shiftIdAtSale = input.shiftId;
+          if (input.shiftId !== undefined) bill.shiftIdAtSale = input.shiftId;
           delete bill.shiftId;
           delete bill.shiftOpenTime;
         }

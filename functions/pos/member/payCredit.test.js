@@ -264,3 +264,32 @@ test("B-13 payUUID เดิมคนละสมาชิก/คนละยอ
   assert.equal(P.sameRequest({ memberId: "m1", paid: "1,000" }, { memberId: "m1", amount: 1000 }), true);
   assert.equal(P.sameRequest({ memberId: "m1", paid: 100.01 }, { memberId: "m1", amount: 100 }), false);
 });
+
+// ── ก้อน 5 ข้อ ①: ร้านไม่ใช้ระบบกะ รับชำระได้แบบแอปเก่า (main3 src/Modal/Modal_CreditMember.js:40-112 ไม่ดูกะ) ──
+test("ข้อ ① · ร้านไม่มี shop.shift + กะประจำจุดปิด ⇒ 200 · paidHistory shiftId sh1 shiftOpenTime null · ไม่แตะ shift", async () => {
+  seed((d) => { d.shift.sh1 = { shopId: "shopA", status: false, openTime: "" }; });
+  const r = await call(body({}), OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const [ph] = writesTo("paidHistory");
+  assert.equal(ph.v.shiftId, "sh1");
+  assert.equal(ph.v.shiftOpenTime, null);
+  assert.equal(writesTo("shift").length, 0);
+});
+
+test("ข้อ ① · ร้านไม่ใช้กะ ไม่ส่ง shiftId ⇒ 200 · paidHistory.shiftId null", async () => {
+  seed((d) => { d.shop.shopA.shift = false; });
+  const { shiftId, ...b0 } = body({});
+  const r = await call(b0, OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const [ph] = writesTo("paidHistory");
+  assert.equal(ph.v.shiftId, null);
+  assert.equal(ph.v.shiftOpenTime, null);
+});
+
+test("ข้อ ① คู่ควบคุม · ร้านใช้กะ กะปิด ⇒ 409 shift_not_open · ไม่เขียน", async () => {
+  seed((d) => { d.shop.shopA.shift = true; d.shift.sh1.status = false; });
+  const r = await call(body({}), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_not_open");
+  assert.equal(LOG.length, 0);
+});

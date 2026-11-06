@@ -23,6 +23,7 @@ const ROUTES = Object.freeze([
   { contract: "sale.void", path: "/sale/void", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/void").void },
   { contract: "sale.amend", path: "/sale/amend", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/amend").amend, bodyLimit: "1mb" },
   { contract: "sale.discardPending", path: "/sale/discard-pending", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/discardPending").discardPending, bodyLimit: "1mb" },
+  { contract: "sale.issueTaxInvoice", path: "/sale/issue-tax-invoice", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/issueTaxInvoice").issueTaxInvoice },
   { contract: "shift.manage", path: "/shift/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/manage").manage },
   { contract: "member.payCredit", path: "/member/pay-credit", fn: "pos", auth: "shop", factory: true, load: () => require("./member/payCredit").payCredit },
 ]);
