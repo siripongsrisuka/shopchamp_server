@@ -156,8 +156,8 @@ test("[DENY] พนักงาน A อ่าน pgWebhook ร้าน B", asy
 
 // ---------------- ของ server · collection ใหม่ · subcollection ----------------
 const SERVER_ONLY = ["gatewayCreds", "gatewayStations", "beamMerchantCreds", "beamMerchantIndex", "beamBoltConnections", "shopAlias",
-  "userMetadata", "masterStock", "masterSectionStock", "order", "replyControl", "memberProvider", "testCron", "collectionThatDoesNotExistYet"];
-const SERVER_DOC = { gatewayCreds: SHOP_A.docId, gatewayStations: SHOP_A.docId, beamMerchantCreds: SHOP_A.docId, beamMerchantIndex: "m1", beamBoltConnections: "c1", shopAlias: SHOP_L.shopId, userMetadata: "u1", masterStock: "m1" };
+  "userMetadata", "masterStock", "masterSectionStock", "order", "replyControl", "memberProvider", "testCron", "cashierCodeGuard", "collectionThatDoesNotExistYet"];
+const SERVER_DOC = { gatewayCreds: SHOP_A.docId, gatewayStations: SHOP_A.docId, beamMerchantCreds: SHOP_A.docId, beamMerchantIndex: "m1", beamBoltConnections: "c1", shopAlias: SHOP_L.shopId, userMetadata: "u1", masterStock: "m1", cashierCodeGuard: `${SHOP_A.docId}_u1` };
 for (const c of SERVER_ONLY) {
   for (const [who, db] of [["เจ้าของ A", () => as(env, U.ownerA)], ["ทีมงาน", () => as(env, U.team)], ["ไม่ login", () => anon(env)]]) {
     const id = SERVER_DOC[c] || "x1";

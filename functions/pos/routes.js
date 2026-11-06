@@ -59,6 +59,8 @@ const ROUTES = Object.freeze([
   { contract: "shop.update", path: "/shop/update", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/shopUpdate").shopUpdate },
   { contract: "staff.manage", path: "/staff/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/staffManage").staffManage },
   { contract: "staff.checkIn", path: "/staff/check-in", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/checkIn").checkIn },
+  // #13 ตรวจรหัสแคชเชียร์ที่ server (แทนเทียบในเครื่อง) · ผิดเกินกำหนดล็อกชั่วคราว (ใบนับผิด cashierCodeGuard)
+  { contract: "staff.verifyCashierCode", path: "/staff/verify-cashier-code", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/verifyCashierCode").verifyCashierCode },
   { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
   { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
   { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
