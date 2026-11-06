@@ -64,6 +64,9 @@ const ROUTES = Object.freeze([
   { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
   { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
   { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
+  // ก้อน 10 รอบ 2a: จุดขายพร้อม doc shift ใน transaction เดียว · ย้ายโครงร้านรุ่นแรก (U20)
+  { contract: "pos.manage", path: "/pos/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/posManage").posManage },
+  { contract: "shop.migrateLegacy", path: "/shop/migrate-legacy", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/shopMigrateLegacy").shopMigrateLegacy },
 
   // ก้อน 9d บริษัท
   { contract: "company.packageOrder", path: "/company/package-order", fn: "pos", auth: "shop", factory: true, load: () => require("./company/packageOrder").packageOrder },
