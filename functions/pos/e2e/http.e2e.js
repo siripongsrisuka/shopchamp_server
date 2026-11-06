@@ -58,11 +58,12 @@ test("ทุก route: ไม่มี token = 401 no_auth ในซองเด
 
 test("ทุก route ที่ผูกร้าน: คนนอกร้าน = 403 not_shop_member · ร้านไม่มี = 404 (requireShopAccess ตัวจริงอ่าน emulator)", async () => {
   for (const r of ROUTES.filter((x) => x.auth === "shop")) {
-    const out = await post(POS, r.path, { shopId: f.id.shopA }, `u-stranger${f.id.n}`);
+    const base = r.fn === "pos_heavy" ? HEAVY : POS; // ก้อน 9: มี route ของ pos_heavy ที่ผูกร้านแล้ว (รายงาน · ซ่อมร้าน clone)
+    const out = await post(base, r.path, { shopId: f.id.shopA }, `u-stranger${f.id.n}`);
     assert.deepEqual([out.status, out.body.error], [403, "not_shop_member"], `${r.path}: ${shape(out)}`);
-    const other = await post(POS, r.path, { shopId: f.id.shopB }, f.id.owner);
+    const other = await post(base, r.path, { shopId: f.id.shopB }, f.id.owner);
     assert.deepEqual([other.status, other.body.error], [403, "not_shop_member"], `${r.path} ร้านอื่น: ${shape(other)}`);
-    const none = await post(POS, r.path, { shopId: `nope${f.id.n}` }, f.id.owner);
+    const none = await post(base, r.path, { shopId: `nope${f.id.n}` }, f.id.owner);
     assert.deepEqual([none.status, none.body.error], [404, "shop_not_found"], `${r.path}: ${shape(none)}`);
   }
 });
@@ -123,6 +124,9 @@ test("ทางสำเร็จทีละ route ผ่าน HTTP: ping · p
 test("แยก function: เส้นเงินที่ pos_heavy = 404 wrong_function ชี้ pos · เส้นไม่รู้จัก = 404 not_found", async () => {
   const w = await post(HEAVY, "/sale/create", saleBody(f), f.id.owner);
   assert.deepEqual([w.status, w.body.error, w.body.serve], [404, "wrong_function", "pos"], shape(w));
-  const nf = await post(POS, "/report/x", {}, f.id.owner);
+  // ก้อน 9: /report เป็น segment ของ pos_heavy แล้ว ⇒ ยิงที่ pos = ชี้ไป pos_heavy · segment ที่ไม่มีใครรับ = not_found
+  const wr = await post(POS, "/report/bill-list", {}, f.id.owner);
+  assert.deepEqual([wr.status, wr.body.error, wr.body.serve], [404, "wrong_function", "pos_heavy"], shape(wr));
+  const nf = await post(POS, "/nope/x", {}, f.id.owner);
   assert.deepEqual([nf.status, nf.body.error], [404, "not_found"]);
 });

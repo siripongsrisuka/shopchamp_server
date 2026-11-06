@@ -62,7 +62,9 @@ test("ทะเบียน route: ทุกแถวมีสัญญาที
   for (const r of ROUTES) {
     const f = path.join(CENTER_API, `${r.contract}.yaml`);
     assert.ok(fs.existsSync(f), `ไม่มีสัญญา ${r.contract}`);
-    assert.ok(fs.readFileSync(f, "utf8").includes(`POST /pos${r.path}`), `${r.contract}.yaml ไม่ได้เขียน POST /pos${r.path}`);
+    // สัญญาเขียน URL ตาม function จริง: pos_heavy = `POST /pos_heavy/...` · fn '*' (ping) เขียนเป็น pos
+    const fnSeg = r.fn === "*" ? "pos" : r.fn;
+    assert.ok(fs.readFileSync(f, "utf8").includes(`POST /${fnSeg}${r.path}`), `${r.contract}.yaml ไม่ได้เขียน POST /${fnSeg}${r.path}`);
   }
   // ทิศกลับ (สัญญาทุกตัวต้องมี route) ไม่ตรวจที่นี่: สัญญาของก้อนอื่นที่ยังไม่ผูก route (payment.* ก้อน 7) จะทำ pre-commit ของทุกคนแดง
 });

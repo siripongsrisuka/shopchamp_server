@@ -101,7 +101,9 @@ test("ทะเบียนจริงโหลด handler ได้ครบ�
   assert.equal(router.stack.filter((l) => l.route).length, R.GATEWAY_ROUTES.length);
 });
 
-test("④ ทุกแถวมีไฟล์สัญญา · หัวไฟล์/endpoint เขียน POST /pos_gateway<path> ตรงกัน", () => {
+test("④ ทุกแถวมีไฟล์สัญญา · หัวไฟล์/endpoint เขียน POST /pos_gateway<path> ตรงกัน", (t) => {
+  // repo ถูก clone เดี่ยว (เช่นซ้อม pre-commit ใน legacy-freeze.test.js) = ไม่มี center ข้าง ๆ · ข้ามแบบเดียวกับ pos/app.test.js
+  if (!fs.existsSync(API)) { t.skip(`ไม่พบ ${API} (repo ถูก clone เดี่ยว)`); return; }
   const missing = [];
   for (const r of R.GATEWAY_ROUTES) {
     const file = path.join(API, `${r.contract}.yaml`);

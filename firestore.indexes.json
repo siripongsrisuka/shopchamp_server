@@ -362,6 +362,25 @@
       "density": "SPARSE_ALL"
     },
     {
+      "collectionGroup": "shiftHistory",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "shopId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "closeTime",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "DESCENDING"
+        }
+      ],
+      "density": "SPARSE_ALL"
+    },
+    {
       "collectionGroup": "stock",
       "queryScope": "COLLECTION",
       "fields": [

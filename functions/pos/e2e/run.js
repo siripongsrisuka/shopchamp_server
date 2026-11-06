@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // pos/e2e/run.js — เปิด Firestore emulator ชั่วคราว แล้วรันเทส e2e ของ pos (ก้อน 4 · DEV-0001)
 //
-// ใช้: cd shopchamp_server/functions && npm run test:e2e          (ทุกไฟล์ *.e2e.js)
+// ใช้: cd shopchamp_server/functions && npm run test:e2e          (ทุกไฟล์ *.e2e.js ใต้ pos/)
 //      node pos/e2e/run.js pos/e2e/sale.e2e.js                     (เลือกไฟล์)
 //
 // ทำอะไร:
@@ -78,10 +78,22 @@ async function startEmulator() {
   throw new Error(`emulator ไม่ขึ้นใน 60 วินาที\n${log.join("").slice(-2000)}`);
 }
 
+// ทุก *.e2e.js ใต้ pos/ (ก้อน 9: โดเมนวางเทส e2e ข้าง handler เช่น pos/shopStaff/shopStaff.e2e.js) · เรียงตาม path
+function findE2e(dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === "node_modules" || e.name.startsWith(".")) continue;
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...findE2e(p));
+    else if (e.isFile() && e.name.endsWith(".e2e.js")) out.push(p);
+  }
+  return out.sort();
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const files = args.length ? args.map((f) => path.resolve(process.cwd(), f))
-    : fs.readdirSync(HERE).filter((f) => f.endsWith(".e2e.js")).sort().map((f) => path.join(HERE, f));
+    : findE2e(path.resolve(HERE, ".."));
   let emu = null;
   let host = process.env.FIRESTORE_EMULATOR_HOST;
   let project = process.env.GCLOUD_PROJECT || PROJECT;
@@ -93,9 +105,15 @@ async function main() {
   }
   const env = { ...process.env, FIRESTORE_EMULATOR_HOST: host, GCLOUD_PROJECT: project, GOOGLE_CLOUD_PROJECT: project, TZ: "Asia/Bangkok" };
   delete env.GOOGLE_APPLICATION_CREDENTIALS;
-  const r = spawnSync(process.execPath, ["--test", "--test-concurrency=1", ...files], { cwd: FUNCTIONS, env, stdio: "inherit" });
+  // spawn แบบ async (ไม่ใช่ spawnSync): ระหว่างรอ event loop ต้องว่างไว้อ่าน stdout/stderr ของ emulator
+  //   spawnSync บล็อก loop ⇒ ท่อ log ของ emulator เต็ม (~64KB) ⇒ emulator ค้างตอนเขียน log ⇒ ไฟล์ท้าย ๆ ได้ DEADLINE_EXCEEDED (พบก้อน 9 ตอนรวม 6 ไฟล์)
+  const status = await new Promise((resolve) => {
+    const c = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files], { cwd: FUNCTIONS, env, stdio: "inherit" });
+    c.on("exit", (code) => resolve(code));
+    c.on("error", () => resolve(null));
+  });
   if (emu) emu.child.kill("SIGTERM");
-  process.exit(r.status === null ? 1 : r.status);
+  process.exit(status === null ? 1 : status);
 }
 
 main().catch((e) => { console.error(e.message || e); process.exit(1); });

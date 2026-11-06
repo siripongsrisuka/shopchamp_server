@@ -26,6 +26,57 @@ const ROUTES = Object.freeze([
   { contract: "sale.issueTaxInvoice", path: "/sale/issue-tax-invoice", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/issueTaxInvoice").issueTaxInvoice },
   { contract: "shift.manage", path: "/shift/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/manage").manage },
   { contract: "member.payCredit", path: "/member/pay-credit", fn: "pos", auth: "shop", factory: true, load: () => require("./member/payCredit").payCredit },
+
+  // ก้อน 9a สต๊อก · segment stock = pos · stock-repair = pos_heavy (อ่านสินค้าทั้งร้าน)
+  { contract: "stock.receive", path: "/stock/receive", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/receive").receive, bodyLimit: "1mb" },
+  { contract: "stock.receiveEdit", path: "/stock/receive-edit", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/receiveEdit").receiveEdit },
+  { contract: "stock.requisition", path: "/stock/requisition", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/requisition").requisition, bodyLimit: "1mb" },
+  { contract: "stock.linkCreate", path: "/stock/link-create", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/link").linkCreate },
+  { contract: "stock.linkUpdate", path: "/stock/link-update", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/link").linkUpdate },
+  { contract: "stock.linkDelete", path: "/stock/link-delete", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/link").linkDelete },
+  { contract: "stock.productSave", path: "/stock/product-save", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/productSave").productSave },
+  { contract: "stock.productDelete", path: "/stock/product-delete", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/productDelete").productDelete },
+  { contract: "stock.adjust", path: "/stock/adjust", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/adjust").adjust },
+  { contract: "stock.supplier", path: "/stock/supplier", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/supplier").supplier },
+  { contract: "stock.uploadOpen", path: "/stock/upload-open", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/uploadOpen").uploadOpen },
+  { contract: "stock.orderCreate", path: "/stock/order-create", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/orderCreate").orderCreate },
+  { contract: "stock.reorder", path: "/stock/reorder", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/reorder").reorder, bodyLimit: "1mb" },
+  { contract: "stock.cloneRepair", path: "/stock-repair/clone", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./stock/cloneRepair").cloneRepair },
+
+  // ก้อน 9b สมาชิกและสินค้า
+  { contract: "member.create", path: "/member/create", fn: "pos", auth: "shop", factory: true, load: () => require("./member/create").create },
+  { contract: "member.update", path: "/member/update", fn: "pos", auth: "shop", factory: true, load: () => require("./member/update").update },
+  { contract: "member.redeemPoint", path: "/member/redeem-point", fn: "pos", auth: "shop", factory: true, load: () => require("./member/redeemPoint").redeemPoint },
+  { contract: "member.delete", path: "/member/delete", fn: "pos", auth: "shop", factory: true, load: () => require("./member/delete").delete },
+  { contract: "member.rebuildIndex", path: "/member/rebuild-index", fn: "pos", auth: "shop", factory: true, load: () => require("./member/rebuildIndex").rebuildIndex },
+  { contract: "promotion.save", path: "/promotion/save", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/save").save },
+  { contract: "promotion.delete", path: "/promotion/delete", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/delete").delete },
+  { contract: "promotion.setStatus", path: "/promotion/set-status", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/setStatus").setStatus },
+  { contract: "product.saveCentral", path: "/product/save-central", fn: "pos", auth: "shop", factory: true, load: () => require("./product/saveCentral").saveCentral },
+  { contract: "priceTag.create", path: "/price-tag/create", fn: "pos", auth: "shop", factory: true, load: () => require("./priceTag/create").create, bodyLimit: "1mb" },
+
+  // ก้อน 9c ร้านและพนักงาน · staff.checkIn กับ profile.manage = auth user (ตัดสินร้านใน handler)
+  { contract: "shop.update", path: "/shop/update", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/shopUpdate").shopUpdate },
+  { contract: "staff.manage", path: "/staff/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/staffManage").staffManage },
+  { contract: "staff.checkIn", path: "/staff/check-in", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/checkIn").checkIn },
+  { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
+  { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
+  { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
+
+  // ก้อน 9d บริษัท
+  { contract: "company.packageOrder", path: "/company/package-order", fn: "pos", auth: "shop", factory: true, load: () => require("./company/packageOrder").packageOrder },
+  { contract: "company.hardwareOrder", path: "/company/hardware-order", fn: "pos", auth: "shop", factory: true, load: () => require("./company/hardwareOrder").hardwareOrder },
+  { contract: "company.imageOrder", path: "/company/image-order", fn: "pos", auth: "shop", factory: true, load: () => require("./company/imageOrder").imageOrder },
+  { contract: "company.scanLoginApprove", path: "/company/scan-login-approve", fn: "pos", auth: "user", factory: true, load: () => require("./company/scanLoginApprove").scanLoginApprove },
+  { contract: "company.deleteAccount", path: "/company/delete-account", fn: "pos", auth: "user", factory: true, load: () => require("./company/deleteAccount").deleteAccount },
+  { contract: "company.shopCreate", path: "/company/shop-create", fn: "pos", auth: "user", factory: true, load: () => require("./company/shopCreate").shopCreate },
+
+  // ก้อน 9e รายงาน · อ่านอย่างเดียว · pos_heavy
+  { contract: "report.billList", path: "/report/bill-list", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/billList").billList },
+  { contract: "report.salesTotals", path: "/report/sales-totals", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/salesTotals").salesTotals },
+  { contract: "report.taxInvoices", path: "/report/tax-invoices", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/taxInvoices").taxInvoices },
+  { contract: "report.duplicateNumbers", path: "/report/duplicate-numbers", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/duplicateNumbers").duplicateNumbers },
+  { contract: "report.shiftHistory", path: "/report/shift-history", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/shiftHistory").shiftHistory },
 ]);
 
 module.exports = { ROUTES };

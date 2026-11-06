@@ -4,7 +4,7 @@
 //   segment ของ function อื่น = 404 wrong_function + serve:<ชื่อที่ถูก> (ชี้ผิดที่จะเห็นทันที ไม่เงียบ)
 //   segment ที่ไม่รู้จัก = 404 not_found
 //   segment ที่ route ตั้ง fn '*' (system) = ทุก function รับ (ใช้ ping ยืนยันว่า function ขึ้นแล้ว)
-// แยกตั้งแต่วันแรก: pos = เงินและหน้าร้าน · pos_heavy = รายงานและนำเข้า (ยังไม่มี route · 9e) · pos_gateway มาในก้อน 7
+// แยกตั้งแต่วันแรก: pos = เงินและหน้าร้าน · pos_heavy = รายงานและนำเข้า (route รายงาน 9e + ซ่อมร้าน clone 9a · ก้อน 9) · pos_gateway มาในก้อน 7
 // ❌ ไม่ยก DUAL_SERVE ของพี่น้อง
 //
 // config ต่อ function (gen2 · Cloud Run):
