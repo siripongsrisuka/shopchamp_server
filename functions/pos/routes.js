@@ -82,6 +82,25 @@ const ROUTES = Object.freeze([
   { contract: "report.taxInvoices", path: "/report/tax-invoices", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/taxInvoices").taxInvoices },
   { contract: "report.duplicateNumbers", path: "/report/duplicate-numbers", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/duplicateNumbers").duplicateNumbers },
   { contract: "report.shiftHistory", path: "/report/shift-history", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/shiftHistory").shiftHistory },
+
+  // ก้อน 9f เว็บแฟรนไชส์ (DEV-0002) · auth user (ไม่มีร้านใน body · ตัดสินสิทธิ์จาก doc แฟรนไชส์ใน handler) · segment franchise = pos · franchise-report = pos_heavy
+  { contract: "franchise.list", path: "/franchise/list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").list },
+  { contract: "franchise.get", path: "/franchise/get", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").get },
+  { contract: "franchise.create", path: "/franchise/create", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/franchise").create },
+  { contract: "franchise.profileUpdate", path: "/franchise/profile-update", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/franchise").profileUpdate },
+  { contract: "franchise.categorySave", path: "/franchise/category-save", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/franchise").categorySave, bodyLimit: "1mb" },
+  { contract: "franchise.warehouseList", path: "/franchise/warehouse-list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").warehouseList },
+  { contract: "franchise.warehouseSave", path: "/franchise/warehouse-save", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/warehouse").warehouseSave },
+  { contract: "franchise.warehouseDelete", path: "/franchise/warehouse-delete", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/warehouse").warehouseDelete },
+  { contract: "franchise.linkList", path: "/franchise/link-list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").linkList },
+  { contract: "franchise.linkSave", path: "/franchise/link-save", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/link").linkSave },
+  { contract: "franchise.linkDelete", path: "/franchise/link-delete", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/link").linkDelete },
+  { contract: "franchise.branchList", path: "/franchise/branch-list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").branchList },
+  { contract: "franchise.branchFind", path: "/franchise/branch-find", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/branch").branchFind },
+  { contract: "franchise.branchAttach", path: "/franchise/branch-attach", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/branch").branchAttach },
+  { contract: "franchise.staffFind", path: "/franchise/staff-find", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/staff").staffFind },
+  { contract: "franchise.staffSave", path: "/franchise/staff-save", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/staff").staffSave },
+  { contract: "franchise.billList", path: "/franchise-report/bill-list", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/billList").billList },
 ]);
 
 module.exports = { ROUTES };

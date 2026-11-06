@@ -1,0 +1,168 @@
+// pos/franchise/_franchise.js — ด่านและของร่วมของเส้นเว็บแฟรนไชส์ (ก้อน 9f · DEV-0002)
+//
+// route ทุกตัว auth 'user' (checkIfAuthenticated อย่างเดียว · ไม่มีร้านใน body) ⇒ ตัดสินสิทธิ์ใน handler จาก doc แฟรนไชส์
+// ลำดับด่าน (ทุกเส้น):
+//   ไม่มี req.auth.uid 401 no_auth → body ผิด schema 400 invalid_request → franchise/{franchiseId} ไม่มี 404 franchise_not_found
+//   → ทีมงาน Shopchamp (admin/adminConfig.admin · แทนชุด uid ที่ฝังในเว็บ fr:configs/initialAdmin.js) ผ่านทุกแฟรนไชส์ สิทธิ์ครบ
+//   → ไม่ใช่ทีมงาน: uid ต้องอยู่ใน humanResource (ตัวเดียวกับที่ rules และรายการเดิมใช้ · fr:FranchiseListScreen.js:65)
+//       ไม่อยู่ 403 not_franchise_member {reason:'not_a_member'}
+//       แถว humanRight ของตัวเองมี status และไม่ใช่ 'active' 403 not_franchise_member {reason:'inactive'} (ข้อมูลเดิมไม่มี status ⇒ ผ่านทุกคน)
+//       สิทธิ์ = humanRight[uid].rights (ไม่มีแถว = ไม่มีสิทธิ์) · เส้นที่ต้องการสิทธิ์ไม่มี 403 right_required
+//   → เส้นทีมงานเท่านั้น (ค้น/ผูกสาขา · ปุ่มเดิมเห็นเฉพาะ initialAdmin fr:BranchScreen.js:93) 403 admin_required
+// ทุกตัวในไฟล์นี้ pure ยกเว้น readGate (อ่านฐานผ่าน getter ที่ส่งมา ⇒ ใช้ได้ทั้งใน transaction และนอก)
+"use strict";
+
+const { db } = require("../../firebase");
+const { deny, ok, sendDeny, parseOr400, internalError } = require("../_shared/respond");
+const { readNow } = require("../_shared/deps");
+const { isShopchampAdmin } = require("../_shared/auth");
+
+const RIGHT = Object.freeze({ DASHBOARD: "100", BY_SHOP: "103", BY_ITEM: "104", OVERVIEW: "107", WAREHOUSE: "128", STAFF: "723", PROFILE: "130" });
+const ALL_RIGHTS = Object.freeze(["100", "103", "104", "107", "128", "723", "130"]);
+
+const isObj = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
+const str = (v) => (typeof v === "string" ? v : "");
+const arr = (v) => (Array.isArray(v) ? v : []);
+
+class Refusal extends Error {
+  constructor(d) { super(d.error); this.deny = d; }
+}
+const refuse = (d) => { throw new Refusal(d); };
+
+/** uidOf(req) — uid จาก checkIfAuthenticated · ไม่มี = null */
+function uidOf(req) {
+  const u = req && req.auth && req.auth.uid;
+  return typeof u === "string" && u ? u : null;
+}
+
+/**
+ * franchiseAccessOf({franchise, uid, adminConfig}) — ตัดสินว่าผู้เรียกเข้าแฟรนไชส์นี้ได้แค่ไหน (pure)
+ * @returns {{ok:true, access:{uid, byAdmin:boolean, rights:string[]}} | deny 403 not_franchise_member {reason}}
+ */
+function franchiseAccessOf({ franchise, uid, adminConfig } = {}) {
+  if (isShopchampAdmin(adminConfig, uid)) return { ok: true, access: { uid, byAdmin: true, rights: [...ALL_RIGHTS] } };
+  const f = isObj(franchise) ? franchise : {};
+  if (!arr(f.humanResource).some((x) => x === uid)) return deny(403, "not_franchise_member", undefined, { reason: "not_a_member" });
+  const row = arr(f.humanRight).find((r) => isObj(r) && r.id === uid);
+  if (row && typeof row.status === "string" && row.status !== "active") return deny(403, "not_franchise_member", undefined, { reason: "inactive" });
+  const rights = row ? arr(row.rights).filter((r) => typeof r === "string") : [];
+  return { ok: true, access: { uid, byAdmin: false, rights } };
+}
+
+/** needRight(access, {rights, adminOnly}) → null | deny · rights = มีตัวใดตัวหนึ่งก็พอ */
+function needRight(access, { rights, adminOnly } = {}) {
+  if (adminOnly && !(access && access.byAdmin)) return deny(403, "admin_required", "เฉพาะทีมงาน Shopchamp");
+  const need = Array.isArray(rights) ? rights : [];
+  if (!need.length || (access && access.byAdmin)) return null;
+  return need.some((r) => access && access.rights.includes(r)) ? null : deny(403, "right_required");
+}
+
+/**
+ * readGate(getter, franchiseId, uid, opts) — อ่าน franchise + admin/adminConfig แล้วผ่านด่าน · ไม่ผ่าน = throw Refusal
+ *   getter(ref) = (ref) => ref.get() นอก transaction · (ref) => tx.get(ref) ใน transaction
+ * @returns {Promise<{ref, franchise, access}>}
+ */
+async function readGate(getter, franchiseId, uid, opts) {
+  const ref = db.collection("franchise").doc(franchiseId);
+  const [fSnap, cSnap] = await Promise.all([getter(ref), getter(db.collection("admin").doc("adminConfig"))]);
+  if (!fSnap.exists) refuse(deny(404, "franchise_not_found", "ไม่พบแฟรนไชส์"));
+  const franchise = fSnap.data() || {};
+  const v = franchiseAccessOf({ franchise, uid, adminConfig: cSnap.exists ? cSnap.data() : null });
+  if (!v.ok) refuse(v);
+  const r = needRight(v.access, opts);
+  if (r) refuse(r);
+  return { ref, franchise, access: v.access };
+}
+
+/** adminTrail(access) — ช่องที่เพิ่มบนเอกสารที่ทีมงานเขียน */
+const adminTrail = (access) => (access && access.byAdmin ? { byAdmin: true, adminUid: access.uid } : {});
+const adminFlag = (access) => (access && access.byAdmin ? { byAdmin: true } : {});
+
+/** เวลาเป็น ISO (Timestamp / Date) · อ่านไม่ได้ = null */
+function isoOf(v) {
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
+  if (v && typeof v.toMillis === "function") { const ms = v.toMillis(); return Number.isFinite(ms) ? new Date(ms).toISOString() : null; }
+  if (v && typeof v.toDate === "function") { const d = v.toDate(); return d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString() : null; }
+  return null;
+}
+
+/** แถวพนักงานที่คืน/เขียน: เฉพาะช่องของแถว (SF-02 · เดิมคัด profile ทั้งก้อน รวม port currentLogin birthday) */
+function staffRow(r) {
+  const out = { id: str(r.id), name: str(r.name), tel: str(r.tel), email: str(r.email), imageId: str(r.imageId), rights: arr(r.rights).filter((x) => typeof x === "string") };
+  if (typeof r.status === "string") out.status = r.status;
+  return out;
+}
+
+/** category ของสินค้าคลัง → array ของ id (รับรูปเดิม 2 แบบ · ST-107) */
+function categoryIdsOf(category) {
+  return arr(category).map((c) => (typeof c === "string" ? c : isObj(c) && typeof c.id === "string" ? c.id : null)).filter((x) => x);
+}
+const isLegacyCategory = (category) => arr(category).some((c) => typeof c !== "string");
+
+/** node ทุกตัวของต้นหมวด (Map id → node) */
+function categoryNodes(tree) {
+  const map = new Map();
+  for (const lv of arr(tree)) for (const n of arr(isObj(lv) ? lv.value : null)) if (isObj(n) && typeof n.id === "string") map.set(n.id, n);
+  return map;
+}
+
+/**
+ * categoryPathProblem(ids, tree) — สายหมวดของสินค้าถูกต้องไหม: ตัวที่ i อยู่ชั้น i+1 และ aboveId = ids[0..i) (Modal_Warehouse B1)
+ * @returns {null | {reason:'not_found'|'bad_path', categoryId}}
+ */
+function categoryPathProblem(ids, tree) {
+  const nodes = categoryNodes(tree);
+  for (let i = 0; i < ids.length; i++) {
+    const n = nodes.get(ids[i]);
+    if (!n) return { reason: "not_found", categoryId: ids[i] };
+    const above = arr(n.aboveId);
+    if (Number(n.level) !== i + 1 || above.length !== i || above.some((a, k) => a !== ids[k])) return { reason: "bad_path", categoryId: ids[i] };
+  }
+  return null;
+}
+
+/** เทียบค่าลึกแบบ JSON (คีย์ไม่สนลำดับ) */
+function canon(v) {
+  if (Array.isArray(v)) return v.map(canon);
+  if (isObj(v)) {
+    const iso = isoOf(v);
+    if (iso) return iso;
+    const out = {};
+    for (const k of Object.keys(v).sort()) if (v[k] !== undefined) out[k] = canon(v[k]);
+    return out;
+  }
+  return v;
+}
+const sameValue = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+
+/**
+ * makeHandler(schemaName, work) → factory(deps) → handler(req,res)
+ *   401 no_auth → 400 invalid_request → work({uid, input, now}) คืน body ของ 200 · Refusal = ส่ง deny · อื่น = 500
+ *   schema อ่านจาก @shopchamp/schema ตอนเรียก (ชื่อไม่มีใน vendor = 500 ไม่ผ่านเงียบ)
+ */
+function makeHandler(schemaName, work) {
+  return function factory(deps) {
+    return async function handler(req, res) {
+      try {
+        const uid = uidOf(req);
+        if (!uid) return sendDeny(res, deny(401, "no_auth"));
+        const schema = require("@shopchamp/schema")[schemaName];
+        if (!schema) throw new Error(`@shopchamp/schema ไม่มี ${schemaName}`);
+        const body = isObj(req && req.body) ? req.body : {};
+        const input = parseOr400(schema, body, res);
+        if (!input) return undefined;
+        const now = await readNow(deps);
+        return ok(res, await work({ uid, input, now, deps }));
+      } catch (e) {
+        if (e instanceof Refusal) return sendDeny(res, e.deny);
+        return internalError(res, e);
+      }
+    };
+  };
+}
+
+module.exports = {
+  makeHandler,
+  RIGHT, ALL_RIGHTS, Refusal, refuse, uidOf, franchiseAccessOf, needRight, readGate, adminTrail, adminFlag,
+  isoOf, staffRow, categoryIdsOf, isLegacyCategory, categoryNodes, categoryPathProblem, sameValue, isObj, str, arr,
+};
