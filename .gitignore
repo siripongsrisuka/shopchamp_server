@@ -58,6 +58,8 @@ node_modules/
 
 # Output of 'npm pack'
 *.tgz
+# vendor ของ @shopchamp/* ต้องอยู่ใน git (consumer ติดตั้งจาก file:vendor/*.tgz · ด่าน check-vendor-version ข้อ ④)
+!functions/vendor/*.tgz
 
 # Yarn Integrity file
 .yarn-integrity
