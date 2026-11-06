@@ -8,6 +8,8 @@
 //   ไม่มี req.shopAccess 401 → schema 400 → wrong_shop 403 → สิทธิ์ '143' 403
 //   ① txn: อ่าน shop · bill · shift (อ่านครบก่อนเขียน) → premium 403 → สวิตช์ 403 → บิล 404/409 · legacy · duplicate · in_progress · void
 //          → ล็อกทั้งใบ 409 → กะ 409 → โครงใบใหม่ 409 → ประทับ bill.amend {status:pending}
+//      ด่านกะเฉพาะร้านที่ใช้ระบบกะ (shop.shift === true) · ร้านไม่ใช้กะแก้ได้ทุกบิลไม่จำกัดวัน ปัดแค่กะของร้านอื่น
+//        (Pack เคาะ 2026-11-06 · ก้อน 5 · lanes/dev/source/chunk5-shift-tax.md)
 //   ② createSale ({body, carry, access, amendOf}) · receiptUUID = amend:<billId>:<requestId> ⇒ ยิงซ้ำได้ duplicate
 //   ③ txn: บิลเดิม amend.newBillId/newReceiptNumber · บิลใหม่ amendOf + amend {status:done, requestId, ofReceiptNumber, ofBillId}
 //      (amend ต้องมี status + requestId ให้ผ่าน schema Bill · ไม่งั้น sale.void / sale.get อ่านใบใหม่ไม่ได้)
@@ -133,22 +135,34 @@ function checkShift(bill, shiftData, shopRef) {
   }
 }
 
-/** body ของ sale.create สำหรับใบใหม่ */
-function createBodyOf({ shopId, billId, requestId, oldBill, changes }) {
+/**
+ * ร้านไม่ใช้ระบบกะ (ก้อน 5): ด่านกะเหลือข้อเดียว = กะที่บิลอ้างต้องไม่ใช่ของร้านอื่น
+ *   (sale.create ปัด shift_other_shop อยู่แล้ว · ปัดที่นี่ก่อนประทับ = ไม่ต้องล้มกลางทาง)
+ *   ไม่มี shiftId / ไม่มี doc กะ / กะปิด = แก้ได้ (แอปเก่าไม่ผูกบิลร้านไม่ใช้กะกับรอบไหน)
+ */
+function checkShiftNoShiftShop(shiftData, shopRef) {
+  if (shiftData !== undefined && !belongsToShop(shiftData.shopId, shopRef)) refuse(409, "shift_other_shop");
+}
+
+/** body ของ sale.create สำหรับใบใหม่
+ *   ร้านไม่ใช้กะ (usesShift false): shiftId ประจำจุดขายของบิลเดิมเท่านั้น (ว่าง = ไม่ส่ง) · ไม่ส่ง shiftOpenTime
+ *     ⇒ sale.create ตอบ shift 'off' · ใบใหม่ไม่มี shiftOpenTime/shiftUnassigned/shiftHistoryId (รูปบิลแอปเก่า)
+ */
+function createBodyOf({ shopId, billId, requestId, oldBill, changes, usesShift = true }) {
   const body = {
     shopId,
     receiptUUID: amendReceiptUUID(billId, requestId),
     product: changes.product.map(({ fromIndex, ...line }) => line), // eslint-disable-line no-unused-vars
     payment: changes.payment,
-    shiftId: oldBill.shiftId,
   };
+  if (usesShift || validDocId(oldBill.shiftId)) body.shiftId = oldBill.shiftId;
   for (const k of MONEY_INPUT_FIELDS) if (changes[k] !== undefined) body[k] = changes[k];
   // ช่องที่แอปเก่าอ่านตรงไม่มีค่าตั้งต้น (main3 src/hook/usePrintAction.js:66-67 · :205-206 `pointDiscount.value` `campaign.length`)
   //   ใบที่แก้ได้ผ่านล็อก member/promotion แล้ว (amendRules.amendLocks) ⇒ แต้มลด 0 และไม่มีโปร · ใส่ค่าว่างให้ใบใหม่เสมอ
   //   ไม่ใส่ = พิมพ์ใบกำกับเต็มของใบใหม่จากจอประวัติแอปเก่า throw (พบจาก e2e pos/e2e/amend-compat.e2e.js)
   body.pointDiscount = { value: 0, point: 0 };
   body.campaign = [];
-  const openTime = dateOf(oldBill.shiftOpenTime);
+  const openTime = usesShift ? dateOf(oldBill.shiftOpenTime) : undefined;
   if (openTime) body.shiftOpenTime = openTime.toISOString();
   const shape = SaleCreateRequest.shape || {};
   for (const k of CARRY_BODY_FIELDS) {
@@ -160,11 +174,11 @@ function createBodyOf({ shopId, billId, requestId, oldBill, changes }) {
   return body;
 }
 
-/** carry: ใบใหม่ถือเวลาและป้ายกะของใบเดิม (ส่งทาง carry ไม่ใช่ body · สัญญาข้อ ②) */
-function carryOf(oldBill) {
+/** carry: ใบใหม่ถือเวลาและป้ายกะของใบเดิม (ส่งทาง carry ไม่ใช่ body · สัญญาข้อ ②) · ร้านไม่ใช้กะไม่ถือเวลาเปิดรอบ */
+function carryOf(oldBill, usesShift = true) {
   return clean({
-    shiftId: oldBill.shiftId,
-    shiftOpenTime: dateOf(oldBill.shiftOpenTime),
+    shiftId: usesShift || validDocId(oldBill.shiftId) ? oldBill.shiftId : undefined,
+    shiftOpenTime: usesShift ? dateOf(oldBill.shiftOpenTime) : undefined,
     dateTime: dateOf(oldBill.dateTime),
     billDate: typeof oldBill.billDate === "string" ? oldBill.billDate : undefined,
     soldAt: dateOf(oldBill.soldAt),
@@ -247,6 +261,7 @@ function amend(deps) {
         if (!shopSnap.exists) refuse(404, "shop_not_found");
         const shop = shopSnap.data();
         const shopRef = await resolveShopRef({ db, shopDocId: access.shopId, shop });
+        const usesShift = shop.shift === true; // ค่าตั้งต้นแอปเก่า false (main3 src/config/initialShop.js:75)
         if (!isPremiumActive(shop, now)) refuse(403, "premium_required");
         if (shop.amendBill !== true) refuse(403, "feature_disabled");
 
@@ -266,13 +281,17 @@ function amend(deps) {
         const resume = lock === "resume";
         const prior = resume ? bill.amend : null;
         // ยิงซ้ำหลังออกใบใหม่แล้ว = เดินต่อให้จบ (บิลเดิมอาจยกเลิกแล้วด้วยขั้น ④ ของคำขอนี้เอง)
-        if (resume && prior.newBillId) return { kind: "continue", bill, shopRef, changes: prior.changes };
+        if (resume && prior.newBillId) return { kind: "continue", bill, shopRef, changes: prior.changes, usesShift };
 
         if (lock === "taken" || isVoidedBill(bill) || bill.amendedBy) refuse(409, "bill_void");
         const locks = amendLocks(bill);
         if (locks.length) refuse(409, "bill_locked", { lock: locks[0] });
-        if (!validDocId(bill.shiftId)) refuse(409, "shift_unknown");
-        checkShift(bill, shiftData, shopRef);
+        if (usesShift) {
+          if (!validDocId(bill.shiftId)) refuse(409, "shift_unknown");
+          checkShift(bill, shiftData, shopRef);
+        } else {
+          checkShiftNoShiftShop(shiftData, shopRef);
+        }
 
         const changes = resume && prior.changes ? prior.changes : changesOf(input);
         const bad = checkAmendShape(bill, changes);
@@ -294,7 +313,7 @@ function amend(deps) {
             }),
           });
         }
-        return { kind: "continue", bill, shopRef, changes };
+        return { kind: "continue", bill, shopRef, changes, usesShift };
       });
     } catch (e) {
       if (e instanceof Deny) return refuseRes(e);
@@ -316,6 +335,7 @@ function amend(deps) {
     }
 
     const changes = step.changes;
+    const usesShift = step.usesShift !== false;
     const refundDue = refundDueOf(oldBill, changes.moneyMustPaid);
     const prior = oldBill.amend && oldBill.amend.requestId === input.requestId ? oldBill.amend : {};
     let newBillId = prior.newBillId;
@@ -326,8 +346,8 @@ function amend(deps) {
       let created;
       try {
         created = await callCreate({
-          body: createBodyOf({ shopId: access.shopId, billId: input.billId, requestId: input.requestId, oldBill, changes }),
-          carry: carryOf(oldBill),
+          body: createBodyOf({ shopId: access.shopId, billId: input.billId, requestId: input.requestId, oldBill, changes, usesShift }),
+          carry: carryOf(oldBill, usesShift),
           access,
           amendOf: { billId: input.billId, receiptNumber: oldBill.receiptNumber },
         });
@@ -362,6 +382,8 @@ function amend(deps) {
     }
 
     // ④ ยกเลิกใบเดิม
+    //   ร้านไม่ใช้กะ: ไม่ส่ง shiftId ⇒ sale.void ไม่เขียน voidShiftId/voidShiftOpenTime (เงินคืนไม่ลงกะ เหมือนแอปเก่ายกเลิก)
+    //     doc กะประจำจุดของร้านที่เคยใช้กะอาจค้าง status true ⇒ ส่งไป = เงินคืนลงรอบที่ร้านไม่ได้ใช้
     const reason = `แก้ไข → ${newReceiptNumber} · ${prior.reason || input.reason}`.slice(0, REASON_MAX);
     let voided;
     try {
@@ -373,7 +395,7 @@ function amend(deps) {
           reason,
           staffId: stampedStaff(prior).id || input.staffId,
           staffName: stampedStaff(prior).name || input.staffName,
-          shiftId: oldBill.shiftId,
+          shiftId: usesShift ? oldBill.shiftId : undefined,
         }),
         access,
         amendVoid: true,
@@ -449,4 +471,4 @@ function amend(deps) {
   };
 }
 
-module.exports = { amend, createBodyOf, carryOf, checkShift, amendNotificationContentOf, NOTI_CATEGORY_AMEND };
+module.exports = { amend, createBodyOf, carryOf, checkShift, checkShiftNoShiftShop, amendNotificationContentOf, NOTI_CATEGORY_AMEND };

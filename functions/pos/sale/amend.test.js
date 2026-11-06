@@ -60,7 +60,7 @@ const OTHER = "3c9e1f20-2222-4000-8000-0000000000bb";
 
 function seed() {
   return {
-    shop: { shopA: { shopId: "shopA", humanResource: [{ id: "u-owner", position: ["001"], status: "active" }], vip: [{ type: "premium", expire: ts("2027-01-01T00:00:00.000Z") }], amendBill: true } },
+    shop: { shopA: { shopId: "shopA", humanResource: [{ id: "u-owner", position: ["001"], status: "active" }], vip: [{ type: "premium", expire: ts("2027-01-01T00:00:00.000Z") }], amendBill: true, shift: true } }, // ร้านใช้ระบบกะ · ร้านไม่ใช้กะดูเทส "ก้อน 5"
     shift: { sh1: { shopId: "shopA", status: true, openTime: ts("2026-11-10T01:00:00.000Z") } },
     bill: {
       b1: {
@@ -374,4 +374,92 @@ test("create.applyAmendCarry: ใบใหม่ถือ dateTime billDate sold
   const e = { dateTime: NOW, billDate: "20261110" };
   applyAmendCarry(e, { dateTime: "x", billDate: 5 });
   assert.deepEqual(e, { dateTime: NOW, billDate: "20261110" }, "carry รูปเพี้ยน = ไม่แตะ");
+});
+
+// ── ก้อน 5 · ร้านไม่ใช้ระบบกะ (Pack เคาะ 2026-11-06: แก้ได้ทุกบิลไม่จำกัดวัน) ──
+// ร้านไม่ใช้กะ = shop.shift ไม่ใช่ true · กะประจำจุดปิดตลอด · บิลเก่าไม่มี shiftOpenTime (แอปเก่า) หรือมีป้ายรอบเก่าที่ปิดไปแล้ว
+const noShift = (db, { flag, bill = {}, shift } = {}) => {
+  delete db.shop.shopA.shift;
+  if (flag !== undefined) db.shop.shopA.shift = flag;
+  db.shift.sh1 = shift || { shopId: "shopA", status: false, openTime: "" };
+  db.bill.b1.dateTime = ts("2025-01-15T05:00:00.000Z");
+  db.bill.b1.billDate = "20250115";
+  delete db.bill.b1.shiftOpenTime;
+  Object.assign(db.bill.b1, bill);
+};
+
+test("ก้อน 5: ร้านไม่ใช้กะแก้บิลเก่า → 200 · ใบใหม่ถือ shiftId ประจำจุด ไม่มีเวลาเปิดรอบ · ยกเลิกไม่ส่งกะ (เงินคืนไม่ลงรอบ)", async () => {
+  for (const [label, opt] of [
+    ["ไม่มีช่อง shift", {}],
+    ["shift false · บิลมีป้ายรอบเก่า", { flag: false, bill: { shiftOpenTime: ts("2025-01-15T01:00:00.000Z") } }],
+    // ร้านที่เคยใช้กะแล้วปิดระบบตอนกะยังเปิด: doc กะประจำจุดค้าง status true ⇒ ยกเลิกต้องไม่ส่งกะไป (ไม่งั้นเงินคืนลงรอบนั้น)
+    ["shift false · กะประจำจุดค้างเปิด", { flag: false, shift: { shopId: "shopA", status: true, openTime: ts("2026-11-10T01:00:00.000Z") } }],
+  ]) {
+    reset((db) => noShift(db, opt));
+    const s = stubs();
+    const r = await call(s.deps);
+    assert.equal(r.code, 200, `${label}: ${JSON.stringify(r.body)}`);
+    const cb = s.calls.create[0];
+    assert.equal(cb.body.shiftId, "sh1", label);
+    assert.equal("shiftOpenTime" in cb.body, false, `${label}: body ต้องไม่มี shiftOpenTime`);
+    assert.equal("shiftOpenTime" in cb.carry, false, `${label}: carry ต้องไม่มี shiftOpenTime`);
+    assert.equal(cb.carry.dateTime.toISOString(), "2025-01-15T05:00:00.000Z", label);
+    assert.equal(cb.carry.billDate, "20250115", label);
+    assert.equal(require("@shopchamp/schema").SaleCreateRequest.safeParse(cb.body).success, true, label);
+    const vb = s.calls.void[0];
+    assert.equal("shiftId" in vb.body, false, `${label}: void ต้องไม่ส่ง shiftId`);
+    assert.equal(require("@shopchamp/schema").SaleVoidRequest.safeParse(vb.body).success, true, label);
+    assert.equal(DB.bill.b1.amendedBy, "b-new", label);
+  }
+});
+
+test("ก้อน 5: ร้านไม่ใช้กะ · shiftId ว่าง / ไม่มี doc กะ = 200 (ไม่ส่ง shiftId ว่าง) · กะร้านอื่น = 409 ไม่เขียน", async () => {
+  reset((db) => noShift(db, { bill: { shiftId: "" } }));
+  let s = stubs();
+  let r = await call(s.deps);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal("shiftId" in s.calls.create[0].body, false, "shiftId ว่าง = ไม่ส่ง (DocId ไม่รับค่าว่าง)");
+  assert.equal(require("@shopchamp/schema").SaleCreateRequest.safeParse(s.calls.create[0].body).success, true);
+
+  reset((db) => { noShift(db); delete db.shift.sh1; });
+  s = stubs();
+  r = await call(s.deps);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(s.calls.create[0].body.shiftId, "sh1");
+
+  reset((db) => noShift(db, { shift: { shopId: "shopB", status: false } }));
+  s = stubs();
+  r = await call(s.deps);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_other_shop");
+  assert.deepEqual(LOG, []);
+  assert.equal(s.calls.create.length, 0);
+});
+
+test("ก้อน 5: ร้านใช้กะ (คู่ควบคุม) · บิลเก่ากะปิด = 409 shift_closed · ใบใหม่ของร้านใช้กะยังส่งเวลาเปิดรอบและส่งกะให้ยกเลิก", async () => {
+  reset((db) => noShift(db, { flag: true }));
+  let s = stubs();
+  let r = await call(s.deps);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_closed");
+  assert.deepEqual(LOG, []);
+
+  reset();
+  s = stubs();
+  r = await call(s.deps);
+  assert.equal(r.code, 200);
+  assert.equal(s.calls.create[0].body.shiftOpenTime, "2026-11-10T01:00:00.000Z");
+  assert.equal(s.calls.void[0].body.shiftId, "sh1");
+});
+
+test("ก้อน 5: ร้านไม่ใช้กะ · ยิงซ้ำหลังออกใบใหม่แล้ว (ยกเลิกล้ม) = ยกเลิกต่อโดยไม่ส่งกะ", async () => {
+  reset((db) => noShift(db, { flag: false, shift: { shopId: "shopA", status: true, openTime: ts("2026-11-10T01:00:00.000Z") } }));
+  const bad = stubs({ voidOk: false });
+  const r1 = await call(bad.deps);
+  assert.equal(r1.code, 500);
+  const s = stubs();
+  const r2 = await call(s.deps);
+  assert.equal(r2.code, 200, JSON.stringify(r2.body));
+  assert.equal(s.calls.create.length, 0);
+  assert.equal("shiftId" in s.calls.void[0].body, false);
 });

@@ -22,7 +22,7 @@ const parseOk = (schema, doc, label) => {
   const r = schema.safeParse(doc);
   assert.ok(r.success, `${label} ไม่ผ่าน schema: ${String(JSON.stringify(r.error && r.error.issues)).slice(0, 800)}`);
 };
-const fresh = async () => { const f = E.shopFixture(); await seed(f.data); return f; };
+const fresh = async (opts) => { const f = E.shopFixture(opts); await seed(f.data); return f; };
 const twoWater = (f) => ({ product: [{ id: f.id.pWater, qty: 2, name: "น้ำดื่ม", net: 100, totalPrice: 100, totalCost: 12 }], payment: [{ id: 1, amount: 100, name: "เงินสด" }], moneyMustPaid: 100, change: 0 });
 const amendBody = (f, billId, over = {}) => ({
   shopId: f.id.shopA, billId, requestId: reqId(), reason: "ลูกค้าคืน 1 ขวด", staffId: f.id.owner, staffName: "เจ้าของ",
@@ -33,7 +33,7 @@ const amendBody = (f, billId, over = {}) => ({
 before(() => E.ready());
 
 test("แก้บิล: ใบเดิม void + ลิงก์ไปใบใหม่ · ใบใหม่ลิงก์กลับ · สต็อกสุทธิถูก · ทั้ง 2 ใบผ่าน Bill · จอเก่าอ่านได้", async () => {
-  const f = await fresh();
+  const f = await fresh({ shopA: { shift: true } }); // ร้านใช้ระบบกะ (ใบใหม่ถือป้ายรอบเดิม) · ร้านไม่ใช้กะดูเทส "ก้อน 5" ถัดไป
   const s = await call(create, clock("2026-11-10T02:00:00.000Z"), { body: saleBody(f, twoWater(f)), shopAccess: f.access.owner });
   assert.equal(s.status, 200, JSON.stringify(s.body));
   assert.equal((await get("stock", f.id.pWater)).stock, 48);
@@ -98,6 +98,45 @@ test("แก้บิล: ใบเดิม void + ลิงก์ไปใบ�
     assert.doesNotThrow(() => O.oldPrintFields(newBill));
   }
 });
+
+// ก้อน 5 (Pack เคาะ 2026-11-06): ร้านไม่ใช้ระบบกะแก้ได้ทุกบิลไม่จำกัดวัน · ผ่าน sale.create / sale.void ตัวจริงบน emulator
+//   กะประจำจุด: ปิดตลอด (ร้านไม่เคยใช้กะ) และค้างเปิด (ร้านปิดระบบกะตอนกะยังเปิด) ⇒ ทั้ง 2 แบบเงินคืนต้องไม่ลงรอบไหน
+for (const [label, shiftOpen] of [["กะประจำจุดปิดตลอด", false], ["กะประจำจุดค้างเปิด", true]]) {
+  test(`ก้อน 5 ร้านไม่ใช้กะแก้บิลเก่าปี 2025 (${label}) → 200 · ใบใหม่ถือ shiftId ประจำจุด ไม่มีป้ายรอบ · ใบเดิมไม่มี voidShiftId · ผ่าน Bill · ยอดวันของ server เก่าถูก`, async () => {
+    const f = await fresh();
+    if (!shiftOpen) await E.db.collection("shift").doc(f.id.sh1).update({ status: false, openTime: "" });
+    const soldAt = "2025-01-15T05:00:00.000Z";
+    const body0 = saleBody(f, twoWater(f));
+    delete body0.shiftOpenTime; // แอปร้านไม่ใช้กะไม่ส่งเวลาเปิดรอบ (ก้อน 5 ข้อ ①)
+    const s = await call(create, clock(soldAt), { body: body0, shopAccess: f.access.owner });
+    assert.equal(s.status, 200, JSON.stringify(s.body));
+    assert.equal(s.body.shift.status, "off");
+    const a = await call(amend, NOW, { body: amendBody(f, s.body.billId), shopAccess: f.access.owner });
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    const oldBill = await get("bill", s.body.billId);
+    const newBill = await get("bill", a.body.newBillId);
+    assert.equal(oldBill.void, true);
+    assert.equal(oldBill.amendedBy, a.body.newBillId);
+    for (const k of ["voidShiftId", "voidShiftOpenTime"]) assert.equal(k in oldBill, false, `ใบเดิมต้องไม่มี ${k} (เงินคืนไม่ลงรอบ)`);
+    assert.equal(oldBill.voidRefundCash, 0);
+    assert.equal(newBill.shiftId, f.id.sh1, "ใบใหม่ถือ shiftId ประจำจุด (รูปบิลแอปเก่า)");
+    for (const k of ["shiftOpenTime", "shiftUnassigned", "shiftHistoryId"]) assert.equal(k in newBill, false, `ใบใหม่ต้องไม่มี ${k}`);
+    assert.equal(ms(newBill.dateTime), Date.parse(soldAt), "ใบใหม่ถือเวลาใบเดิม");
+    assert.equal(newBill.billDate, oldBill.billDate);
+    assert.equal(newBill.moneyMustPaid, 50);
+    assert.equal((await get("stock", f.id.pWater)).stock, 49, "คืน 2 ตัด 1");
+    parseOk(S.Bill, oldBill, "บิลเดิม");
+    parseOk(S.Bill, newBill, "บิลใหม่");
+    const hist = await E.where("shiftHistory", "shopId", f.id.shopA);
+    assert.equal(hist.length, 0, "ไม่แตะประวัติกะ");
+    if (O.HAVE_OLD) {
+      // ยอดวันของ server เก่ากรองด้วยร้าน + ช่วงเวลา ⇒ วันที่ขายเดิมเห็นใบใหม่ 50 ใบเดียว
+      const sum = await O.oldBillSummary(E.db, { shopId: f.id.shopA, startDate: "2025-01-14T17:00:00.000Z", endDate: "2025-01-15T17:00:00.000Z" });
+      assert.deepEqual(sum, { qty: 1, totalSale: 50 });
+      assert.doesNotThrow(() => O.oldPrintFields(newBill));
+    }
+  });
+}
 
 // C-1 (agent เลือกทางปลอดภัย 2026-11-06 · Pack ให้เลือกเอง): server เติม pointDiscount {value:0,point:0} และ campaign [] เมื่อคำขอไม่ส่ง
 test("พิมพ์ซ้ำ/ใบกำกับของแอปเก่า กับบิลที่คำขอไม่ส่ง pointDiscount campaign (schema ยอมให้ขาด) · server เติมค่าว่าง (C-1)", { skip: O.skipOld }, async () => {
