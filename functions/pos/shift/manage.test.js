@@ -1,0 +1,245 @@
+// เทสข้างไฟล์ pos/shift/manage.js — ส่วนที่ harness วัดไม่ได้ (harness เขียน = no-op)
+//   รูปเอกสารที่เขียน · อ่านครบก่อนเขียนใน transaction · ไม่เขียนเมื่อถูกปัด/ซ้ำ
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const path = require("path");
+
+const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMillis: () => d.getTime() }; };
+
+// Firestore ปลอมที่บันทึกลำดับ get/set/update ใน transaction
+function fakeDb(seed) {
+  const log = [];
+  const snap = (coll, id) => { const d = (seed[coll] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  const query = (coll, filters) => ({
+    where: (f, op, v) => query(coll, [...filters, [f, v]]),
+    get: async () => {
+      const docs = Object.entries(seed[coll] || {}).filter(([, d]) => filters.every(([f, v]) => d[f] === v)).map(([id, d]) => ({ id, exists: true, data: () => d }));
+      return { docs, size: docs.length, empty: docs.length === 0 };
+    },
+    _q: coll,
+  });
+  const db = {
+    collection: (coll) => ({ doc: (id) => ({ _coll: coll, id, get: async () => snap(coll, id) }), where: (f, op, v) => query(coll, [[f, v]]) }),
+    runTransaction: async (fn) => fn({
+      get: async (ref) => { log.push(["get", ref._coll || ref._q]); return ref.get(); },
+      set: (ref, data) => log.push(["set", ref._coll, ref.id, data]),
+      update: (ref, data) => log.push(["update", ref._coll, ref.id, data]),
+    }),
+  };
+  return { db, log };
+}
+
+function load(db) {
+  const fb = require.resolve(path.join(__dirname, "..", "..", "firebase"));
+  require.cache[fb] = { id: fb, filename: fb, loaded: true, exports: { db, admin: {} } };
+  const p = require.resolve("./manage");
+  delete require.cache[p];
+  return require("./manage");
+}
+
+async function call(seed, body, access, nowIso) {
+  const { db, log } = fakeDb(seed);
+  const { manage } = load(db);
+  const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+  await manage({ now: () => new Date(nowIso || "2026-11-10T03:00:00.000Z") })({ body, shopAccess: access }, res);
+  return { res, log };
+}
+
+const OWNER = { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] };
+const ADMIN = { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true };
+const shop = () => ({ shopA: { shopId: "shopA", humanResource: [{ id: "u-owner", name: "เจ้าของ", status: "active" }] } });
+const openShift = () => ({
+  shopId: "shopA", posId: "pos-1", status: true, openTime: ts("2026-11-10T01:00:00.000Z"), openCash: "500",
+  duringShift: [{ type: 1, amount: "50", comment: "", staff: "เจ้าของ", staffId: "u-owner", timestamp: ts("2026-11-10T01:30:00.000Z"), entryId: "d0" }],
+  lastShiftDate: "20261110", shiftCount: 1, openId: "u-owner", openName: "เจ้าของ",
+});
+const bills = () => ({
+  b1: { shopId: "shopA", shiftId: "sh1", shiftOpenTime: ts("2026-11-10T01:00:00.000Z"), dateTime: ts("2026-11-10T02:00:00.000Z"), moneyMustPaid: 100, product: [{ id: "p1", qty: 1, net: 100, totalPrice: 100 }], payment: [{ id: 1, amount: 100, change: 0 }] },
+  // บิลรอบก่อน (ป้ายคนละรอบ) ไม่เข้ารอบนี้
+  b0: { shopId: "shopA", shiftId: "sh1", shiftOpenTime: ts("2026-11-09T01:00:00.000Z"), dateTime: ts("2026-11-09T02:00:00.000Z"), moneyMustPaid: 999, product: [], payment: [{ id: 1, amount: 999 }] },
+  // ร้านอื่นที่ shiftId ชนกัน = ไม่นับ
+  bx: { shopId: "shopB", shiftId: "sh1", dateTime: ts("2026-11-10T02:00:00.000Z"), moneyMustPaid: 7, product: [], payment: [{ id: 1, amount: 7 }] },
+});
+
+test("open: เขียน shift รูปเดิม + openRequestId · เวลา server · ไม่มีรอยทีมงานเมื่อเจ้าของเปิด", async () => {
+  const s = { ...openShift(), status: false, lastShiftDate: "20261109", shiftCount: 4 };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s } }, { op: "open", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "เจ้าของ", requestId: "r1", openCash: "300" }, OWNER);
+  assert.equal(res.code, 200);
+  const w = log.filter((l) => l[0] !== "get");
+  assert.equal(w.length, 1);
+  assert.deepEqual(w[0].slice(0, 3), ["update", "shift", "sh1"]);
+  const p = w[0][3];
+  assert.equal(p.status, true);
+  assert.equal(p.openTime.toISOString(), "2026-11-10T03:00:00.000Z");
+  assert.deepEqual({ openCash: p.openCash, openId: p.openId, openName: p.openName, lastShiftDate: p.lastShiftDate, shiftCount: p.shiftCount, openRequestId: p.openRequestId }, { openCash: "300", openId: "u-owner", openName: "เจ้าของ", lastShiftDate: "20261110", shiftCount: 1, openRequestId: "r1" });
+  assert.deepEqual(p.duringShift, []);
+  assert.equal("byAdmin" in p, false);
+});
+
+test("open: ข้ามเที่ยงคืนเวลาไทย (17:30Z = 00:30 วันถัดไป) ได้กะที่ 1 ของวันใหม่", async () => {
+  const s = { ...openShift(), status: false, lastShiftDate: "20261110", shiftCount: 3 };
+  const { res } = await call({ shop: shop(), shift: { sh1: s } }, { op: "open", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "r1", openCash: "0" }, OWNER, "2026-11-10T17:30:00.000Z");
+  assert.equal(res.body.lastShiftDate, "20261111");
+  assert.equal(res.body.shiftCount, 1);
+});
+
+test("open โดยทีมงาน: shift ติด byAdmin adminUid", async () => {
+  const s = { ...openShift(), status: false };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s } }, { op: "open", shopId: "shopA", shiftId: "sh1", staffId: "u-company", staffName: "ทีมงาน", requestId: "r1", openCash: "0" }, ADMIN);
+  assert.equal(res.body.byAdmin, true);
+  const p = log.find((l) => l[0] === "update")[3];
+  assert.equal(p.byAdmin, true);
+  assert.equal(p.adminUid, "u-company");
+});
+
+test("during: ต่อท้ายรายการเดิม ไม่ทับ · entryId = requestId · timestamp เวลา server", async () => {
+  const { res, log } = await call({ shop: shop(), shift: { sh1: openShift() } }, { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "เจ้าของ", requestId: "d1", type: 2, amount: "20", comment: "ซื้อน้ำแข็ง" }, OWNER);
+  assert.equal(res.code, 200);
+  assert.deepEqual(res.body.warnings, []);
+  const p = log.find((l) => l[0] === "update")[3];
+  assert.equal(p.duringShift.length, 2);
+  assert.equal(p.duringShift[0].entryId, "d0");
+  const e = p.duringShift[1];
+  assert.deepEqual({ type: e.type, amount: e.amount, comment: e.comment, staff: e.staff, staffId: e.staffId, entryId: e.entryId }, { type: 2, amount: "20", comment: "ซื้อน้ำแข็ง", staff: "เจ้าของ", staffId: "u-owner", entryId: "d1" });
+  assert.equal(e.timestamp.toISOString(), "2026-11-10T03:00:00.000Z");
+});
+
+test("during: นำออกไม่เกินเงินคาดที่รวมยอดขายเงินสด = ไม่เตือน · เกิน = เตือน (เงินคาด 500+50+100 = 650)", async () => {
+  const base = { shop: shop(), shift: { sh1: openShift() }, bill: bills() };
+  const body = (amount) => ({ op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "d1", type: 2, amount, comment: "" });
+  assert.deepEqual((await call(base, body("650"), OWNER)).res.body.warnings, []);
+  assert.deepEqual((await call(base, body("650.01"), OWNER)).res.body.warnings, ["CASH_OUT_OVER"]);
+});
+
+test("close: อ่านครบก่อนเขียน · ประวัติ doc id ตายตัว · รูปเดิม + field ใหม่ · shift ปิด", async () => {
+  const { res, log } = await call({ shop: shop(), shift: { sh1: openShift() }, bill: bills() }, { op: "close", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "เจ้าของ", requestId: "c1", closeCash: "640", closeWithDraw: "100", expectedCash: 650 }, OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.deepEqual({ e: res.body.expectedCash, d: res.body.closeDiff, r: res.body.cashRemain }, { e: 650, d: -10, r: 540 });
+  assert.equal(res.body.summary.billQty, 1);
+  const firstWrite = log.findIndex((l) => l[0] !== "get");
+  assert.ok(log.slice(firstWrite).every((l) => l[0] !== "get"), "มี get หลังเขียน");
+  const set = log.find((l) => l[0] === "set");
+  assert.deepEqual(set.slice(1, 3), ["shiftHistory", "sh1_1794272400000"]);
+  const h = set[3];
+  assert.equal(h.shopId, "shopA");
+  assert.equal(h.id, "sh1");
+  assert.equal(h.openCash, "500");
+  assert.equal(h.closeCash, "640");
+  assert.equal(h.closeWithDraw, "100");
+  assert.equal(h.closeDiff, -10);
+  assert.equal(h.currentCash, 650);
+  assert.equal(h.thisTotalCash, 100);
+  assert.equal(h.closeRequestId, "c1");
+  assert.equal(h.closeTime.toISOString(), "2026-11-10T03:00:00.000Z");
+  assert.equal(h.duringShift.length, 1);
+  const up = log.find((l) => l[0] === "update");
+  assert.deepEqual(up.slice(1), ["shift", "sh1", { status: false, duringShift: [] }]);
+});
+
+test("ถูกปัดหรือซ้ำ = ไม่เขียนอะไรเลย", async () => {
+  const cases = [
+    [{ shop: shop(), shift: { sh1: openShift() } }, { op: "open", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "r9", openCash: "0" }, 409],
+    [{ shop: shop(), shift: { sh1: openShift() } }, { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "d0", type: 1, amount: "50", comment: "" }, 200],
+    [{ shop: shop(), shift: { sh1: openShift() }, bill: bills() }, { op: "close", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "c1", closeCash: "650", closeWithDraw: "0", expectedCash: 600 }, 409],
+    [{ shop: shop(), shift: { sh1: openShift() }, shiftHistory: { sh1_1794272400000: { shopId: "shopA", closeRequestId: "c-other" } } }, { op: "close", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "c1", closeCash: "550", closeWithDraw: "0", expectedCash: 550 }, 409],
+  ];
+  for (const [seed, body, code] of cases) {
+    const { res, log } = await call(seed, body, OWNER);
+    assert.equal(res.code, code, JSON.stringify(res.body));
+    assert.deepEqual(log.filter((l) => l[0] !== "get"), [], body.op + " " + body.requestId);
+  }
+});
+
+test("ประวัติที่มี closeRequestId ตรงแต่เป็นของร้านอื่น ไม่นับเป็น duplicate", async () => {
+  const s = { ...openShift(), status: false };
+  const { res } = await call({ shop: shop(), shift: { sh1: s }, shiftHistory: { sh1_1794272400000: { shopId: "shopB", closeRequestId: "c1" } } }, { op: "close", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "c1", closeCash: "650", closeWithDraw: "0", expectedCash: 650 }, OWNER);
+  assert.equal(res.code, 409);
+  assert.equal(res.body.error, "shift_not_open");
+});
+
+// ── เพิ่มหลังตรวจซ้ำ (lanes/dev/source/chunk4-verify/shift.manage.md) · ส่วนที่ case ในสัญญาไม่ครอบ ──
+const closeBody = (extra) => ({ op: "close", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "เจ้าของ", requestId: "c1", closeCash: "650", closeWithDraw: "0", expectedCash: 650, ...extra });
+
+test("#17 close: รับชำระหนี้เงินสดในรอบนับเข้าเงินคาด (500+50+100+40 = 690) · ร้านอื่น/รอบก่อนไม่นับ", async () => {
+  const paidHistory = {
+    p1: { shopId: "shopA", shiftId: "sh1", shiftOpenTime: ts("2026-11-10T01:00:00.000Z"), paymentId: 1, paid: 40, timestamp: ts("2026-11-10T02:00:00.000Z") },
+    p0: { shopId: "shopA", shiftId: "sh1", shiftOpenTime: ts("2026-11-09T01:00:00.000Z"), paymentId: 1, paid: 999, timestamp: ts("2026-11-09T02:00:00.000Z") },
+    px: { shopId: "shopB", shiftId: "sh1", shiftOpenTime: ts("2026-11-10T01:00:00.000Z"), paymentId: 1, paid: 7, timestamp: ts("2026-11-10T02:00:00.000Z") },
+  };
+  const seed = { shop: shop(), shift: { sh1: openShift() }, bill: bills(), paidHistory };
+  const okRes = await call(seed, closeBody({ closeCash: "690", expectedCash: 690 }), OWNER);
+  assert.equal(okRes.res.code, 200, JSON.stringify(okRes.res.body));
+  assert.equal(okRes.res.body.expectedCash, 690);
+  assert.equal(okRes.log.find((l) => l[0] === "set")[3].currentCash, 690);
+  const stale = await call(seed, closeBody({ expectedCash: 650 }), OWNER);
+  assert.equal(stale.res.code, 409);
+  assert.equal(stale.res.body.expectedCash, 690);
+});
+
+test("ทีมงานบันทึกเงินเข้าออก: รายการติด byAdmin adminUid · เจ้าของบันทึก = ไม่ติด", async () => {
+  const body = { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-company", staffName: "ทีมงาน", requestId: "d1", type: 1, amount: "20", comment: "" };
+  const a = await call({ shop: shop(), shift: { sh1: openShift() } }, body, ADMIN);
+  const e = a.log.find((l) => l[0] === "update")[3].duringShift[1];
+  assert.deepEqual({ b: e.byAdmin, u: e.adminUid }, { b: true, u: "u-company" });
+  const o = await call({ shop: shop(), shift: { sh1: openShift() } }, { ...body, staffId: "u-owner" }, OWNER);
+  const e2 = o.log.find((l) => l[0] === "update")[3].duringShift[1];
+  assert.equal("byAdmin" in e2, false);
+});
+
+test("ทีมงานปิดกะ: ประวัติติด byAdmin adminUid ของคนปิด", async () => {
+  const { res, log } = await call({ shop: shop(), shift: { sh1: openShift() }, bill: bills() }, closeBody({ staffId: "u-company" }), ADMIN);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  const h = log.find((l) => l[0] === "set")[3];
+  assert.deepEqual({ b: h.byAdmin, u: h.adminUid }, { b: true, u: "u-company" });
+});
+
+test("W2 ทีมงานเปิด แล้วเจ้าของปิด: ประวัติไม่ติดรอยทีมงานว่าเป็นคนปิด · รอยคนเปิดแยกไว้ที่ openByAdmin", async () => {
+  const s = { ...openShift(), byAdmin: true, adminUid: "u-company" };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s }, bill: bills() }, closeBody(), OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  const h = log.find((l) => l[0] === "set")[3];
+  assert.equal(h.byAdmin, false);
+  assert.equal(h.adminUid, null);
+  assert.deepEqual({ b: h.openByAdmin, u: h.openAdminUid }, { b: true, u: "u-company" });
+});
+
+test("W1 ปิดซ้ำ requestId เดิมหลังมีคนเปิดรอบใหม่ = duplicate ของรอบเดิม · ไม่ปิดรอบใหม่", async () => {
+  // รอบ 1 (เปิด 01:00Z) ปิดแล้วด้วย c1 · รอบ 2 เปิด 03:00Z ยอด 650 ยังไม่มีบิล
+  const s = { ...openShift(), openTime: ts("2026-11-10T03:00:00.000Z"), openCash: "650", duringShift: [], openRequestId: "r2" };
+  const hist = { sh1_1794272400000: { id: "sh1", shopId: "shopA", closeRequestId: "c1", currentCash: 650, closeDiff: 0 } };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s }, shiftHistory: hist }, closeBody(), OWNER, "2026-11-10T04:00:00.000Z");
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.equal(res.body.duplicate, true);
+  assert.equal(res.body.shiftHistoryId, "sh1_1794272400000");
+  assert.deepEqual(log.filter((l) => l[0] !== "get"), []);
+});
+
+test("W1 requestId เดิมแต่เป็นประวัติของจุดขายอื่นหรือร้านอื่น = ไม่นับ duplicate", async () => {
+  const hist = {
+    sh2_1794272400000: { id: "sh2", shopId: "shopA", closeRequestId: "c1" },
+    sh1_1700000000000: { id: "sh1", shopId: "shopB", closeRequestId: "c1" },
+  };
+  const { res } = await call({ shop: shop(), shift: { sh1: openShift() }, bill: bills(), shiftHistory: hist }, closeBody(), OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.equal(res.body.duplicate, false);
+});
+
+test("#9 ประวัติ id = doc id ของ shift เสมอ แม้ doc shift มี field id ไม่ตรง", async () => {
+  const s = { ...openShift(), id: "old-id" };
+  const { log } = await call({ shop: shop(), shift: { sh1: s }, bill: bills() }, closeBody(), OWNER);
+  assert.equal(log.find((l) => l[0] === "set")[3].id, "sh1");
+});
+
+test("#5 ส่ง during ซ้ำหลังปิดกะ (รายการอยู่ในประวัติรอบนั้นแล้ว) = duplicate ไม่ใช่ 409", async () => {
+  const s = { ...openShift(), status: false, duringShift: [] };
+  const hist = { sh1_1794272400000: { id: "sh1", shopId: "shopA", closeRequestId: "c1", duringShift: [{ type: 1, amount: "50", entryId: "d0" }] } };
+  const body = { op: "during", shopId: "shopA", shiftId: "sh1", staffId: "u-owner", staffName: "", requestId: "d0", type: 1, amount: "50", comment: "" };
+  const { res, log } = await call({ shop: shop(), shift: { sh1: s }, shiftHistory: hist }, body, OWNER);
+  assert.equal(res.code, 200, JSON.stringify(res.body));
+  assert.equal(res.body.duplicate, true);
+  assert.deepEqual(log.filter((l) => l[0] !== "get"), []);
+  const other = await call({ shop: shop(), shift: { sh1: s }, shiftHistory: hist }, { ...body, requestId: "d-new" }, OWNER);
+  assert.equal(other.res.code, 409);
+  assert.equal(other.res.body.error, "shift_not_open");
+});
