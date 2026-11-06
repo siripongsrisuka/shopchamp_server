@@ -4,7 +4,7 @@
 // รูป: factory (deps) => handler(req, res) · deps: now · ยังไม่ export จาก index.js และยังไม่ deploy
 // route ผ่าน checkIfAuthenticated เท่านั้น (ยังไม่รู้ร้าน) · ตัวตน = req.auth.uid · ร้าน = profile.currentLogin.shopId ในฐาน
 // อ่านอย่างเดียว: ❌ ไม่เขียน currentLogin กลับแบบแอปเก่า (LoadingScreen.js:87)
-//   อ่าน profile/{uid} · admin/updateShopchamp · shop where shopId == · admin/adminConfig (อ่านเมื่อไม่ผ่านด่านสมาชิก หรือผ่านเป็นพนักงาน)
+//   อ่าน profile/{uid} · admin/updateShopchamp · shop where shopId == · admin/adminConfig (ครั้งเดียว เมื่อเจอร้าน)
 // เทส: loading.test.js (ของที่ชุด case ของสัญญาไม่คุม)
 // ข้อมูลร้านที่คืน = รายการช่องที่อนุญาต (allowlist) · ❌ humanResource ดิบ (รหัสแคชเชียร์ข้อความล้วน #13) · line · taxCustomer
 //   ช่องเวลาของ Firestore แปลงเป็นข้อความ ISO ก่อนส่ง
@@ -15,7 +15,7 @@ const { db } = require("../../firebase");
 const { ProfileLoadingRequest } = require("@shopchamp/schema");
 const { ok, fail, parseOr400, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { resolveShopAccess, isShopchampAdmin, INITIAL_RIGHTS } = require("../_shared/auth");
+const { resolveShopAccess, INITIAL_RIGHTS } = require("../_shared/auth");
 
 // ช่องของ doc ร้านที่ส่งให้แอปได้ (ตัวตนร้าน · จุดขาย · แพ็กเกจ · ตั้งค่าขาย)
 //   ช่องที่ไม่อยู่ในนี้ไม่ออก ⇒ ช่องใหม่ที่ใครเพิ่มในฐานพรุ่งนี้ ไม่หลุดออก API เอง (fail-closed)
@@ -115,25 +115,16 @@ function loading(deps) {
       const shop = shopDoc ? shopDoc.data() : null;
       if (!isPlainObject(shop)) return ok(res, { ...base, access: { status: "shop_not_found" } });
 
-      // อ่าน admin/adminConfig ครั้งเดียวต่อคำขอ (ใช้ทั้งใน resolveShopAccess และด่านทีมงานที่เป็นพนักงานด้านล่าง)
-      let cfgP = null;
-      const adminConfig = () => {
-        if (!cfgP) cfgP = db.collection("admin").doc("adminConfig").get().then((s) => (s.exists ? s.data() : null));
-        return cfgP;
-      };
+      // ทีมงานมาก่อนสมาชิก (ตัดสินที่ _shared/auth.js › resolveShopAccess · แอปเก่า LoadingScreen.js:63,77,83)
+      //   ทีมงานที่บังเอิญเป็นพนักงานในร้านได้ owner + byAdmin เหมือนทุก route (ผลตรวจ chunk4-verify/profile.loading.md W1)
+      const adminConfig = () => db.collection("admin").doc("adminConfig").get().then((s) => (s.exists ? s.data() : null));
       const r = await resolveShopAccess({ shopDocId: shopDoc.id, shop, uid, now, adminConfig });
       if (!r.ok) {
         const reason = r.extra && r.extra.reason === "inactive" ? "inactive" : "not_a_member";
         return ok(res, { ...base, access: { status: reason } });
       }
 
-      let a = r.access;
-      // ทีมงานที่บังเอิญอยู่ใน humanResource ตำแหน่งพนักงาน: resolveShopAccess ตัดสินด้วยสมาชิกก่อน จึงได้ role staff
-      //   แอปเก่าให้ initialRights เสมอเมื่อเป็นทีมงาน (`LoadingScreen.js:83` IsAdmin || '001') · หัวสัญญา "ทีมงานเข้าได้ทุกร้านด้วยสิทธิ์เต็ม"
-      //   ⇒ ยกเป็นทีมงานที่นี่ (ผลตรวจ chunk4-verify/profile.loading.md W1) · ราก _shared/auth.js ยังเป็นสมาชิกก่อน
-      if (a.role === "staff" && isShopchampAdmin(await adminConfig(), uid)) {
-        a = { ...a, role: "owner", rights: [], byAdmin: true };
-      }
+      const a = r.access;
       // เจ้าของและทีมงานได้ initialRights ทั้งชุด เหมือนที่แอปเก่าเขียนลง currentLogin.rights (LoadingScreen.js:84)
       const access = {
         status: "active",
