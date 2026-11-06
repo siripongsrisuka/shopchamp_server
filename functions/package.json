@@ -11,7 +11,7 @@
     "test:e2e": "node pos/e2e/run.js"
   },
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "dependencies": {
