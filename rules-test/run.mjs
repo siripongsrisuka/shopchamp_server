@@ -51,10 +51,12 @@ const ping = (port) => new Promise((resolve) => {
 
 async function startEmulator() {
   const port = await freePort();
-  const log = [];
-  const child = spawn(findJava(), ["-jar", findJar(), "--host", "127.0.0.1", "--port", String(port)], { stdio: ["ignore", "pipe", "pipe"] });
-  child.stdout.on("data", (c) => log.push(String(c)));
-  child.stderr.on("data", (c) => log.push(String(c)));
+  // 🪤 log ของ emulator ลงไฟล์ ไม่ใช่ pipe: ระหว่าง spawnSync ตัวนี้ไม่ได้อ่าน pipe · เทส deny พ่น log ทุกคำขอที่ถูกปัด
+  //    ⇒ pipe เต็ม emulator ค้างเงียบ (เจอจริงรอบแรก · เทสค้างที่ CPU 0%)
+  const logFile = path.join(os.tmpdir(), `shopchamp-rules-emulator-${port}.log`);
+  const fd = fs.openSync(logFile, "w");
+  const log = { join: () => { try { return fs.readFileSync(logFile, "utf8"); } catch { return ""; } } };
+  const child = spawn(findJava(), ["-jar", findJar(), "--host", "127.0.0.1", "--port", String(port)], { stdio: ["ignore", fd, fd] });
   let exited = null;
   child.on("exit", (code) => { exited = code; });
   for (let i = 0; i < 120; i++) {
