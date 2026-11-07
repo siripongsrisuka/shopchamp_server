@@ -6,7 +6,7 @@
 // แทน: เว็บเดิมโหลดบิลเต็มทุกใบลงเบราว์เซอร์ (own:redux/billSlice.js fetchBill) แล้วแต่ละจอคิดเอง 14 สูตร
 //   ใหม่ server คิดด้วย logic.salesBreakdown ตัวเดียว (สูตรเดียวกับ salesTotals และรายงานกะของแอป)
 //   ไม่นับใบยกเลิก · วันตาม cutOff ร้าน (#24 WR-01) · ส่วนลดท้ายบิลกระจายลงสินค้า/หมวด/ฝากขาย (#23 WR-02) · ช่องจ่ายสูตรรายงานกะ (SC-04)
-//   สูตรเดิมของเว็บที่เทียบ: lanes/dev/source/compare/old-logic/report-web.js
+//   สูตรเดิมของเว็บที่เทียบ: lanes/dev/source/compare/old-logic/owner-web-screens.js
 // มิติ: total hour item consignment category payment discount · granularity total | day (เว็บรวมรายสัปดาห์/เดือนจากรายวันเอง)
 // สิทธิ์: พนักงานต้องมี '117' หรือ '106' (ตัวเดียวกับ report.salesTotals)
 // Firestore อ่าน: shop/{shopId} · bill where shopId == key and dateTime in (start, end] (ทั้งเอกสาร) · เขียน: ไม่มี
