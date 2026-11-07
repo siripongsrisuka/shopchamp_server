@@ -294,3 +294,28 @@ test("W6: ช่องจ่ายใหม่ส่ง mortal:true → ใน�
   const del = await shopCall({ shopId: "shopA", ops: [{ op: "removeRow", field: "shopchampPayment", id: 9 }] }, OWNER);
   assert.equal(del.code, 200);
 });
+
+// ───────── จุดขายเพิ่ม/ลบผ่าน pos.manage อย่างเดียว (Pack เคาะ 2026-11-07 · gaps-round-2a) ─────────
+test("POSs: เพิ่มแถวใหม่หรือลบแถว ผ่าน shop.update → 409 use_pos_manage ไม่เขียน · แก้แถวเดิม (ชื่อ เครื่องพิมพ์) ยังได้", async () => {
+  seed();
+  const before = JSON.parse(JSON.stringify(store.data.shop.shopA));
+  const add = await shopCall({ shopId: "shopA", ops: [{ op: "upsertRow", field: "POSs", row: { id: "pos-3", name: "จุด 3" } }] }, OWNER);
+  assert.equal(add.code, 409); assert.equal(add.body.error, "use_pos_manage"); assert.equal(add.body.op, "upsertRow");
+  const del = await shopCall({ shopId: "shopA", ops: [{ op: "removeRow", field: "POSs", id: "pos-2" }] }, OWNER);
+  assert.equal(del.code, 409); assert.equal(del.body.error, "use_pos_manage"); assert.equal(del.body.op, "removeRow");
+  const gone = await shopCall({ shopId: "shopA", ops: [{ op: "removeRow", field: "POSs", id: "pos-9" }] }, OWNER);
+  assert.equal(gone.code, 409, "แถวที่ไม่มีก็ปัด ไม่ใช่ผ่านเงียบ"); assert.equal(gone.body.error, "use_pos_manage");
+  const mixed = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "name", value: "ชื่อใหม่" }, { op: "upsertRow", field: "POSs", row: { id: "pos-3", name: "จุด 3" } }] }, OWNER);
+  assert.equal(mixed.code, 409);
+  assert.deepEqual(JSON.parse(JSON.stringify(store.data.shop.shopA)), before, "ทุกคำขอที่ถูกปัดไม่เขียนอะไรเลย");
+  assert.equal(Object.keys(store.data.shift || {}).length, 0, "ไม่มี doc shift เกิด");
+
+  const edit = await shopCall({ shopId: "shopA", ops: [{ op: "upsertRow", field: "POSs", row: { id: "pos-1", printerType: "bluetooth", printerSize: 58 } }] }, OWNER);
+  assert.equal(edit.code, 200);
+  const patch = await shopCall({ shopId: "shopA", ops: [{ op: "patchRow", field: "POSs", id: "pos-2", patch: { printerEthernet: "192.168.1.50" } }] }, STAFF);
+  assert.equal(patch.code, 200);
+  assert.deepEqual(store.data.shop.shopA.POSs, [
+    { id: "pos-1", name: "จุด 1", drawer: true, printerType: "bluetooth", printerSize: 58 },
+    { id: "pos-2", name: "จุด 2", printerEthernet: "192.168.1.50" },
+  ]);
+});

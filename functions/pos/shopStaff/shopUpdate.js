@@ -17,7 +17,9 @@
 //        merge      รวมทีละคีย์กับ object ในฐาน
 //        upsertRow  แถว id เดียวกัน = รวมทับ (คีย์ที่ไม่รู้จักของแถวเดิมคงไว้) · ไม่มี = ต่อท้าย
 //        patchRow   แถวไม่มี = 404 row_not_found
-//        removeRow  แถวไม่มี = ไม่ทำอะไร (ส่งซ้ำได้) · ช่องจ่าย mortal = 409 row_protected · จุดขายตัวสุดท้าย = 409 last_pos
+//        removeRow  แถวไม่มี = ไม่ทำอะไร (ส่งซ้ำได้) · ช่องจ่าย mortal = 409 row_protected
+//        POSs: เพิ่มแถวใหม่ (upsertRow id ใหม่) และ removeRow ทุกกรณี = 409 use_pos_manage (Pack เคาะ 2026-11-07)
+//              ⇒ เพิ่ม/ลบจุดขายต้องผ่าน pos.manage ที่สร้าง/ลบ doc shift คู่กันใน transaction เดียว · แก้แถวเดิม (ชื่อ เครื่องพิมพ์) ยังทำที่นี่ได้
 //        claimPos   ผูกเครื่องกับจุดขายที่ยังว่าง (แทน `app:Modal/Modal_Pos.js:80-96` ที่อ่านใน transaction แล้วปัดถ้ามี uniqueId)
 //                   ไม่มีแถว 404 row_not_found · มีเครื่องอื่นผูกอยู่ 409 pos_in_use · เครื่องเดิม = ผ่าน ไม่เขียน (ส่งซ้ำได้)
 //        ช่องจ่าย: mortal ของแถวเดิมคงไว้เสมอ (แอปส่งมาแก้ไม่ได้) · แถวใหม่ mortal:false เสมอ (รูปเดียวกับ `PaySettingScreen.js:24` · ลบได้)
@@ -46,6 +48,7 @@ function rightsFor(op) {
 const OWNER_ONLY_FIELDS = new Set(["amendBill"]);
 const NEED_BASE = new Set(SHOP_SET_FIELDS_NEED_BASE || []);
 const sameId = (a, b) => a !== undefined && a !== null && String(a) === String(b);
+const usePosManage = (op) => deny(409, "use_pos_manage", "เพิ่มหรือลบจุดขายต้องทำที่หน้าจัดการจุดขาย", { field: "POSs", op });
 
 function rowsOf(v) { return Array.isArray(v) ? v.slice() : []; }
 
@@ -65,6 +68,7 @@ function applyOp(get, op) {
     case "upsertRow": {
       const rows = rowsOf(cur);
       const i = rows.findIndex((r) => isObj(r) && sameId(r.id, op.row.id));
+      if (i < 0 && field === "POSs") refuse(usePosManage("upsertRow"));
       if (i < 0) return [...rows, field === "shopchampPayment" ? { ...op.row, mortal: false } : { ...op.row }];
       const merged = { ...rows[i], ...op.row };
       if (field === "shopchampPayment" && rows[i].mortal !== undefined) merged.mortal = rows[i].mortal;
@@ -93,13 +97,12 @@ function applyOp(get, op) {
       return rows;
     }
     case "removeRow": {
+      if (field === "POSs") refuse(usePosManage("removeRow"));
       const rows = rowsOf(cur);
       const hits = rows.filter((r) => isObj(r) && sameId(r.id, op.id));
       if (!hits.length) return cur; // ไม่มีแล้ว = ส่งซ้ำได้
       if (field === "shopchampPayment" && hits.some((r) => r.mortal === true)) refuse(deny(409, "row_protected", "ช่องทางชำระนี้ลบไม่ได้", { field, id: op.id }));
-      const left = rows.filter((r) => !(isObj(r) && sameId(r.id, op.id)));
-      if (field === "POSs" && left.length === 0) refuse(deny(409, "last_pos", "ต้องมีจุดขายอย่างน้อย 1 จุด"));
-      return left;
+      return rows.filter((r) => !(isObj(r) && sameId(r.id, op.id)));
     }
     default:
       return refuse(deny(400, "invalid_request"));

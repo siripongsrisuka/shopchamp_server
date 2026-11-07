@@ -139,3 +139,25 @@ test("e2e expense + expenseReport: resolveShopRef ใน transaction จริ�
   const byShop = await where("expense", "shopId", f.id.shop); // expenseSlice.js:30
   assert.equal(byShop.length, 1);
 });
+
+test("e2e POSs: เพิ่ม/ลบจุดขายผ่าน shop.update → 409 use_pos_manage ไม่เขียน · แก้เครื่องพิมพ์ของแถวเดิมพร้อมกัน 2 เครื่องได้ครบ (Pack เคาะ 2026-11-07)", async () => {
+  const f = fixture(); await seed(f.data);
+  const up = (ops, who) => call(shopUpdate, NOW, { body: { shopId: f.id.shop, ops }, shopAccess: who || f.owner });
+  const [add, del] = await Promise.all([
+    up([{ op: "upsertRow", field: "POSs", row: { id: "pos-3", name: "จุด 3" } }]),
+    up([{ op: "removeRow", field: "POSs", id: "pos-2" }]),
+  ]);
+  assert.deepEqual([add.status, del.status], [409, 409], JSON.stringify([add.body, del.body]));
+  assert.deepEqual([add.body.error, del.body.error], ["use_pos_manage", "use_pos_manage"]);
+  let shop = await get("shop", f.id.shop);
+  assert.deepEqual(shop.POSs.map((x) => x.id), ["pos-1", "pos-2"]);
+  assert.equal(shop.settingsUpdate, undefined, "ไม่มีร่องรอยการเขียน");
+  const r = await Promise.all([
+    up([{ op: "patchRow", field: "POSs", id: "pos-1", patch: { printerType: "bluetooth" } }]),
+    up([{ op: "upsertRow", field: "POSs", row: { id: "pos-2", printerEthernet: "192.168.1.50" } }], f.staff),
+  ]);
+  assert.deepEqual(r.map((x) => x.status), [200, 200], JSON.stringify(r.map((x) => x.body)));
+  shop = await get("shop", f.id.shop);
+  assert.equal(shop.POSs[0].printerType, "bluetooth"); assert.equal(shop.POSs[0].drawer, true); assert.equal(shop.POSs[0].shiftId, "sh1");
+  assert.equal(shop.POSs[1].printerEthernet, "192.168.1.50"); assert.equal(shop.POSs[1].shiftId, "sh2");
+});
