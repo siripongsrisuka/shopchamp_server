@@ -276,7 +276,7 @@ async function loadConfig({ db, deps, spec, shopId }) {
 function connectionsGet(deps) {
   return async function handler(req, res) {
     const body = asObj(req && req.body);
-    const gate = callerAccess(req, body.shopId);
+    const gate = callerAccess(req, body.shopId, { read: true }); // อ่านสถานะอย่างเดียว ⇒ watcher ผ่าน
     if (!gate.ok) return sendDeny(res, gate);
     const access = gate.access;
     const input = parseOr400(PaymentConnectionsGetRequest, body, res);

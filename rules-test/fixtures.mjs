@@ -23,6 +23,7 @@ export const U = {
   team: uid("teamAppAdmin"), teamWeb: uid("teamWebAdmin"),
   franchise: uid("franchiseOwner"), franchiseB: uid("franchiseOther"),
   shared: uid("sharedWebOwner"), outsider: uid("outsider"),
+  watcher: uid("watcherRoster"), // DEV-0001: อยู่ใน watcher/roster.uids อย่างเดียว (ไม่อยู่ในร้าน/แฟรนไชส์/adminConfig)
 };
 export const SHARED_EMAIL = "owner@gmail.com";
 
@@ -108,6 +109,9 @@ export function shopSeed(shop) {
 export function globalSeed() {
   return {
     "admin/adminConfig": { admin: [U.team], mainAds: [] },
+    // ทะเบียน watcher (server เขียน) · team ของเลนเก่าไม่อยู่ในนี้ ⇒ 2 เลนแยกกันชัด
+    "watcher/roster": { uids: [U.watcher], rootUids: [], people: [{ uid: U.watcher, name: "ทีมงานดูอย่างเดียว" }] },
+    "watcherWriteLog/w1": { uid: U.watcher, op: "franchise.branchAttach" },
     "admin/admin": { value: [U.teamWeb] },
     "admin/updateShopchamp": { android: { appUrl: "", detail: [], isMustUpdate: false, isPackageOn: true, lastedVersion: 1 }, ios: { lastedVersion: 1 } },
     "admin/package": { payment: [], detail: [] },

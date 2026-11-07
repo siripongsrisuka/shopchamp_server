@@ -32,6 +32,7 @@ test("แฟรนไชส์ครบวง: สร้าง · หมวด �
   const shopFree = `shopFree-${n}`, shopOther = `shopOther-${n}`, otherF = `FB-${n}`;
   await seed({
     admin: { adminConfig: { admin: [admin] } },
+    watcher: { roster: { uids: [admin], rootUids: [admin] } }, // DEV-0001 watcher: admin = root
     profile: {
       [owner]: { name: "เจ้าของแบรนด์", tel: `08${n.slice(0, 8)}`, email: "o@x.th", imageId: "", port: [{ shopId: "zz" }] },
       [staff]: { name: "พนักงาน", tel: `09${n.slice(0, 8)}`, email: "s@x.th", imageId: "", currentLogin: { shopId: "zz" } },

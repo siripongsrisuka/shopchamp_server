@@ -21,6 +21,7 @@ const MESSAGES = {
   invalid_receipt_uuid: "ไม่มีรหัสกันบิลซ้ำ",
   right_required: "ไม่มีสิทธิ์ทำรายการนี้",
   owner_required: "เฉพาะเจ้าของร้าน",
+  watcher_read_only: "บัญชีทีมงานดูข้อมูลได้อย่างเดียว แก้ไขข้อมูลร้านไม่ได้",
   premium_required: "ใช้ได้เฉพาะแพ็กเกจพรีเมี่ยม",
   feature_disabled: "ร้านยังไม่เปิดใช้ความสามารถนี้",
   receipt_uuid_other_shop: "รหัสบิลนี้เป็นของร้านอื่น",

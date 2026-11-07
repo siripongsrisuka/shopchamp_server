@@ -87,7 +87,8 @@ function staffManage(deps) {
   return async function handler(req, res) {
     try {
       const body = isObj(req && req.body) ? req.body : {};
-      const gate = callerAccess(req, body.shopId);
+      // op find ค้นอย่างเดียว ⇒ watcher ผ่าน · op อื่นเขียน ⇒ watcher ถูกปัด 403 watcher_read_only
+      const gate = callerAccess(req, body.shopId, { read: body.op === "find" });
       if (!gate.ok) return sendDeny(res, gate);
       const access = gate.access;
 

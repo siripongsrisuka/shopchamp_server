@@ -33,7 +33,7 @@ function get(deps) { // eslint-disable-line no-unused-vars
   const log = console.warn;
   return async function handler(req, res) {
     const body = req && req.body && typeof req.body === "object" ? req.body : {};
-    const gate = callerAccess(req, body.shopId);
+    const gate = callerAccess(req, body.shopId, { read: true }); // อ่านอย่างเดียว ⇒ watcher ผ่าน
     if (!gate.ok && gate.status === 401) return sendDeny(res, gate);
     const input = parseOr400(SaleGetRequest, body, res);
     if (input === null) return res;

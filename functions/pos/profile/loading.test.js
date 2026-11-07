@@ -64,12 +64,14 @@ function shopDoc(x) {
 }
 function seed(x = {}) {
   DATA = {
-    profile: { "u-owner": profile("shopA"), "u-staff": profile("shopA"), "u-company": profile("shopA") },
+    profile: { "u-owner": profile("shopA"), "u-staff": profile("shopA"), "u-company": profile("shopA"), "u-watch": profile("shopA"), "u-old": profile("shopA") },
     shop: { shopA: shopDoc() },
     admin: {
       updateShopchamp: { android: { lastedVersion: "4.10.00", isMustUpdate: false, appUrl: "u", detail: "" } },
-      adminConfig: { admin: ["u-company"] },
+      adminConfig: { admin: ["u-company", "u-old"] },
     },
+    // DEV-0001 watcher: u-company = root · u-watch = watcher · u-old อยู่แค่ adminConfig (ขาเก่า = ไม่ใช่ทีมงาน)
+    watcher: { roster: { uids: ["u-company", "u-watch"], rootUids: ["u-company"] } },
     ...x,
   };
   WRITES = [];
@@ -214,4 +216,36 @@ test("B-3 adminConfig ออกแค่ mainAds screenVedios · รายชื
   const r = await call("u-owner");
   assert.equal("adminConfig" in r.body, false);
   assert.equal(r.body.access.status, "active"); // ไม่มี doc = ไม่มีทีมงาน แต่เจ้าของยังเข้าได้
+});
+
+// ── DEV-0001 watcher (Pack เคาะ 2026-11-07 ข้อ 9: แอปใหม่ใช้ธงจาก server) ──
+test("staffRole: root / watcher / none ทุกบัญชีที่มี profile · ขาเก่า (อยู่แค่ adminConfig) = none", async () => {
+  seed();
+  assert.equal((await call("u-company")).body.staffRole, "root");
+  assert.equal((await call("u-watch")).body.staffRole, "watcher");
+  assert.equal((await call("u-owner")).body.staffRole, "none");
+  const old = await call("u-old");
+  assert.equal(old.body.staffRole, "none");
+  assert.equal(old.body.access.status, "not_a_member");
+});
+
+test("watcher ไม่อยู่ในร้าน → active owner สิทธิ์เต็ม + watcher + readOnly · ไม่มี byAdmin · root ได้ byAdmin + root", async () => {
+  seed();
+  const w = await call("u-watch");
+  assert.deepEqual(w.body.access, { status: "active", role: "owner", rights: [...INITIAL_RIGHTS], watcher: true, readOnly: true });
+  const r = await call("u-company");
+  assert.equal(r.body.access.root, true);
+  assert.equal(r.body.access.byAdmin, true);
+  assert.equal(r.body.access.readOnly, undefined);
+});
+
+test("ทะเบียนไม่มี/ว่าง → ไม่มีใครเป็นทีมงาน (fail-closed)", async () => {
+  for (const roster of [undefined, { uids: [] }, { uids: "u-company" }]) {
+    seed(roster === undefined ? {} : { watcher: { roster } });
+    if (roster === undefined) delete DATA.watcher;
+    const r = await call("u-company");
+    assert.equal(r.body.staffRole, "none", JSON.stringify(roster));
+    assert.equal(r.body.access.byAdmin, undefined);
+    assert.equal(r.body.access.role, "staff"); // u-company เป็นพนักงานของร้าน · ได้สิทธิ์ตามแถวตัวเอง
+  }
 });

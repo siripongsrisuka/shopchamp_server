@@ -11,6 +11,7 @@
 
 const { db } = require("../../firebase");
 const F = require("./_franchise");
+const WR = require("../_shared/watcherRoster");
 
 const plain = (ref) => ref.get();
 const tsSort = (rows, dir) => rows.sort((a, b) => {
@@ -21,22 +22,27 @@ const tsSort = (rows, dir) => rows.sort((a, b) => {
 // ── franchise.list ──
 const LIST_MAX = 1000;
 const list = F.makeHandler("FranchiseListRequest", async ({ uid }) => {
-  const cSnap = await db.collection("admin").doc("adminConfig").get();
-  const adminConfig = cSnap.exists ? cSnap.data() : null;
-  const byAdmin = F.franchiseAccessOf({ franchise: {}, uid, adminConfig }).ok;
-  const q = byAdmin ? db.collection("franchise").limit(LIST_MAX + 1) : db.collection("franchise").where("humanResource", "array-contains", uid);
+  // ทีมงาน (root หรือ watcher จาก watcher/roster) เห็นทุกแฟรนไชส์ · คนอื่นเห็นที่ตัวเองอยู่
+  const roster = WR.snapToRoster(await WR.rosterRef(db).get());
+  const staffRole = WR.staffRoleOf(roster, uid);
+  const staff = staffRole !== WR.ROLE.NONE;
+  const q = staff ? db.collection("franchise").limit(LIST_MAX + 1) : db.collection("franchise").where("humanResource", "array-contains", uid);
   const snap = await q.get();
   const rows = [];
   for (const d of snap.docs) {
     const f = d.data() || {};
     // แถวของตัวเองไม่ใช้งาน = ไม่ขึ้นในรายการ (เปิดแล้วก็ถูกปัดที่ franchise.get)
-    if (!byAdmin && !F.franchiseAccessOf({ franchise: f, uid, adminConfig }).ok) continue;
+    if (!staff && !F.franchiseAccessOf({ franchise: f, uid, roster }).ok) continue;
     rows.push({ id: d.id, name: F.str(f.name), imageId: F.str(f.imageId), timestamp: F.isoOf(f.timestamp) });
   }
   const truncated = rows.length > LIST_MAX;
   // ใหม่ไปเก่าตามเดิม (normalSort) · doc ไม่มี timestamp อยู่ท้าย ไม่ทำให้ทั้งรายการล้ม (FL-17)
   const out = tsSort(rows.slice(0, LIST_MAX), -1);
-  return { franchises: out, count: out.length, ...(truncated ? { truncated: true } : {}), ...(byAdmin ? { byAdmin: true } : {}) };
+  // staffRole บอกเว็บว่าเป็นทีมงานระดับไหน · root คง byAdmin:true ให้เว็บรุ่นที่อ่านช่องนี้อยู่
+  return {
+    franchises: out, count: out.length, ...(truncated ? { truncated: true } : {}),
+    ...(staff ? { staffRole } : {}), ...(staffRole === WR.ROLE.ROOT ? { byAdmin: true } : {}),
+  };
 });
 
 // ── franchise.get ──
@@ -54,7 +60,7 @@ const get = F.makeHandler("FranchiseGetRequest", async ({ uid, input }) => {
       humanResource: F.arr(f.humanResource).filter((x) => typeof x === "string"),
       ...(typeof f.type === "string" ? { type: f.type } : {}),
     },
-    access: { rights: access.rights, ...F.adminFlag(access) },
+    access: { rights: access.rights, ...F.staffFlag(access) },
   };
 });
 

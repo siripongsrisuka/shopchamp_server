@@ -166,7 +166,9 @@ function shopFixture(opts = {}) {
       [id.m1]: { shopId: id.shopA, name: "ลูกค้าเอ", tel: "0000000000", point: 30, credit: 0, creditArray: [], bought: [], letter: "A" },
       [id.mB]: { shopId: id.shopB, name: "ลูกค้าร้านบี", tel: "0000000000", point: 5, credit: 0, creditArray: [] },
     },
-    admin: { adminConfig: { admin: ["u-admin-e2e"] } },
+    // ทีมงานตัดสินจาก watcher/roster (DEV-0001 watcher) · adminConfig คงไว้เพื่อพิสูจน์ว่า server ไม่อ่านแล้ว (u-old-e2e อยู่แค่ที่นี่)
+    admin: { adminConfig: { admin: ["u-admin-e2e", "u-old-e2e"] } },
+    watcher: { roster: { uids: ["u-admin-e2e", "u-watch-e2e"], rootUids: ["u-admin-e2e"] } },
   };
   if (opts.receiptPattern === "day") data.billDayId = { [id.shopA]: { date: 10, receipts: 5 } };
   const owner = { shopId: id.shopA, uid: id.owner, role: "owner", rights: [] };

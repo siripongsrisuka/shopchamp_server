@@ -4,7 +4,9 @@
 // รูป: factory (deps) => handler(req, res) · deps: now · ยังไม่ export จาก index.js และยังไม่ deploy
 // route ผ่าน checkIfAuthenticated เท่านั้น (ยังไม่รู้ร้าน) · ตัวตน = req.auth.uid · ร้าน = profile.currentLogin.shopId ในฐาน
 // อ่านอย่างเดียว: ❌ ไม่เขียน currentLogin กลับแบบแอปเก่า (LoadingScreen.js:87)
-//   อ่าน profile/{uid} · admin/updateShopchamp · admin/adminConfig (ครั้งเดียวต่อคำขอ) · shop where shopId ==
+//   อ่าน profile/{uid} · admin/updateShopchamp · admin/adminConfig (โฆษณาอย่างเดียว) · watcher/roster (ตัดสินทีมงาน) · shop where shopId ==
+// ทีมงาน (DEV-0001 watcher · Pack เคาะ 2026-11-07 ข้อ 9): คำตอบมี staffRole 'watcher'|'root'|'none' ทุกครั้งที่มี profile
+//   แอปใหม่ใช้ธงนี้แทนการอ่าน admin/adminConfig เอง · ❌ adminConfig ไม่ใช้ตัดสินทีมงานแล้ว (uid ใน adminConfig แต่ไม่อยู่ใน roster = ไม่ใช่ทีมงาน)
 // เทส: loading.test.js (ของที่ชุด case ของสัญญาไม่คุม)
 // ข้อมูลร้านที่คืน = รายการช่องที่อนุญาต (allowlist) · ❌ humanResource ดิบ (รหัสแคชเชียร์ข้อความล้วน #13) · line · taxCustomer
 //   ช่องเวลาของ Firestore แปลงเป็นข้อความ ISO ก่อนส่ง
@@ -16,6 +18,7 @@ const { ProfileLoadingRequest } = require("@shopchamp/schema");
 const { ok, fail, parseOr400, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { resolveShopAccess, INITIAL_RIGHTS } = require("../_shared/auth");
+const WR = require("../_shared/watcherRoster");
 
 // ช่องของ doc ร้านที่ส่งให้แอปได้ (ตัวตนร้าน · จุดขาย · แพ็กเกจ · ตั้งค่าขาย)
 //   ช่องที่ไม่อยู่ในนี้ไม่ออก ⇒ ช่องใหม่ที่ใครเพิ่มในฐานพรุ่งนี้ ไม่หลุดออก API เอง (fail-closed)
@@ -104,13 +107,15 @@ function loading(deps) {
 
     try {
       const now = await readNow(deps);
-      // adminConfig อ่านครั้งเดียวต่อคำขอ (แอปเก่าอ่านคู่กันตอนบูต LoadingScreen.js:49-53) · ใช้ทั้งคำตอบ (B-3) และตัดสินทีมงาน
-      const [profileSnap, updateSnap, configSnap] = await Promise.all([
+      // adminConfig = โฆษณาในคำตอบ (B-3) อย่างเดียว · ทีมงานตัดสินจาก watcher/roster (อ่านครั้งเดียวต่อคำขอ)
+      const [profileSnap, updateSnap, configSnap, rosterSnap] = await Promise.all([
         db.collection("profile").doc(uid).get(),
         db.collection("admin").doc("updateShopchamp").get(),
         db.collection("admin").doc("adminConfig").get(),
+        WR.rosterRef(db).get(),
       ]);
       const cfg = configSnap.exists ? configSnap.data() : null;
+      const roster = WR.snapToRoster(rosterSnap);
       if (!profileSnap.exists) return fail(res, 404, "profile_not_found", "ไม่พบข้อมูลบัญชี");
 
       const profile = profileSnap.data() || {};
@@ -120,6 +125,8 @@ function loading(deps) {
         profile: profileView(profile),
         // B-2 (agent เลือก): ไม่มี doc/ไม่มีแพลตฟอร์มนี้ = update:null · แอปใหม่ข้ามการเตือนอัปเดต (แอปเก่าค้างหน้าโหลด)
         update: updateView(updateSnap.exists ? updateSnap.data() : null, input.platform),
+        // ธงทีมงานจาก server (แอปใหม่/เว็บใช้แทนการอ่าน adminConfig) · ทะเบียนไม่มี/ว่าง = 'none'
+        staffRole: WR.staffRoleOf(roster, uid),
       };
       const adminView = adminConfigView(cfg);
       if (adminView) base.adminConfig = adminView;
@@ -134,9 +141,9 @@ function loading(deps) {
       const shop = shopDoc ? shopDoc.data() : null;
       if (!isPlainObject(shop)) return ok(res, { ...base, access: { status: "shop_not_found" } });
 
-      // ทีมงานมาก่อนสมาชิก (ตัดสินที่ _shared/auth.js › resolveShopAccess · แอปเก่า LoadingScreen.js:63,77,83)
-      //   ทีมงานที่บังเอิญเป็นพนักงานในร้านได้ owner + byAdmin เหมือนทุก route (ผลตรวจ chunk4-verify/profile.loading.md W1)
-      const r = await resolveShopAccess({ shopDocId: shopDoc.id, shop, uid, now, adminConfig: cfg });
+      // root มาก่อนสมาชิก · watcher หลังสมาชิก (ตัดสินที่ _shared/auth.js › resolveShopAccess ตัวเดียวกับทุก route)
+      //   root ที่บังเอิญเป็นพนักงานในร้านได้ owner + byAdmin + root · watcher ที่เป็นพนักงาน active ได้สิทธิ์ตามแถวตัวเอง
+      const r = await resolveShopAccess({ shopDocId: shopDoc.id, shop, uid, now, roster });
       if (!r.ok) {
         const reason = r.extra && r.extra.reason === "inactive" ? "inactive" : "not_a_member";
         return ok(res, { ...base, access: { status: reason } });
@@ -144,11 +151,13 @@ function loading(deps) {
 
       const a = r.access;
       // เจ้าของและทีมงานได้ initialRights ทั้งชุด เหมือนที่แอปเก่าเขียนลง currentLogin.rights (LoadingScreen.js:84)
+      //   watcher เห็นทุกเมนู (ชุดเต็ม) แต่ readOnly:true ⇒ จอซ่อนปุ่มเขียน · server ปัดเขียน 403 watcher_read_only อยู่ดี
       const access = {
         status: "active",
         role: a.role,
         rights: a.role === "owner" ? [...INITIAL_RIGHTS] : [...a.rights],
-        ...(a.byAdmin === true ? { byAdmin: true } : {}),
+        ...(a.byAdmin === true ? { byAdmin: true, root: true } : {}),
+        ...(a.watcher === true ? { watcher: true, readOnly: true } : {}),
       };
       return ok(res, { ...base, access, shop: shopView(shopDoc.id, shop) });
     } catch (e) {

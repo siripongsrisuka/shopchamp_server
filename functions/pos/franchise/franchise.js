@@ -5,12 +5,13 @@
 //   create        275 `fr:screens/FranchiseListScreen.js:165-174` (set doc ใหม่ humanResource ว่าง ⇒ ผู้สร้างหาแฟรนไชส์ตัวเองไม่เจอ DI-45)
 //   profileUpdate (ProfileScreen.js:29-32 · update {name, imageId} จากค่าใน localStorage ทุกครั้ง PR-07)
 //   categorySave  266 `fr:screens/WarehouseCategoryScreen.js:24` (เขียนทั้ง array จากร่างที่ตั้งจากค่า persist DI-37 WC-41)
-// เขียนทุกตัวใน transaction ที่อ่าน franchise + admin/adminConfig สด (ด่านซ้ำตอนเขียน)
+// เขียนทุกตัวใน transaction ที่อ่าน franchise + watcher/roster สด (ด่านซ้ำตอนเขียน) · watcher ที่ไม่ใช่สมาชิก = 403 watcher_read_only
 "use strict";
 
 const { db } = require("../../firebase");
 const { deny } = require("../_shared/respond");
 const F = require("./_franchise");
+const WR = require("../_shared/watcherRoster");
 
 // รูปเดิมของ doc ใหม่ (fr:configs/initialFranchise.js)
 const SHOP_TYPES = Object.freeze([{ id: "1", name: "ทั่วไป", detail: "", product: [], category: [], right: [], payment: [] }]);
@@ -21,7 +22,7 @@ const create = F.makeHandler("FranchiseCreateRequest", async ({ uid, input, now 
   return db.runTransaction(async (tx) => {
     const [fSnap, cSnap, pSnap] = await Promise.all([
       tx.get(ref),
-      tx.get(db.collection("admin").doc("adminConfig")),
+      tx.get(WR.rosterRef(db)),
       tx.get(db.collection("profile").doc(uid)),
     ]);
     if (fSnap.exists) {
@@ -29,8 +30,10 @@ const create = F.makeHandler("FranchiseCreateRequest", async ({ uid, input, now 
       if (cur.createdBy === uid) return { franchiseId: ref.id, duplicate: true };
       F.refuse(deny(409, "franchise_uuid_taken", "รหัสนี้ถูกใช้แล้ว"));
     }
-    const access = F.franchiseAccessOf({ franchise: {}, uid, adminConfig: cSnap.exists ? cSnap.data() : null });
-    const byAdmin = access.ok && access.access.byAdmin;
+    const role = WR.staffRoleOf(WR.snapToRoster(cSnap), uid);
+    // watcher สร้างแฟรนไชส์ไม่ได้ (เขียน · ข้อ 2) · root สร้างแทนลูกค้าได้ ไม่ใส่ตัวเองเป็นสมาชิก (เหมือนทีมงานเดิม)
+    if (role === WR.ROLE.WATCHER) F.refuse(deny(403, "watcher_read_only"));
+    const byAdmin = role === WR.ROLE.ROOT;
     // ผู้สร้างเป็นสมาชิกสิทธิ์ครบ (DI-45) · ทีมงานไม่ใส่ตัวเอง (เห็นทุกแฟรนไชส์อยู่แล้ว · เดิมก็ไม่ใส่)
     const p = pSnap.exists ? pSnap.data() || {} : {};
     const me = F.staffRow({ id: uid, name: p.name, tel: p.tel, email: p.email, imageId: p.imageId, rights: [...F.ALL_RIGHTS] });

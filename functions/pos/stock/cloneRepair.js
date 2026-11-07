@@ -20,7 +20,7 @@
 //   เขียนทีละ batch ≤ 400 (ไม่ใช่ transaction เดียว · ร้านใหญ่เกิน 500 ตัว) · ซ้ำได้: รอบ 2 plan ว่าง = ไม่เขียน
 //   stock {linkDetail, linkId, linkNext, updateTime, cloneRepair:{at, approvalRef, by}} · stockLink {stockLink, cloneRepair}
 //   stockRepairLog/{auto} {shopId, approvalRef, adminUid, at, planHash, counts} (collection ใหม่ · server เขียนอย่างเดียว)
-// ด่าน: callerAccess → schema → access.byAdmin (ทีมงาน Shopchamp) ไม่ใช่ = 403 admin_required
+// ด่าน: callerAccess (เส้นเขียน ⇒ watcher 403 watcher_read_only ทั้ง plan และ apply) → schema → access.byAdmin (root เท่านั้น · Pack เคาะ 2026-11-07 ข้อ 4) ไม่ใช่ = 403 admin_required
 // route: pos_heavy (อ่านสินค้าทั้งร้าน) · ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -53,7 +53,7 @@ function cloneRepair(deps) {
       const access = gate.access;
       const input = parseOr400(S.schemaOf("StockCloneRepairRequest"), body, res);
       if (!input) return;
-      if (access.byAdmin !== true) return sendDeny(res, deny(403, "admin_required", "เฉพาะทีมงาน Shopchamp"));
+      if (access.byAdmin !== true) return sendDeny(res, deny(403, "admin_required", "เฉพาะทีมงานระดับ root"));
       const now = await readNow(deps);
 
       const shopSnap = await db.collection("shop").doc(access.shopId).get();

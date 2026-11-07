@@ -1,7 +1,8 @@
 // pos/_shared/auth.js — ด่านตัวตนและด่านร้านของทุก route ใน pos (ก้อน 4 · DEV-0001)
 //
 // ยกท่าจากพี่น้อง (`middlewares/auth_middleware.js` verifyIdToken(token,true) · `claude/_shared/shopAccess.js` แกน requireShopAccess)
-//   ตัดชั้น watcher/root ออก · กติกาเข้าร้านใช้ของแอปเก่าบ้านนี้ (`shopchamp_app` src/screens/LoadingScreen.js:62-90 · WelcomeScreen.js:116-145)
+//   กติกาเข้าร้านใช้ของแอปเก่าบ้านนี้ (`shopchamp_app` src/screens/LoadingScreen.js:62-90 · WelcomeScreen.js:116-145)
+//   ทีมงาน = ทะเบียน `watcher/roster` (_shared/watcherRoster.js · DEV-0001 watcher · Pack เคาะ 2026-11-07) · ❌ ไม่อ่าน admin/adminConfig แล้ว
 //   ❌ ใช้ functions/middlewares/auth_middleware.js ไม่ได้ (แช่แข็ง + require env.json)
 //
 // middleware (route ต่อ 2 ตัวนี้ตามลำดับ · harness ไม่รัน middleware ⇒ เทสอยู่ที่ auth.test.js):
@@ -11,25 +12,30 @@
 //   requireShopAccess(req,res,next)   ร้านเป้าหมาย = body.shopId = shop **doc id**
 //     body.shopId ไม่มี/รูปผิด → 400 missing_shop_id · ไม่มี req.auth → 401 no_auth
 //     ① shop/{shopId} ไม่มี → 404 shop_not_found
-//     ② uid อยู่ใน admin/adminConfig.admin (ทีมงาน Shopchamp · Pack เคาะ 2026-11-06 ข้อ 3-2 · มาก่อนสมาชิกเหมือนแอปเก่า)
-//        → req.shopAccess = {shopId, uid, role:'owner', rights:[], byAdmin:true}
-//        doc admin/adminConfig ไม่มี หรือช่อง admin ไม่ใช่ array = ไม่มีใครเป็นทีมงาน (fail-closed)
+//     ② uid อยู่ใน watcher/roster.rootUids (root · ≤10 คน · มาก่อนสมาชิกเหมือนทีมงานของแอปเก่า)
+//        → req.shopAccess = {shopId, uid, role:'owner', rights:[], byAdmin:true, root:true}
+//        ทะเบียนไม่มี/ว่าง/ผิดรูป = ไม่มีใครเป็นทีมงาน (fail-closed · watcherRoster.parseRoster)
 //     ③ ผู้เรียกอยู่ใน shop.humanResource และ status 'active'
 //        คนที่ไม่ใช่ index 0 นับ active ได้เมื่อแพ็กเกจ staff (แถวแรก) ยังไม่หมด ไม่งั้นถือเป็น inActive (กติกาแอปเก่า)
 //        → req.shopAccess = {shopId, uid, role:'owner'|'staff', rights}   owner = position มี '001'
 //          rights: staff = rights ของคนนั้น · owner = [] (เจ้าของผ่านทุกสิทธิ์ด้วย hasRight ไม่ต้องดู rights)
-//     ④ ไม่ผ่านทั้งคู่ → 403 {ok:false, error:"not_shop_member", reason:'not_a_member'|'inactive'}
+//     ③' ไม่ใช่สมาชิก active แต่อยู่ใน watcher/roster.uids (watcher) → อ่านได้อย่างเดียว
+//        → req.shopAccess = {shopId, uid, role:'owner', rights:[], watcher:true, readOnly:true}
+//        เส้นเขียนปัดที่ callerAccess 403 watcher_read_only (ด่านเดียวทุกเส้น · ค่าตั้งต้น = ปัด · เส้นอ่านต้องขอ {read:true} เอง)
+//     ④ ไม่ผ่านทั้งหมด → 403 {ok:false, error:"not_shop_member", reason:'not_a_member'|'inactive'}
 //
 // ในตัว handler (ด่านซ้ำ เพราะ harness ส่ง req.shopAccess มาเอง):
-//   callerAccess(req, body.shopId) → ไม่มี req.shopAccess = 401 no_shop_access · body.shopId ≠ ร้านที่ผ่านด่าน = 403 wrong_shop
+//   callerAccess(req, body.shopId, {read}) → ไม่มี req.shopAccess = 401 no_shop_access · body.shopId ≠ ร้านที่ผ่านด่าน = 403 wrong_shop
+//     · watcher (readOnly) บนเส้นที่ไม่ได้ส่ง {read:true} = 403 watcher_read_only
 //   resolveShopRef({db, shopDocId, shop}) → shopRef (พิสูจน์ field ของร้าน S5 ก่อนเชื่อ)
 //   checkOwnedDoc('bill', data, shopRef) → ไม่มี = 404 bill_not_found · ร้านอื่น = 409 bill_other_shop (ไม่คืนเนื้อ)
-//   adminTrail(access) ใส่ทุกเอกสารที่เขียน · adminFlag(access) ใส่คำตอบ 2xx
+//   adminTrail(access) ใส่ทุกเอกสารที่เขียน · adminFlag(access) ใส่คำตอบ 2xx (root เท่านั้น · ชื่อ field byAdmin/adminUid คงเดิม ข้อ 5)
 "use strict";
 
 const { deny, sendDeny, fail } = require("./respond");
 const { readNow } = require("./deps");
 const { isStaffPackageActive } = require("./premium");
+const WR = require("./watcherRoster");
 
 const OWNER_POSITION = "001";
 // สิทธิ์เต็มชุดของเจ้าของ · คัดจาก shopchamp_app/src/config/initialRights.js (มี '128' ซ้ำ 2 ตัวตามต้นฉบับ)
@@ -48,11 +54,13 @@ const validDocId = (v) => isNonEmptyString(v) && v.length <= DOC_ID_MAX && !v.in
 
 // ── ตัวตัดสินแบบ pure (ใช้ร่วม middleware และ profile.loading) ────────────────────────────
 
-/** isShopchampAdmin(adminConfig, uid) — uid อยู่ใน admin/adminConfig.admin (array ของ string) · อย่างอื่น = false */
-function isShopchampAdmin(adminConfig, uid) {
-  if (!isNonEmptyString(uid)) return false;
-  if (!adminConfig || typeof adminConfig !== "object" || !Array.isArray(adminConfig.admin)) return false;
-  return adminConfig.admin.some((a) => a === uid);
+/** rootAccess / watcherAccess — รูป access ของทีมงาน 2 ระดับ (ใช้ร่วม requireShopAccess · profile.loading · profile.manage · staff.checkIn) */
+const rootAccess = (shopId, uid) => ({ shopId, uid, role: "owner", rights: [], byAdmin: true, root: true });
+const watcherAccess = (shopId, uid) => ({ shopId, uid, role: "owner", rights: [], watcher: true, readOnly: true });
+
+/** isStaffAccess(access) — ทีมงาน (root หรือ watcher) · ใช้ข้ามด่านสมาชิกซ้ำในตัว handler · ด่านเขียนอยู่ที่ callerAccess */
+function isStaffAccess(access) {
+  return !!access && (access.byAdmin === true || access.watcher === true);
 }
 
 /** roleOf(person) — position มี '001' = owner · อย่างอื่น = staff (LoadingScreen.js:83) */
@@ -83,43 +91,54 @@ function memberStatusOf(shop, uid, now) {
 }
 
 /**
- * resolveShopAccess({shopDocId, shop, uid, now, adminConfig}) — ตัดสิน ②③④ ของ requireShopAccess
- *   adminConfig: data ของ admin/adminConfig หรือฟังก์ชัน async ที่คืน data (อ่านทุกคำขอ · ทีมงานมาก่อนสมาชิก)
- *   ลำดับตามแอปเก่า (`main3:src/screens/LoadingScreen.js:63,77,83` IsAdmin → initialRights ไม่ว่าอยู่ใน humanResource ตำแหน่งไหน)
- *     ทีมงาน (Pack เคาะ 2026-11-06 ข้อ 3-2) → owner + byAdmin + สิทธิ์เต็ม แม้เป็นพนักงานหรือ inActive ในร้านนั้น
- *     ไม่ใช่ทีมงาน → ด่านสมาชิก ③
+ * resolveShopAccess({shopDocId, shop, uid, now, roster}) — ตัดสิน ②③③'④ ของ requireShopAccess
+ *   roster: data ของ watcher/roster · ผลของ watcherRoster.parseRoster · หรือฟังก์ชัน async ที่คืนอย่างใดอย่างหนึ่ง (อ่านทุกคำขอ)
+ *   ลำดับ:
+ *     root (rootUids) → owner + byAdmin + root แม้เป็นพนักงานหรือ inActive ในร้านนั้น (ลำดับเดียวกับทีมงานของแอปเก่า
+ *       `main3:src/screens/LoadingScreen.js:63,77,83` · Pack เคาะ 2026-11-07 ข้อ 2 แทน 3-2 ของ 2026-11-06)
+ *     สมาชิก active → สิทธิ์ตามแถวของตัวเอง (watcher ที่เป็นพนักงานร้านนั้นจริง เขียนได้ในฐานะพนักงาน)
+ *     watcher (uids) → owner + watcher + readOnly (อ่านได้ทุกอย่าง · เขียนไม่ได้)
+ *     ไม่ใช่ทั้งหมด → 403 not_shop_member {reason}
  * @returns {Promise<{ok:true, access}> | {ok:false, status:403, error:'not_shop_member', extra:{reason}}>}
  */
-async function resolveShopAccess({ shopDocId, shop, uid, now, adminConfig } = {}) {
-  const cfg = typeof adminConfig === "function" ? await adminConfig() : adminConfig;
-  if (isShopchampAdmin(cfg, uid)) {
-    return { ok: true, access: { shopId: shopDocId, uid, role: "owner", rights: [], byAdmin: true } };
-  }
+async function resolveShopAccess({ shopDocId, shop, uid, now, roster } = {}) {
+  const raw = typeof roster === "function" ? await roster() : roster;
+  const role = WR.staffRoleOf(raw, uid);
+  if (role === WR.ROLE.ROOT) return { ok: true, access: rootAccess(shopDocId, uid) };
   const m = memberStatusOf(shop, uid, now);
   if (m.status === "active") {
-    const role = roleOf(m.person);
-    const rights = role === "staff" && Array.isArray(m.person.rights) ? m.person.rights.filter((r) => typeof r === "string") : [];
-    return { ok: true, access: { shopId: shopDocId, uid, role, rights } };
+    const r = roleOf(m.person);
+    const rights = r === "staff" && Array.isArray(m.person.rights) ? m.person.rights.filter((x) => typeof x === "string") : [];
+    return { ok: true, access: { shopId: shopDocId, uid, role: r, rights } };
   }
+  if (role === WR.ROLE.WATCHER) return { ok: true, access: watcherAccess(shopDocId, uid) };
   return deny(403, "not_shop_member", undefined, { reason: m.status });
 }
 
 // ── ด่านในตัว handler ─────────────────────────────────────────────────────────────
 
 /**
- * callerAccess(req, bodyShopId) — handler เรียกก่อนแตะฐาน
- * @returns {{ok:true, access}} | deny 401 no_shop_access | deny 403 wrong_shop
+ * callerAccess(req, bodyShopId, opts) — handler เรียกก่อนแตะฐาน
+ *   opts.read === true = เส้น/op นี้อ่านอย่างเดียว ⇒ watcher ผ่าน · ไม่ส่ง = เส้นเขียน ⇒ watcher ถูกปัด (fail-closed:
+ *   handler ใหม่ที่ลืมบอก = ปัด watcher ไม่ใช่ปล่อย · Pack เคาะ 2026-11-07 ข้อ 2)
+ * @returns {{ok:true, access}} | deny 401 no_shop_access | deny 403 wrong_shop | deny 403 watcher_read_only
  */
-function callerAccess(req, bodyShopId) {
+function callerAccess(req, bodyShopId, opts) {
   const a = req && req.shopAccess;
   if (!a || typeof a !== "object" || !isNonEmptyString(a.shopId) || !isNonEmptyString(a.uid) || (a.role !== "owner" && a.role !== "staff")) {
     return deny(401, "no_shop_access");
   }
   if (bodyShopId !== a.shopId) return deny(403, "wrong_shop");
+  if (isReadOnly(a) && !(opts && opts.read === true)) return deny(403, "watcher_read_only");
   return { ok: true, access: a };
 }
 
-/** isOwner(access) — เจ้าของ หรือทีมงาน (byAdmin ได้ role owner) */
+/** isReadOnly(access) — watcher ที่ไม่ใช่สมาชิก (เขียนไม่ได้) · ช่อง readOnly หรือ watcher ตัวใดตัวหนึ่งก็นับ (fail-closed) */
+function isReadOnly(access) {
+  return !!access && (access.readOnly === true || access.watcher === true);
+}
+
+/** isOwner(access) — เจ้าของ หรือทีมงาน (root/watcher ได้ role owner · watcher ถูกปัดเขียนที่ callerAccess แล้ว) */
 function isOwner(access) {
   return !!access && access.role === "owner";
 }
@@ -131,12 +150,12 @@ function hasRight(access, code) {
   return Array.isArray(access.rights) && access.rights.some((r) => String(r) === String(code));
 }
 
-/** adminTrail(access) — field ที่เพิ่มบนทุกเอกสารที่ทีมงานเขียน · คนทั่วไป = {} */
+/** adminTrail(access) — field ที่เพิ่มบนทุกเอกสารที่ root เขียน · คนทั่วไป = {} (ชื่อ byAdmin/adminUid คงเดิม · ข้อ 5) */
 function adminTrail(access) {
   return access && access.byAdmin === true ? { byAdmin: true, adminUid: access.uid } : {};
 }
 
-/** adminFlag(access) — field ในคำตอบ 2xx เมื่อทีมงานทำ · คนทั่วไป = {} */
+/** adminFlag(access) — field ในคำตอบ 2xx เมื่อ root ทำ · คนทั่วไป = {} */
 function adminFlag(access) {
   return access && access.byAdmin === true ? { byAdmin: true } : {};
 }
@@ -209,7 +228,7 @@ function checkOwnedDoc(name, data, shopRef) {
 
 /**
  * staffStatusOf(shop, staffId, access) — สถานะของ staffId ในร้าน: 'active' | 'inactive' | 'not_in_shop'
- *   ทีมงานใช้ uid ตัวเองได้แม้ไม่อยู่ (สัญญาข้อ 3-2) = 'active'
+ *   root (byAdmin) ใช้ uid ตัวเองได้แม้ไม่อยู่ = 'active' · watcher ไม่ได้ (watcher ไม่มี byAdmin)
  *   แถวที่ id ตรงและ status 'active' แถวไหนก็ได้ = 'active' · มีแถวแต่ไม่ active สักแถว = 'inactive' (Pack เคาะ B-11 2026-11-06)
  *   ดู status ของแถวเท่านั้น (ไม่ดูแพ็กเกจ staff · คนเรียกผ่านด่านแพ็กเกจที่ requireShopAccess มาแล้ว)
  */
@@ -223,7 +242,7 @@ function staffStatusOf(shop, staffId, access) {
 }
 
 /**
- * staffInShop(shop, staffId, access, opts) — staffId อยู่ใน humanResource · ทีมงานใช้ uid ตัวเองได้แม้ไม่อยู่ (สัญญาข้อ 3-2)
+ * staffInShop(shop, staffId, access, opts) — staffId อยู่ใน humanResource · root ใช้ uid ตัวเองได้แม้ไม่อยู่
  *   opts.activeOnly = ต้อง status 'active' ด้วย (B-11 · ใช้ที่ shift.manage op open และ member.payCredit)
  *   route ที่ใช้: shift.manage (open: activeOnly · during/close: อยู่ในร้านพอ) · member.payCredit (activeOnly)
  */
@@ -265,7 +284,9 @@ function makeCheckIfAuthenticated({ verifyIdToken, log } = {}) {
     }
     const uid = decoded && decoded.uid;
     if (!isNonEmptyString(uid)) return fail(res, 401, "no_auth");
-    const email = decoded && typeof decoded.email === "string" ? decoded.email.trim().toLowerCase() : null;
+    // อีเมลว่าง = null ไม่ใช่ '' (บทเรียนพี่น้อง watcherRoster.js:27-29 · ไม่มีใครตัดสินด้วยอีเมลแล้ว แต่กันคนรุ่นหลังเทียบ '')
+    const rawEmail = decoded && typeof decoded.email === "string" ? decoded.email.trim().toLowerCase() : "";
+    const email = rawEmail === "" ? null : rawEmail;
     req.auth = { uid, email };
     return next();
   };
@@ -294,10 +315,7 @@ function makeRequireShopAccess({ db, now, log } = {}) {
         shop: snap.data() || {},
         uid,
         now: at,
-        adminConfig: async () => {
-          const c = await d.collection("admin").doc("adminConfig").get();
-          return c.exists ? c.data() : null;
-        },
+        roster: () => WR.readRoster(d),
       });
     } catch (e) {
       try { warn("pos shopAccess error", e && e.message); } catch (_) { /* ไม่ล้มคำตอบ */ }
@@ -320,7 +338,10 @@ module.exports = {
   requireShopAccess,
   makeCheckIfAuthenticated,
   makeRequireShopAccess,
-  isShopchampAdmin,
+  rootAccess,
+  watcherAccess,
+  isStaffAccess,
+  isReadOnly,
   roleOf,
   memberStatusOf,
   resolveShopAccess,

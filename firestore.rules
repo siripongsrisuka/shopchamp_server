@@ -4,7 +4,9 @@ rules_version = '2';
 // หลัก (Pack เคาะ):
 //   ① แอปเก่าไม่บังคับอัป ⇒ ทุกจุดเขียนเดิมของร้านตัวเองต้องผ่านต่อ · ปิดได้แค่ข้ามร้าน · collection ใหม่ปัดเป็นค่าตั้งต้น
 //   ② จออ่าน realtime จาก Firestore ต่อได้ภายใต้ rules แยกร้าน
-//   ③ ทีมงานใน admin/adminConfig.admin (และ admin/admin.value ของเว็บ) เข้าได้ทุกร้าน
+//   ③ ทีมงานใน admin/adminConfig.admin (และ admin/admin.value ของเว็บ) เข้าได้ทุกร้าน = เลนของแอปเก่า (staffTeam · คงไว้จนแอปเก่าเหลือน้อย)
+//   ③' watcher (DEV-0001 · Pack เคาะ 2026-11-07 ข้อ 6): uid ใน watcher/roster.uids อ่านข้อมูลร้าน/แฟรนไชส์ได้ทุกร้าน (realtime ของแอปใหม่/เว็บ) · เขียนไม่ได้
+//      watcher/roster เอง client อ่าน/เขียนไม่ได้ทุกคน (รวมทีมงานเลนเก่า) · เขียนได้ทางเดียว = gate/watcher-publish.js ด้วย Admin SDK
 //   ④ ของเกตเวย์: pgWebhook แอปอ่านได้เฉพาะร้านตัวเอง เขียนไม่ได้ · กุญแจและ shop/*/meta ปิดจาก client ทั้งหมด
 //   ⑤ #12 #13 คงสำเนาเดิมให้แอปเก่า ⇒ doc ร้านยังอ่านได้ทุกคนที่ login · บัญชีกลางของเว็บยังเขียนได้เฉพาะที่หน้าอัปสินค้าใช้
 // ตารางจุดเรียก → กฎ → เทส: lanes/dev/source/chunk6-log.md (บ้าน) · เทส: rules-test/
@@ -28,6 +30,14 @@ service cloud.firestore {
       return signedIn() && (
         me() in get(docPath('admin', 'adminConfig')).data.get('admin', [])
         || me() in get(docPath('admin', 'admin')).data.get('value', []));
+    }
+
+    // watcher: อ่านอย่างเดียว · ไม่มี doc / ไม่มีช่อง / ไม่ใช่ list = ไม่มีใครเป็น watcher (fail-closed)
+    //   ❌ ห้ามใช้ในกฎ create/update/delete · ใช้กับ get/list เท่านั้น (เครื่องตรวจ: rules-test/firestore.watcher.test.mjs)
+    function watcherRead() {
+      return signedIn() && exists(docPath('watcher', 'roster'))
+        && get(docPath('watcher', 'roster')).data.get('uids', []) is list
+        && me() in get(docPath('watcher', 'roster')).data.get('uids', []);
     }
 
     // บัญชีกลางของเว็บ (#12 · คงไว้ให้หน้าป้ายราคา อัปสินค้า สแกนเข้าเว็บ ของรุ่นเดิม · Pack เลือก §6 ข้อ 1 ทาง 2)
@@ -94,7 +104,8 @@ service cloud.firestore {
     // ---------------- เอกสารของร้าน (มี field shopId) ----------------
     function shopOf(d) { return d.get('shopId', ''); }
     // แฟรนไชส์ก่อน (ถูก) แล้วค่อยไล่รายชื่อร้าน (แพง) · ลำดับนี้กันชนเพดาน 1,000 expression
-    function readShopDoc(d) { return franchiseMemberOf(d.get('franchiseId', '')) || memberOf(shopOf(d)); }
+    //   watcher ไล่ท้ายสุด (สมาชิกไม่เสีย read เพิ่ม)
+    function readShopDoc(d) { return franchiseMemberOf(d.get('franchiseId', '')) || memberOf(shopOf(d)) || watcherRead(); }
     function createShopDoc() { return memberOfW(shopOf(request.resource.data)); }
     function updateShopDoc() {
       return memberOfW(shopOf(resource.data)) && shopOf(request.resource.data) == shopOf(resource.data);
@@ -141,6 +152,7 @@ service cloud.firestore {
     // checkInHistory: แอป query `id` = shopId + profileId อย่างเดียว (main3:src/screens/CheckInScreen.js:48) ⇒ ของตัวเองผ่านด้วยท้าย id = uid
     match /checkInHistory/{id} {
       allow list: if signedIn() && resource.data.id.matches('.+' + me());
+      allow get, list: if watcherRead();
     }
     // stockLink: + แฟรนไชส์ (franchiseId · Franchise StockLinkScreen.js:74)
     match /stockLink/{id} {
@@ -153,16 +165,16 @@ service cloud.firestore {
     match /uploadProduct/{id} { allow get: if signedIn(); }
     // pgWebhook: อ่านเฉพาะร้านตัวเอง · เขียนจาก client ไม่ได้ (architecture-plan ก้อน 6 · gateway-pattern §2.2)
     match /pgWebhook/{id} {
-      allow get: if absent() || memberOf(shopOf(resource.data));
-      allow list: if memberOf(shopOf(resource.data));
+      allow get: if absent() || memberOf(shopOf(resource.data)) || watcherRead();
+      allow list: if memberOf(shopOf(resource.data)) || watcherRead();
     }
     // (ทีมงานอ่าน pgWebhook ได้ผ่าน memberOf · เขียนไม่ได้แม้ทีมงาน = server เท่านั้น)
 
     // ---------------- ตัวนับเลขเอกสารของร้าน (doc id = ร้าน) ----------------
     // billId billDayId: doc id = doc id ของร้าน (schema/billId.md:38) · taxId: doc id = field shopId (BillHistoryScreen.js:521)
-    match /billId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
-    match /billDayId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
-    match /taxId/{key} { allow read: if memberOf(key); allow write: if memberOfW(key); }
+    match /billId/{key} { allow read: if memberOf(key) || watcherRead(); allow write: if memberOfW(key); }
+    match /billDayId/{key} { allow read: if memberOf(key) || watcherRead(); allow write: if memberOfW(key); }
+    match /taxId/{key} { allow read: if memberOf(key) || watcherRead(); allow write: if memberOfW(key); }
 
     // receiptGuard: แอปเก่าเขียน { createdAt, usedBy:<bill id> } ใน transaction เดียวกับบิล (main3:src/Utility/function.js:309)
     //   ⇒ ผูกกับร้านผ่านบิลที่กำลังสร้าง (getAfter) · อ่าน (ตรวจซ้ำก่อนขาย) ให้ผู้ login · ห้ามแก้หรือลบ
@@ -252,16 +264,23 @@ service cloud.firestore {
       allow create: if signedIn();
       allow update: if signedIn() && (me() in resource.data.get('humanResource', []) || franchiseOpen(resource.data));
       allow read, write: if staffTeam();
+      allow get, list: if watcherRead();
     }
     // warehouseItem: ของแฟรนไชส์ (Franchise WarehouseScreen.js:102-133 · warehouseSlice.js:16)
     match /warehouseItem/{id} {
       allow get: if absent() || franchiseMemberOf(resource.data.get('franchiseId', ''));
-      allow list: if franchiseMemberOf(resource.data.franchiseId);
+      allow list: if franchiseMemberOf(resource.data.franchiseId) || watcherRead();
+      allow get: if watcherRead();
       allow create: if franchiseMemberOf(request.resource.data.get('franchiseId', ''));
       allow update: if franchiseMemberOf(resource.data.get('franchiseId', ''))
         && request.resource.data.get('franchiseId', '') == resource.data.get('franchiseId', '');
       allow delete: if franchiseMemberOf(resource.data.get('franchiseId', ''));
     }
+
+    // ทะเบียน watcher (DEV-0001): client แตะไม่ได้ทุกคน รวมทีมงานเลนเก่า (ไม่มี match ก็ปัดอยู่แล้ว · เขียนไว้ให้เห็นชัด)
+    //   watcherWriteLog (บันทึกการผูกสาขาของ watcher) ก็ server เท่านั้น
+    match /watcher/{docId} { allow read, write: if false; }
+    match /watcherWriteLog/{id} { allow read, write: if false; }
 
     // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
     // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex

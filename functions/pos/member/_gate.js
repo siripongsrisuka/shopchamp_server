@@ -18,7 +18,7 @@
 
 const { db } = require("../../firebase");
 const { deny } = require("../_shared/respond");
-const { memberStatusOf, resolveShopRef, adminTrail } = require("../_shared/auth");
+const { memberStatusOf, resolveShopRef, adminTrail, isStaffAccess } = require("../_shared/auth");
 
 class Refusal extends Error {
   constructor(d) { super(d.error); this.deny = d; }
@@ -31,7 +31,7 @@ async function readShopForWrite({ tx, shopDocId, access, now }) {
   const snap = await tx.get(shopRef);
   if (!snap.exists) refuse(deny(404, "shop_not_found"));
   const shop = snap.data() || {};
-  if (!(access && access.byAdmin === true)) {
+  if (!isStaffAccess(access)) {
     const st = memberStatusOf(shop, access && access.uid, now);
     if (st.status !== "active") refuse(deny(403, "not_shop_member", undefined, { reason: st.status }));
   }

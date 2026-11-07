@@ -9,8 +9,9 @@
 // ไม่มี req.auth.uid = 401 no_auth (route ส่ง 401 ก่อนแล้ว · ด่านซ้ำ)
 //   create    : มี profile แล้ว = 200 created:false (ไม่ทับ) · ไม่มี = เขียนรูปเดียวกับ initialProfile + timestamp: now
 //   update    : ไม่มี profile 404 profile_not_found · แก้เฉพาะช่องที่ส่ง
-//   enterShop : tx อ่าน profile · shop/{shopId} · admin/adminConfig → ร้านไม่มี 404 shop_not_found
-//               ตัดสินด้วย auth.resolveShopAccess ตัวเดียวกับ requireShopAccess (ทีมงานก่อน · แล้วสมาชิก active + แพ็กเกจพนักงาน)
+//   enterShop : tx อ่าน profile · shop/{shopId} · watcher/roster → ร้านไม่มี 404 shop_not_found
+//               ตัดสินด้วย auth.resolveShopAccess ตัวเดียวกับ requireShopAccess (root ก่อน · สมาชิก active + แพ็กเกจพนักงาน · แล้ว watcher)
+//               watcher เข้าร้านได้ (เขียนแค่ profile ของตัวเอง ไม่แตะข้อมูลร้าน) · คำตอบ access มี watcher/readOnly ⇒ จอซ่อนปุ่มเขียน
 //               ไม่ผ่าน = 403 not_shop_member {reason} (พนักงาน inActive เข้าไม่ได้)
 //               เขียน currentLogin {shopId: field shop.shopId, printer: ของแถว port เดิมหรือ [], rights: เจ้าของ/ทีมงาน = ชุดเต็ม · พนักงาน = rights ของตัวเอง}
 //               และ port: แถวร้านนี้ย้ายขึ้นหน้า {...แถวเดิม, shopId, shopName, logo} (รูปเดิม WelcomeScreen.js:122-129)
@@ -23,6 +24,7 @@ const { ProfileManageRequest } = require("@shopchamp/schema");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { resolveShopAccess, INITIAL_RIGHTS } = require("../_shared/auth");
+const WR = require("../_shared/watcherRoster");
 const { isObj, Refusal, refuse } = require("./common");
 
 const EMPTY_LOGIN = Object.freeze({ shopId: "", rights: [], printer: [] });
@@ -45,7 +47,7 @@ function profileManage(deps) {
       const now = await readNow(deps);
       const profileRef = db.collection("profile").doc(uid);
       const shopRef = input.op === "enterShop" ? db.collection("shop").doc(input.shopId) : null;
-      const cfgRef = input.op === "enterShop" ? db.collection("admin").doc("adminConfig") : null;
+      const cfgRef = input.op === "enterShop" ? WR.rosterRef(db) : null;
 
       const out = await db.runTransaction(async (tx) => {
         const [pSnap, shopSnap, cfgSnap] = await Promise.all([
@@ -94,7 +96,7 @@ function profileManage(deps) {
         // enterShop
         if (!shopSnap.exists) refuse(deny(404, "shop_not_found"));
         const shop = shopSnap.data() || {};
-        const verdict = await resolveShopAccess({ shopDocId: input.shopId, shop, uid, now, adminConfig: cfgSnap && cfgSnap.exists ? cfgSnap.data() : null });
+        const verdict = await resolveShopAccess({ shopDocId: input.shopId, shop, uid, now, roster: WR.snapToRoster(cfgSnap) });
         if (!verdict.ok) refuse(verdict);
         const access = verdict.access;
         const field = typeof shop.shopId === "string" && shop.shopId ? shop.shopId : input.shopId;
@@ -104,7 +106,8 @@ function profileManage(deps) {
         const row = { ...(oldRow || {}), shopId: field, shopName: typeof shop.name === "string" ? shop.name : "", logo: logoOf(shop) };
         tx.update(profileRef, { currentLogin, port: [row, ...port.filter((p) => !(isObj(p) && p.shopId === field))] });
         const a = { role: access.role, rights };
-        if (access.byAdmin === true) a.byAdmin = true;
+        if (access.byAdmin === true) { a.byAdmin = true; a.root = true; }
+        if (access.watcher === true) { a.watcher = true; a.readOnly = true; }
         return { access: a, currentLogin };
       });
 

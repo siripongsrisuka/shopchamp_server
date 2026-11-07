@@ -31,14 +31,19 @@ async function call(make, body, uid) {
   return res;
 }
 const SEED = () => ({
-  admin: { adminConfig: { admin: ["u-admin"] } },
+  // ทีมงาน = watcher/roster (DEV-0001 watcher) · u-admin = root · u-watch = watcher อ่านอย่างเดียว · u-old อยู่แค่ adminConfig (ขาเก่า ต้องไม่ใช่ทีมงาน)
+  watcher: { roster: { uids: ["u-admin", "u-watch"], rootUids: ["u-admin"] } },
+  admin: { adminConfig: { admin: ["u-admin", "u-old"] } },
   franchise: {
     FA: {
       name: "เอ", humanResource: ["u-owner"],
       humanRight: [{ id: "u-owner", name: "เจ้าของ", tel: "081", email: "o@x", imageId: "", rights: ["100", "128", "723"], port: [{ shopId: "s1" }], currentLogin: { shopId: "s1", rights: ["1"] }, birthday: "2000", gender: "x" }],
     },
   },
-  shop: { s1: { shopId: "s1", name: "สาขา", tel: "0811000001", franchiseId: "FA", humanResource: [{ id: "u", password: "1234" }], line: { token: "t" }, vip: [] } },
+  shop: {
+    s1: { shopId: "s1", name: "สาขา", tel: "0811000001", franchiseId: "FA", humanResource: [{ id: "u", password: "1234" }], line: { token: "t" }, vip: [] },
+    s2: { shopId: "s2", name: "ร้านยังไม่มีสังกัด", tel: "0811000002" },
+  },
   profile: { p1: { name: "ใหม่", tel: "0899999999", email: "n@x", imageId: "", port: [{ shopId: "s9" }], currentLogin: { shopId: "s9" }, birthday: "1999" } },
   bill: {
     b1: { franchiseId: "FA", shopId: "s1", billDate: "20261110", dateTime: { __ts__: "2026-11-10T05:00:00.000Z" }, receiptNumber: "R1", moneyMustPaid: 90, manualDiscount: 10,
@@ -115,4 +120,58 @@ test("franchise.breakdown · ตัวเลขเท่า logic.salesBreakdown
   const shopItems = logic.salesBreakdown(entries, { fromDay: "20261110", toDay: "20261110", dimension: "item" }).rows;
   assert.deepEqual(r.body.items.map((x) => x.netAfterBillDiscount).sort(), shopItems.map((x) => x.netAfterBillDiscount).sort());
   assert.deepEqual(r.body.items.map((x) => x.netAfterBillDiscount).sort(), [36, 54]);
+});
+
+// ── DEV-0001 watcher (Pack เคาะ 2026-11-07 ข้อ 2 · 4) ──
+test("watcher: อ่านได้ (get · branchList · billList · breakdown) · access มี watcher/readOnly", { skip }, async () => {
+  const R = load("./read");
+  const g = await call(R.get, { franchiseId: "FA" }, "u-watch");
+  assert.equal(g.code, 200, JSON.stringify(g.body));
+  assert.equal(g.body.access.watcher, true);
+  assert.equal(g.body.access.readOnly, true);
+  assert.equal(g.body.access.byAdmin, undefined);
+  assert.equal((await call(R.branchList, { franchiseId: "FA" }, "u-watch")).code, 200);
+  const { breakdown } = load("./breakdown");
+  assert.equal((await call(breakdown, { franchiseId: "FA", fromDay: "20261110", toDay: "20261110" }, "u-watch")).code, 200);
+  const l = await call(R.list, {}, "u-watch");
+  assert.equal(l.body.staffRole, "watcher");
+  assert.equal(l.body.byAdmin, undefined);
+  assert.equal((await call(R.list, {}, "u-admin")).body.staffRole, "root");
+});
+
+test("watcher: เขียนไม่ได้ (staffSave · profileUpdate · create) → 403 watcher_read_only ไม่เขียน", { skip }, async () => {
+  const { staffSave } = load("./staff");
+  const r2 = await call(staffSave, { franchiseId: "FA", op: "add", staffUid: "p1", rights: ["100"] }, "u-watch");
+  assert.equal(r2.code, 403, JSON.stringify(r2.body));
+  assert.equal(r2.body.error, "watcher_read_only");
+  const { profileUpdate, create } = load("./franchise");
+  const r3 = await call(profileUpdate, { franchiseId: "FA", name: "ใหม่" }, "u-watch");
+  assert.equal(r3.body.error, "watcher_read_only");
+  const r4 = await call(create, { franchiseUUID: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d", name: "บี" }, "u-watch");
+  assert.equal(r4.body.error, "watcher_read_only");
+  assert.equal(WRITES.length, 0);
+});
+
+test("watcher: ค้นสาขาได้ · ผูกสาขาได้ (ข้อยกเว้นเดียว) และลง watcherWriteLog · root ผูกไม่ลงบันทึก", { skip }, async () => {
+  const B = load("./branch");
+  assert.equal((await call(B.branchFind, { franchiseId: "FA", tel: "0811000001" }, "u-watch")).code, 200);
+  const r = await call(B.branchAttach, { franchiseId: "FA", shopId: "s2" }, "u-watch");
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(WRITES.map((w) => w.path.split("/")[0]).sort(), ["shop", "watcherWriteLog"]);
+  const log = WRITES.find((w) => w.path.startsWith("watcherWriteLog/"));
+  assert.equal(log.path, "watcherWriteLog/FA_s2_" + new Date("2026-11-10T03:00:00.000Z").getTime());
+  assert.equal(log.data.uid, "u-watch");
+  assert.equal(log.data.op, "franchise.branchAttach");
+  const rr = await call(B.branchAttach, { franchiseId: "FA", shopId: "s2" }, "u-admin");
+  assert.equal(rr.code, 200);
+  assert.equal(rr.body.byAdmin, true);
+  assert.deepEqual(WRITES.map((w) => w.path), ["shop/s2"]);
+});
+
+test("ขาเก่า: uid ที่อยู่แค่ admin/adminConfig (ไม่อยู่ใน watcher/roster) ไม่ใช่ทีมงาน · ค้นสาขา 403", { skip }, async () => {
+  const B = load("./branch");
+  const r = await call(B.branchFind, { franchiseId: "FA", tel: "0811000001" }, "u-old");
+  assert.equal(r.code, 403);
+  const { list } = load("./read");
+  assert.equal((await call(list, {}, "u-old")).body.staffRole, undefined);
 });

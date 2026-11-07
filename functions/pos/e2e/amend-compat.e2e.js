@@ -205,7 +205,14 @@ test("middleware requireShopAccess บนฐานจริง: คนนอก�
   assert.deepEqual([ghost.passed, ghost.res.statusCode, ghost.res.body.error], [false, 404, "shop_not_found"]);
   const adm = await run("u-admin-e2e", f.id.shopA);
   assert.equal(adm.passed, true);
-  assert.deepEqual(adm.req.shopAccess, { shopId: f.id.shopA, uid: "u-admin-e2e", role: "owner", rights: [], byAdmin: true });
+  assert.deepEqual(adm.req.shopAccess, { shopId: f.id.shopA, uid: "u-admin-e2e", role: "owner", rights: [], byAdmin: true, root: true });
+  // watcher: ผ่านด่านร้านแบบอ่านอย่างเดียว · ยิงเส้นเขียนแล้ว 403 watcher_read_only ไม่มีบิล · ขาเก่า (อยู่แค่ adminConfig) = คนนอก
+  const w = await run("u-watch-e2e", f.id.shopA);
+  assert.deepEqual(w.req.shopAccess, { shopId: f.id.shopA, uid: "u-watch-e2e", role: "owner", rights: [], watcher: true, readOnly: true });
+  const wr = await call(create, NOW, { body: saleBody(f), shopAccess: w.req.shopAccess });
+  assert.deepEqual([wr.status, wr.body.error], [403, "watcher_read_only"]);
+  const old = await run("u-old-e2e", f.id.shopA);
+  assert.deepEqual([old.passed, old.res.statusCode, old.res.body.error], [false, 403, "not_shop_member"]);
   const staff = await run(f.id.staff, f.id.shopA);
   assert.deepEqual(staff.req.shopAccess, { shopId: f.id.shopA, uid: f.id.staff, role: "staff", rights: ["116", "124"] });
   const r = await call(create, NOW, { body: saleBody(f), shopAccess: adm.req.shopAccess });

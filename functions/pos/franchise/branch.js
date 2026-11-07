@@ -1,4 +1,7 @@
-// pos/franchise/branch.js — ค้นร้านจากเบอร์ · ผูกร้านเป็นสาขา (ก้อน 9f · DEV-0002) · ทีมงาน Shopchamp เท่านั้น
+// pos/franchise/branch.js — ค้นร้านจากเบอร์ · ผูกร้านเป็นสาขา (ก้อน 9f · DEV-0002) · ทีมงาน Shopchamp เท่านั้น (root หรือ watcher)
+// DEV-0001 watcher (Pack เคาะ 2026-11-07 ข้อ 4): ค้น = watcher · ผูก = watcher ได้ (ข้อยกเว้นเขียนเส้นเดียวของ watcher)
+//   watcher ผูก = ลงบันทึก watcherWriteLog/{franchiseId_shopId_ms} ใน transaction เดียวกับการเขียน {at, uid, op, franchiseId, shopId, movedFrom}
+//   root ผูก = เหมือนทีมงานเดิม (คำตอบ byAdmin:true)
 //
 // สัญญา: shopchamp-center/api/franchise.{branchFind,branchAttach}.yaml
 // แทน (census chunk6-log.md): 281 `fr:modal/Modal_FindShop.js:46` (doc ร้านทั้งก้อนรวมรหัสพนักงาน FD-B2) · 268 `fr:screens/BranchScreen.js:59`
@@ -28,7 +31,7 @@ const branchFind = F.makeHandler("FranchiseBranchFindRequest", async ({ uid, inp
 });
 
 // ── franchise.branchAttach ──
-const branchAttach = F.makeHandler("FranchiseBranchAttachRequest", async ({ uid, input }) => db.runTransaction(async (tx) => {
+const branchAttach = F.makeHandler("FranchiseBranchAttachRequest", async ({ uid, input, now }) => db.runTransaction(async (tx) => {
   const shopRef = db.collection("shop").doc(input.shopId);
   const [{ access }, sSnap] = await Promise.all([
     F.readGate((r) => tx.get(r), input.franchiseId, uid, { adminOnly: true }),
@@ -44,6 +47,10 @@ const branchAttach = F.makeHandler("FranchiseBranchAttachRequest", async ({ uid,
     F.refuse(deny(409, "shop_in_other_franchise", "ร้านนี้ไม่ได้อยู่แฟรนไชส์ที่ระบุ", { currentFranchiseId: "" }));
   }
   tx.update(shopRef, { franchiseId: input.franchiseId });
+  if (access.watcher === true) {
+    const logRef = db.collection("watcherWriteLog").doc(`${input.franchiseId}_${shopRef.id}_${now.getTime()}`);
+    tx.set(logRef, { at: now, uid, op: "franchise.branchAttach", franchiseId: input.franchiseId, shopId: shopRef.id, movedFrom: cur });
+  }
   return { shopId: shopRef.id, franchiseId: input.franchiseId, ...(cur ? { movedFrom: cur } : {}), ...F.adminFlag(access) };
 }));
 

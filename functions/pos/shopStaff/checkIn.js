@@ -9,7 +9,8 @@
 //     ยกเว้นข้อเดียว: op out + แถวของตัวเอง status 'active' แต่แพ็กเกจพนักงานหมด = ให้ออกงานได้ (สิทธิ์ตามแถวนั้น)
 //     แถว inActive (เจ้าของปิดใช้งาน) ยังถูกปัดทุกทาง (decision 2026-11-06)
 //
-// ลำดับ: ไม่มี req.auth.uid 401 no_auth → schema → tx อ่านครบก่อนเขียน: shop · admin/adminConfig · checkIn/{shop doc id + uid} · checkInHistory/{requestId} · profile/{uid}
+// ลำดับ: ไม่มี req.auth.uid 401 no_auth → schema → tx อ่านครบก่อนเขียน: shop · watcher/roster · checkIn/{shop doc id + uid} · checkInHistory/{requestId} · profile/{uid}
+//   watcher ที่ไม่ใช่สมาชิก = 403 watcher_read_only (ลงเวลาเป็นการเขียนข้อมูลร้าน · DEV-0001 watcher)
 //   ร้านไม่มี 404 · ตัดสินสิทธิ์ข้างบน · สิทธิ์ '103' ลงเวลา (เมนู `app:screens/HomeScreen.js:72,188`) → 403 right_required
 //   op in : แพ็กเกจพนักงานหมด 403 staff_package_required (แอปเก่าปัดที่เมนู `HomeScreen.js:546`)
 //           มีใบค้าง requestId เดิม = 200 duplicate · requestId อื่น = 409 already_checked_in (ทิศมาจากปุ่มที่ผู้ใช้กด ไม่เดา · DI-12)
@@ -29,7 +30,8 @@ const { db } = require("../../firebase");
 const { StaffCheckInRequest } = require("@shopchamp/schema");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { hasRight, adminTrail, adminFlag, resolveShopAccess, staffStatusOf, roleOf } = require("../_shared/auth");
+const { hasRight, adminTrail, adminFlag, resolveShopAccess, staffStatusOf, roleOf, isReadOnly } = require("../_shared/auth");
+const WR = require("../_shared/watcherRoster");
 const { isStaffPackageActive } = require("../_shared/premium");
 const { billDateOf } = require("../_shared/billClock");
 const { isObj, Refusal, refuse, thaiReceiptTime, displayName, toIsoDeep } = require("./common");
@@ -51,7 +53,7 @@ function checkIn(deps) {
       const shopDocId = input.shopId;
       const ciId = `${shopDocId}${uid}`;
       const shopRef = db.collection("shop").doc(shopDocId);
-      const cfgRef = db.collection("admin").doc("adminConfig");
+      const cfgRef = WR.rosterRef(db);
       const ciRef = db.collection("checkIn").doc(ciId);
       const histRef = db.collection("checkInHistory").doc(input.requestId);
       const profileRef = db.collection("profile").doc(uid);
@@ -62,7 +64,8 @@ function checkIn(deps) {
         const [shopSnap, cfgSnap, ciSnap, histSnap, profileSnap, notiSnap] = await Promise.all([tx.get(shopRef), tx.get(cfgRef), tx.get(ciRef), tx.get(histRef), tx.get(profileRef), tx.get(notiRef)]);
         if (!shopSnap.exists) refuse(deny(404, "shop_not_found"));
         const shop = shopSnap.data() || {};
-        const verdict = await resolveShopAccess({ shopDocId, shop, uid, now, adminConfig: cfgSnap.exists ? cfgSnap.data() : null });
+        const verdict = await resolveShopAccess({ shopDocId, shop, uid, now, roster: WR.snapToRoster(cfgSnap) });
+        if (verdict.ok && isReadOnly(verdict.access)) refuse(deny(403, "watcher_read_only"));
         if (verdict.ok) access = verdict.access;
         else if (input.op === "out" && verdict.extra && verdict.extra.reason === "inactive" && staffStatusOf(shop, uid, null) === "active") {
           // AC-82: แถว active แต่แพ็กเกจพนักงานหมด → ออกงานได้ด้วยสิทธิ์ของแถวนั้น

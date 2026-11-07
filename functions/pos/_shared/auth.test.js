@@ -60,16 +60,18 @@ async function runShop(db, req) {
   await mw(req, r, () => { nexted = true; });
   return { r, nexted, req };
 }
-const ADMIN = { admin: { adminConfig: { admin: ["u-company"] } } };
+const ROSTER_DATA = { uids: ["u-company", "u-watch"], rootUids: ["u-company"] };
+// u-company = root · u-watch = watcher (อ่านอย่างเดียว) · ทะเบียน watcher/roster (DEV-0001 watcher)
+const ADMIN = { watcher: { roster: ROSTER_DATA } };
 
 // ── requireShopAccess: ต้องผ่าน ──
-test("ผ่าน: เจ้าของ (position 001) → role owner rights [] · อ่าน adminConfig ก่อน (ทีมงานมาก่อนสมาชิก)", async () => {
+test("ผ่าน: เจ้าของ (position 001) → role owner rights [] · อ่าน watcher/roster ก่อน (root มาก่อนสมาชิก)", async () => {
   const db = fakeDb({ shop: { shopA: shopA() }, ...ADMIN });
   const { nexted, req, r } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-owner" } });
   assert.equal(nexted, true);
   assert.equal(r.code, 0);
   assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] });
-  assert.deepEqual(db.reads, ["shop/shopA", "admin/adminConfig"]);
+  assert.deepEqual(db.reads, ["shop/shopA", "watcher/roster"]);
 });
 
 test("ผ่าน: เจ้าของ index 0 เข้าได้แม้แพ็กเกจ staff หมด (กติกาแอปเก่า)", async () => {
@@ -84,38 +86,38 @@ test("ผ่าน: พนักงานที่มีแพ็กเกจ st
   assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["116"] });
 });
 
-test("ผ่าน: ทีมงาน Shopchamp ไม่อยู่ในร้าน → owner + byAdmin (Pack 3-2)", async () => {
+test("ผ่าน: root ไม่อยู่ในร้าน → owner + byAdmin + root (Pack เคาะ 2026-11-07 ข้อ 2)", async () => {
   const db = fakeDb({ shop: { shopA: shopA() }, ...ADMIN });
   const { nexted, req } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
   assert.equal(nexted, true);
-  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true });
-  assert.deepEqual(db.reads, ["shop/shopA", "admin/adminConfig"]);
+  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true, root: true });
+  assert.deepEqual(db.reads, ["shop/shopA", "watcher/roster"]);
 });
 
-test("ผ่าน: ทีมงานเข้าได้แม้ร้านไม่มี humanResource เลย (ร้านรุ่นแรก)", async () => {
+test("ผ่าน: root เข้าได้แม้ร้านไม่มี humanResource เลย (ร้านรุ่นแรก)", async () => {
   const { nexted, req } = await runShop(fakeDb({ shop: { shopA: { shopId: "shopA" } }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
   assert.equal(nexted, true);
   assert.equal(req.shopAccess.byAdmin, true);
 });
 
-test("ผ่าน: ทีมงานที่เป็นพนักงานในร้านด้วย → owner + byAdmin สิทธิ์เต็ม ไม่ใช่สิทธิ์พนักงาน (แอปเก่า LoadingScreen.js:83)", async () => {
+test("ผ่าน: root ที่เป็นพนักงานในร้านด้วย → owner + byAdmin สิทธิ์เต็ม ไม่ใช่สิทธิ์พนักงาน (แอปเก่า LoadingScreen.js:83)", async () => {
   const shop = shopA();
   shop.humanResource.push({ id: "u-company", name: "ทีมงาน", position: ["002"], status: "active", rights: ["116"] });
   const { nexted, req } = await runShop(fakeDb({ shop: { shopA: shop }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
   assert.equal(nexted, true);
-  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true });
+  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true, root: true });
   assert.equal(A.hasRight(req.shopAccess, "143"), true);
 });
 
-test("ผ่าน: ทีมงานที่เป็นพนักงาน inActive / แพ็กเกจ staff หมด → ยังเข้าได้แบบทีมงาน", async () => {
+test("ผ่าน: root ที่เป็นพนักงาน inActive / แพ็กเกจ staff หมด → ยังเข้าได้แบบ root", async () => {
   const shop = shopA([]);
   shop.humanResource.push({ id: "u-company", position: ["002"], status: "inActive" });
-  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop, uid: "u-company", now: NOW, adminConfig: { admin: ["u-company"] } });
-  assert.deepEqual(r, { ok: true, access: { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true } });
+  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop, uid: "u-company", now: NOW, roster: ROSTER_DATA });
+  assert.deepEqual(r, { ok: true, access: { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true, root: true } });
 });
 
-test("ทีมงานมาก่อนสมาชิก ไม่ทำให้คนทั่วไปได้ byAdmin: พนักงานปกติยังได้ rights ของตัวเอง", async () => {
-  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-staff", now: NOW, adminConfig: { admin: ["u-company"] } });
+test("root มาก่อนสมาชิก ไม่ทำให้คนทั่วไปได้ byAdmin: พนักงานปกติยังได้ rights ของตัวเอง", async () => {
+  const r = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-staff", now: NOW, roster: ROSTER_DATA });
   assert.deepEqual(r.access, { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["116"] });
 });
 
@@ -145,13 +147,76 @@ test("ปัด: status ไม่ใช่ 'active' (inActive · ไม่มี
   }
 });
 
-test("ปัด (fail-closed): adminConfig ไม่มี · ช่อง admin ไม่ใช่ array · เป็น string → ทีมงานไม่ทะลุ", async () => {
-  for (const admin of [{}, { adminConfig: {} }, { adminConfig: { admin: "u-company" } }, { adminConfig: { admin: { 0: "u-company" } } }]) {
-    const { nexted, r } = await runShop(fakeDb({ shop: { shopA: shopA() }, admin }), { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
-    assert.equal(nexted, false, JSON.stringify(admin));
-    assert.equal(r.code, 403);
-    assert.equal(r.body.error, "not_shop_member");
+test("ปัด (fail-closed): watcher/roster ไม่มี · ว่าง · uids ไม่ใช่ array · เป็น string → ทีมงานไม่ทะลุ (root และ watcher)", async () => {
+  const bad = [undefined, {}, { uids: [] }, { uids: "u-company" }, { uids: { 0: "u-company" } }, { rootUids: ["u-company"] }, { uids: [5, null] }];
+  for (const roster of bad) {
+    for (const uid of ["u-company", "u-watch"]) {
+      const data = { shop: { shopA: shopA() }, ...(roster === undefined ? {} : { watcher: { roster } }) };
+      const { nexted, r } = await runShop(fakeDb(data), { body: { shopId: "shopA" }, auth: { uid } });
+      assert.equal(nexted, false, JSON.stringify(roster) + uid);
+      assert.equal(r.code, 403);
+      assert.equal(r.body.error, "not_shop_member");
+    }
   }
+});
+
+test("🔒 ตัวกันขาเก่ากลับมา: uid อยู่ใน admin/adminConfig.admin แต่ไม่อยู่ใน watcher/roster → ไม่ใช่ทีมงาน (403)", async () => {
+  const db = fakeDb({ shop: { shopA: shopA() }, admin: { adminConfig: { admin: ["u-company", "u-watch"] } }, watcher: { roster: { uids: ["u-other"] } } });
+  const { nexted, r } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
+  assert.equal(nexted, false);
+  assert.equal(r.code, 403);
+  assert.ok(!db.reads.includes("admin/adminConfig"), "ต้องไม่อ่าน admin/adminConfig เลย");
+});
+
+test("watcher ไม่อยู่ในร้าน → owner + watcher + readOnly (ไม่มี byAdmin ⇒ ไม่ติดรอย · ไม่ใช้ uid ตัวเองเป็นพนักงาน)", async () => {
+  const { nexted, req } = await runShop(fakeDb({ shop: { shopA: shopA() }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-watch" } });
+  assert.equal(nexted, true);
+  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-watch", role: "owner", rights: [], watcher: true, readOnly: true });
+  assert.deepEqual(A.adminTrail(req.shopAccess), {});
+  assert.equal(A.staffStatusOf(shopA(), "u-watch", req.shopAccess), "not_in_shop");
+});
+
+test("watcher ที่เป็นพนักงาน active ของร้าน → ได้สิทธิ์ตามแถวตัวเอง (เขียนได้ในฐานะพนักงาน) · inActive → watcher อ่านอย่างเดียว", async () => {
+  const shop = shopA();
+  shop.humanResource.push({ id: "u-watch", position: ["002"], status: "active", rights: ["116"] });
+  const r1 = await A.resolveShopAccess({ shopDocId: "shopA", shop, uid: "u-watch", now: NOW, roster: ROSTER_DATA });
+  assert.deepEqual(r1.access, { shopId: "shopA", uid: "u-watch", role: "staff", rights: ["116"] });
+  shop.humanResource[shop.humanResource.length - 1].status = "inActive";
+  const r2 = await A.resolveShopAccess({ shopDocId: "shopA", shop, uid: "u-watch", now: NOW, roster: ROSTER_DATA });
+  assert.equal(r2.access.readOnly, true);
+});
+
+test("root ⊆ watcher: rootUids ที่ไม่อยู่ใน uids ไม่ใช่ root · rootUids เกิน 10 = ไม่มี root เลย (เหลือ watcher)", async () => {
+  const notIn = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-x", now: NOW, roster: { uids: ["u-company"], rootUids: ["u-x"] } });
+  assert.equal(notIn.ok, false);
+  const many = Array.from({ length: 11 }, (_, i) => "u-r" + i);
+  const over = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-r0", now: NOW, roster: { uids: many, rootUids: many } });
+  assert.equal(over.access.byAdmin, undefined);
+  assert.equal(over.access.readOnly, true);
+  const ten = await A.resolveShopAccess({ shopDocId: "shopA", shop: shopA(), uid: "u-r0", now: NOW, roster: { uids: many, rootUids: many.slice(0, 10) } });
+  assert.equal(ten.access.root, true);
+});
+
+test("ปัด: อ่าน watcher/roster ล้ม → 500 (ไม่เดาว่าเป็นทีมงาน)", async () => {
+  const data = { shop: { shopA: shopA() } };
+  const db = fakeDb(data);
+  const orig = db.collection;
+  db.collection = (c) => (c === "watcher" ? { doc: () => ({ get: async () => { throw new Error("roster down"); } }) } : orig(c));
+  const { nexted, r } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-company" } });
+  assert.equal(nexted, false);
+  assert.equal(r.code, 500);
+});
+
+test("callerAccess: watcher บนเส้นเขียน (ไม่ส่ง {read:true}) → 403 watcher_read_only · เส้นอ่านผ่าน · root เขียนได้", () => {
+  const w = { shopId: "shopA", uid: "u-watch", role: "owner", rights: [], watcher: true, readOnly: true };
+  assert.equal(A.callerAccess({ shopAccess: w }, "shopA").error, "watcher_read_only");
+  assert.equal(A.callerAccess({ shopAccess: w }, "shopA").status, 403);
+  assert.equal(A.callerAccess({ shopAccess: w }, "shopA", { read: false }).error, "watcher_read_only");
+  assert.equal(A.callerAccess({ shopAccess: { ...w, readOnly: undefined } }, "shopA").error, "watcher_read_only"); // ช่อง watcher ตัวเดียวก็ปัด
+  assert.equal(A.callerAccess({ shopAccess: w }, "shopA", { read: true }).ok, true);
+  assert.equal(A.callerAccess({ shopAccess: w }, "shopB", { read: true }).error, "wrong_shop");
+  const root = { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true, root: true };
+  assert.equal(A.callerAccess({ shopAccess: root }, "shopA").ok, true);
 });
 
 test("ปัด: ร้านไม่มี → 404 shop_not_found · shopId ไม่มี/รูปผิด → 400 · ไม่มี req.auth → 401 · ฐานล้ม → 500", async () => {

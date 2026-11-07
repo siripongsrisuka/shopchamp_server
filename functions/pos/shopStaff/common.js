@@ -4,7 +4,7 @@
 "use strict";
 
 const { deny } = require("../_shared/respond");
-const { memberStatusOf } = require("../_shared/auth");
+const { memberStatusOf, isStaffAccess } = require("../_shared/auth");
 const { SHOP_TZ } = require("../_shared/billClock");
 
 const isObj = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
@@ -17,11 +17,11 @@ const refuse = (d) => { throw new Refusal(d); };
 /**
  * callerStillActive(shop, access, now) — ด่านซ้ำใน transaction: ผู้เรียกยัง active ในร้านตอนเขียนจริงไหม
  *   (middleware ตัดสินจากการอ่านก่อนหน้า · ร้านถอดสิทธิ์ระหว่างนั้นได้ · harness ส่ง req.shopAccess มาเอง)
- *   ทีมงาน (byAdmin) ผ่านทุกร้าน (Pack เคาะ 2026-11-06 ข้อ 3-2) · คนอื่นใช้กติกาเดียวกับ requireShopAccess (แพ็กเกจพนักงานด้วย)
+ *   ทีมงาน (root/watcher · isStaffAccess) ผ่านทุกร้าน · watcher ถูกปัดเขียนที่ callerAccess ก่อนถึงตรงนี้ · คนอื่นใช้กติกาเดียวกับ requireShopAccess
  * @returns {null | deny 403 not_shop_member {reason}}
  */
 function callerStillActive(shop, access, now) {
-  if (access && access.byAdmin === true) return null;
+  if (isStaffAccess(access)) return null;
   const m = memberStatusOf(shop, access && access.uid, now);
   if (m.status === "active") return null;
   return deny(403, "not_shop_member", undefined, { reason: m.status });

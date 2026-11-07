@@ -15,7 +15,7 @@
 
 const { db } = require("../../firebase");
 const { fail, deny, sendDeny, parseOr400 } = require("../_shared/respond");
-const { callerAccess, resolveShopRef, hasRight, staffStatusOf, belongsToShop } = require("../_shared/auth");
+const { callerAccess, resolveShopRef, hasRight, staffStatusOf, belongsToShop, isStaffAccess } = require("../_shared/auth");
 const { readNow } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
 const logic = require("@shopchamp/logic");
@@ -30,7 +30,7 @@ const RIGHT = Object.freeze({ REPORT: "106", BILL_HISTORY: "117", SHIFT: "102" }
  */
 async function openReport(req, res, schema, { rights } = {}) {
   const body = req && req.body && typeof req.body === "object" ? req.body : {};
-  const gate = callerAccess(req, body.shopId);
+  const gate = callerAccess(req, body.shopId, { read: true }); // รายงานอ่านอย่างเดียว ⇒ watcher ผ่าน
   if (!gate.ok && gate.status === 401) { sendDeny(res, gate); return null; }
   const input = parseOr400(schema, body, res);
   if (input === null) return null;
@@ -42,7 +42,7 @@ async function openReport(req, res, schema, { rights } = {}) {
   const shopSnap = await db.collection("shop").doc(access.shopId).get();
   if (!shopSnap.exists) { fail(res, 404, "shop_not_found"); return null; }
   const shop = shopSnap.data() || {};
-  if (access.byAdmin !== true) {
+  if (!isStaffAccess(access)) {
     const st = staffStatusOf(shop, access.uid, access);
     if (st !== "active") {
       sendDeny(res, deny(403, "not_shop_member", undefined, { reason: st === "inactive" ? "inactive" : "not_a_member" }));
