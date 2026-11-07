@@ -1,6 +1,6 @@
 // pos/report/billList — รายการบิลของช่วงวันธุรกิจ ล่าสุดก่อน แบ่งหน้า (ก้อน 9e · DEV-0001)
 //
-// สัญญา: shopchamp-center/api/report.billList.yaml · route POST /pos_heavy/report/bill-list · ยังไม่ผูก routes.js และยังไม่ deploy
+// สัญญา: shopchamp-center/api/report.billList.yaml · route POST /pos_heavy/report/bill-list · ผูก routes.js แล้ว
 // รูป: factory (deps) => handler(req, res) · deps: now (ด่านแพ็กเกจ · ไม่ส่ง = new Date())
 // แพ็กเกจ: ร้านไม่พรีเมี่ยมเลือกวันเริ่มย้อนเกิน 62 วันไม่ได้ 403 premium_required (ด่านเดิมของเว็บ · freeWindowGate · ❓ 9e-reports.md คำถาม 7)
 // แทน: server เดิม `/bill/test` (shopchamp_server/functions/apis/bill.js:18-62) ที่จอประวัติบิลของแอป main3 เรียก
@@ -10,6 +10,9 @@
 // แบ่งหน้า: เรียง dateTime ใหม่ก่อน (เวลาเท่ากันเรียง doc id มากก่อน · ตรงกับ orderBy dateTime desc ของ Firestore)
 //   cursor = {at: dateTime ของแถวสุดท้าย, id} · หน้าถัดไปค้น dateTime <= at แล้วตัดแถวที่ไม่อยู่หลัง cursor
 //   ค้นเผื่อ TIE_SLACK แถวต่อ key กันบิลเวลาเดียวกันเกินหน้า · ❓ เวลาเดียวกันเกิน slack ในมิลลิวินาทีเดียว = อาจข้ามแถว (ยังไม่เคยเห็นในข้อมูล)
+// detail:true (DEV-0002 · จอ 4.1 ข้อมูลใบเสร็จ · 4.3 รายงานภาษี · 1.2 รายวันแบบรายบิล ของเว็บ): อ่านเอกสารเต็ม (ไม่ select)
+//   แถวมี detail = logic.billDetailOf (ยอดสินค้า ส่วนลด ต้นทุน ภาษี ช่องจ่ายหลังทอน สมาชิก) และ bill = logic.plainDoc (เวลาเป็น ISO) ให้จอเปิดใบเสร็จ
+//   เพดานต่อหน้าเท่าเดิม (pageSize ≤ 200) · เว็บไล่ cursor เอง
 // Firestore อ่าน: shop/{shopId} · bill where shopId == key and dateTime in (start, upTo] order by dateTime desc limit · เขียน: ไม่มี
 "use strict";
 
@@ -51,7 +54,8 @@ function billList(deps) {
         if (cur.ms <= range.start.getTime()) return ok(res, { ...head, rows: [], nextCursor: null });
         if (cur.ms < upTo.getTime()) upTo = new Date(cur.ms);
       }
-      const entries = await billsByTime({ keys, shopRef, after: range.start, upTo, fields: LIST_FIELDS, limit: pageSize + 1 + TIE_SLACK });
+      const detail = input.detail === true;
+      const entries = await billsByTime({ keys, shopRef, after: range.start, upTo, fields: detail ? undefined : LIST_FIELDS, limit: pageSize + 1 + TIE_SLACK });
       let list = entries
         .map((e) => ({ e, t: timeOf(e.data) }))
         .sort((a, b) => (b.t - a.t) || (a.e.id < b.e.id ? 1 : a.e.id > b.e.id ? -1 : 0));
@@ -61,7 +65,9 @@ function billList(deps) {
       const nextCursor = list.length > pageSize && last && Number.isFinite(last.t) ? { at: new Date(last.t).toISOString(), id: last.e.id } : null;
       return ok(res, {
         ...head,
-        rows: page.map(({ e }) => logic.reportBillRow(e.id, e.data, shop.cutOff)),
+        rows: page.map(({ e }) => (detail
+          ? { ...logic.reportBillRow(e.id, e.data, shop.cutOff), detail: logic.billDetailOf(e.data), bill: logic.plainDoc(e.data) }
+          : logic.reportBillRow(e.id, e.data, shop.cutOff))),
         nextCursor,
       });
     } catch (e) {

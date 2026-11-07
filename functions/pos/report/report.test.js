@@ -29,8 +29,9 @@ function query(coll, st) {
         const x = ms(a), y = ms(b);
         return op === "==" ? x === y : op === ">" ? x > y : op === ">=" ? x >= y : op === "<" ? x < y : op === "<=" ? x <= y : false;
       };
-      let docs = Object.entries(DATA[coll] || {}).filter(([, d]) => st.where.every(([f, op, v]) => cmp(d[f], op, v)));
-      for (const [f, dir] of st.orderBy.slice().reverse()) docs.sort(([ia, a], [ib, b]) => ((ms(a[f]) - ms(b[f])) || (ia < ib ? -1 : 1)) * (dir === "desc" ? -1 : 1));
+      const at = (d, f) => f.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), d); // member.id (DEV-0002)
+      let docs = Object.entries(DATA[coll] || {}).filter(([, d]) => st.where.every(([f, op, v]) => cmp(at(d, f), op, v)));
+      for (const [f, dir] of st.orderBy.slice().reverse()) docs.sort(([ia, a], [ib, b]) => ((ms(at(a, f)) - ms(at(b, f))) || (ia < ib ? -1 : 1)) * (dir === "desc" ? -1 : 1));
       if (st.limit) docs = docs.slice(0, st.limit);
       return { docs: docs.map(([id, d]) => ({ id, data: () => d })) };
     },
@@ -52,6 +53,8 @@ const { salesTotals } = require("./salesTotals");
 const { taxInvoices, TAX_FIELDS } = require("./taxInvoices");
 const { duplicateNumbers } = require("./duplicateNumbers");
 const { shiftHistory } = require("./shiftHistory");
+const { breakdown } = require("./breakdown");
+const { memberBills } = require("./memberBills");
 
 const OWNER = { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] };
 const NOW = () => new Date("2026-11-12T03:00:00.000Z");
@@ -173,6 +176,8 @@ test("③ ฐานล้ม = 500 internal_error ทุก route · ไม่�
     [taxInvoices, { shopId: "shopA", month: "202611" }],
     [duplicateNumbers, { shopId: "shopA", month: "202611" }],
     [shiftHistory, { shopId: "shopA", fromDay: "20261110", toDay: "20261110" }],
+    [breakdown, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", dimension: "item" }],
+    [memberBills, { shopId: "shopA", memberId: "m-1" }],
   ];
   for (const [f, body] of cases) {
     reset({ shop: { shopA: shop } });
@@ -197,4 +202,79 @@ test("billList: cursor เวลาเดียวกันหลายใบ �
     if (!cursor) break;
   }
   assert.deepEqual(seen, ["x3", "x2", "x1", "y"]);
+});
+
+// ───────── DEV-0002 ─────────
+test("DEV-0002 breakdown: ค้นทั้งเอกสาร (ไม่ select) · ช่วงตาม cutOff · มิติ item ส่วนลดกระจาย", async () => {
+  reset({ shop: { shopA: shop }, bill: { b1: bill({ moneyMustPaid: 90, manualDiscount: 10 }) } });
+  const r = await call(breakdown, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", dimension: "item" });
+  assert.equal(r.code, 200);
+  const q = QUERIES[0];
+  assert.equal(q.coll, "bill");
+  assert.equal(q.select, null);
+  assert.deepEqual(q.where.map(([f, op]) => [f, op]), [["shopId", "=="], ["dateTime", ">"], ["dateTime", "<="]]);
+  assert.equal(q.where[1][2].toISOString(), "2026-11-09T20:00:00.000Z");
+  assert.deepEqual(r.body.rows.map((x) => [x.id, x.netAfterBillDiscount, x.billDiscountShare]), [["p1", 90, 10]]);
+  assert.equal(r.body.dimension, "item");
+});
+
+test("DEV-0002 billList detail: ไม่ select (เอกสารเต็ม) · แถวมี detail + bill เวลาเป็น ISO · ไม่ส่ง detail = select เดิม ไม่มี detail/bill", async () => {
+  reset({ shop: { shopA: shop }, bill: { b1: bill({ member: { id: "m-1", name: "สมใจ" } }) } });
+  const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", detail: true });
+  assert.equal(r.code, 200);
+  assert.equal(QUERIES[0].select, null);
+  assert.equal(r.body.rows[0].detail.memberId, "m-1");
+  assert.equal(r.body.rows[0].bill.dateTime, "2026-11-10T03:00:00.000Z");
+  assert.equal(r.body.rows[0].bill.moneyMustPaid, 100);
+  reset({ shop: { shopA: shop }, bill: { b1: bill({}) } });
+  const n = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110" });
+  assert.deepEqual(QUERIES[0].select, LIST_FIELDS);
+  assert.equal("detail" in n.body.rows[0], false);
+  assert.equal("bill" in n.body.rows[0], false);
+});
+
+test("DEV-0002 shiftHistory dayBy open: ค้นด้วย openTime · ไม่ส่ง = closeTime เหมือนเดิม", async () => {
+  reset({ shop: { shopA: shop }, shiftHistory: { h1: shCur } });
+  const o = await call(shiftHistory, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", dayBy: "open" });
+  assert.equal(o.code, 200);
+  assert.deepEqual(QUERIES[0].where.map(([f]) => f), ["shopId", "openTime", "openTime"]);
+  assert.deepEqual(QUERIES[0].orderBy, [["openTime", "desc"]]);
+  assert.equal(o.body.rows[0].cashRemain, 1500);
+  reset({ shop: { shopA: shop }, shiftHistory: { h1: shCur } });
+  await call(shiftHistory, { shopId: "shopA", fromDay: "20261110", toDay: "20261110" });
+  assert.deepEqual(QUERIES[0].where.map(([f]) => f), ["shopId", "closeTime", "closeTime"]);
+});
+
+test("DEV-0002 memberBills: ค้น member.id + orderBy dateTime desc + limit · ร้านอื่นทิ้ง · ใบยกเลิกทิ้ง · cursor เดินครบไม่ซ้ำ", async () => {
+  const B = {};
+  for (let i = 0; i < 5; i++) B[`m${i}`] = bill({ member: { id: "m-1" }, dateTime: ts(new Date(Date.parse("2026-11-10T03:00:00.000Z") + i * 60000).toISOString()), void: i === 2 });
+  B.other = bill({ shopId: "shopB", member: { id: "m-1" }, dateTime: ts("2026-11-10T09:00:00.000Z") });
+  reset({ shop: { shopA: shop }, bill: B });
+  const seen = [];
+  let cursor;
+  for (let i = 0; i < 6; i++) {
+    const r = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 1, ...(cursor ? { cursor } : {}) });
+    assert.equal(r.code, 200);
+    if (i === 0) {
+      assert.deepEqual(QUERIES[0].where.map(([f, op]) => [f, op]), [["member.id", "=="]]);
+      assert.deepEqual(QUERIES[0].orderBy, [["dateTime", "desc"]]);
+      assert.equal(QUERIES[0].limit, 52);
+    }
+    seen.push(...r.body.rows.map((x) => x.id));
+    cursor = r.body.nextCursor;
+    if (!cursor) break;
+  }
+  assert.deepEqual(seen, ["m4", "m3", "m1", "m0"]);
+});
+
+test("DEV-0002 memberBills: ฐานคืนเต็มเพดานแต่เป็นใบยกเลิกทั้งหมด → หน้าว่างแต่มี nextCursor ให้เดินต่อ (ไม่ตัดจบเงียบ)", async () => {
+  const B = {};
+  for (let i = 0; i < 60; i++) B[`v${String(i).padStart(2, "0")}`] = bill({ member: { id: "m-1" }, void: true, dateTime: ts(new Date(Date.parse("2026-11-10T06:00:00.000Z") + i * 1000).toISOString()) });
+  B.ok1 = bill({ member: { id: "m-1" }, dateTime: ts("2026-11-10T03:00:00.000Z") });
+  reset({ shop: { shopA: shop }, bill: B });
+  const r1 = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 1 });
+  assert.deepEqual(r1.body.rows, []);
+  assert.ok(r1.body.nextCursor);
+  const r2 = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 1, cursor: r1.body.nextCursor });
+  assert.deepEqual(r2.body.rows.map((x) => x.id), ["ok1"]);
 });

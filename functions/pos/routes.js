@@ -85,6 +85,9 @@ const ROUTES = Object.freeze([
   { contract: "report.taxInvoices", path: "/report/tax-invoices", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/taxInvoices").taxInvoices },
   { contract: "report.duplicateNumbers", path: "/report/duplicate-numbers", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/duplicateNumbers").duplicateNumbers },
   { contract: "report.shiftHistory", path: "/report/shift-history", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/shiftHistory").shiftHistory },
+  // DEV-0002 เว็บเจ้าของร้าน: ยอดแยกมิติ 14 จอรายงาน · บิลของสมาชิก
+  { contract: "report.breakdown", path: "/report/breakdown", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/breakdown").breakdown },
+  { contract: "report.memberBills", path: "/report/member-bills", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/memberBills").memberBills },
 
   // ก้อน 9f เว็บแฟรนไชส์ (DEV-0002) · auth user (ไม่มีร้านใน body · ตัดสินสิทธิ์จาก doc แฟรนไชส์ใน handler) · segment franchise = pos · franchise-report = pos_heavy
   { contract: "franchise.list", path: "/franchise/list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").list },
