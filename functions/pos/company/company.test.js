@@ -70,7 +70,10 @@ async function call(handler, req) {
 const APP = path.resolve(__dirname, "../../../../shopchamp_app");
 function loadOld(name, cache = {}) {
   if (cache[name]) return cache[name];
-  let src = execFileSync("git", ["-C", APP, "show", `main3:src/config/${name}.js`], { encoding: "utf8" });
+  // ไม่ส่ง GIT_DIR/GIT_INDEX_FILE ของ hook ต่อ: ตอน pre-commit จาก worktree ค่านี้ชี้ repo server ⇒ อ่าน main3 ของแอปไม่เจอ
+  const env = { ...process.env };
+  for (const k of ["GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_PREFIX"]) delete env[k];
+  let src = execFileSync("git", ["-C", APP, "show", `main3:src/config/${name}.js`], { encoding: "utf8", env });
   const deps = [];
   src = src.replace(/^import\s+(\w+)\s+from\s+["']\.\/(\w+)["'];?\s*$/gm, (_, v, f) => { deps.push([v, f]); return ""; });
   src = src.replace(/export default/, "module.exports =");
@@ -235,6 +238,57 @@ test("packageOrder: กดครั้งแรกสำเร็จ แล้�
   assert.equal(r2.body.orderNumber, "202611000006");
   assert.equal(DATA.admin.packageNumber.value, 6, "ตัวนับไม่ขยับรอบส่งซ้ำ");
   assert.equal(Object.keys(DATA.notification).length, 1, "notification ใบเดียว");
+});
+
+// ── ③b ใบแพ็กเกจขอใบกำกับ (DEV-0002 · Pack เคาะ 2026-11-07): รายปีเท่านั้น · VAT คิดที่ server ──
+const PKG_DATA = () => ({
+  shop: { A: { shopId: "A", name: "ร้าน" } },
+  profile: { u1: { name: "ก", tel: "0" } },
+  // รูปเดียวกับฐานจริง (วัด 2026-11-07): แถวราคามี day เป็นข้อความ
+  admin: { package: { value: [{ name: "พรีเมี่ยม", status: true, price: [{ id: "1", price: 350, save: 0, day: "1 เดือน" }, { id: "2", price: 3500, save: 700, day: "12 เดือน" }] }] }, packageNumber: { value: 5 } },
+});
+const PKG_SLIP = "https://firebasestorage.googleapis.com/v0/b/shopcham-24b0b.appspot.com/o/packageOrder%2Fs.jpg?alt=media";
+const PKG_REQ = (body) => ({ shopAccess: { shopId: "A", uid: "u1", role: "owner", rights: [] }, body: { shopId: "A", slipUrl: PKG_SLIP, orderUUID: "2c5ea4c0-4067-11e9-8bad-9b1deb4d3b7d", ...body } });
+
+test("packageOrder vat: รายปีขอใบกำกับ → ใบมี vat true · totalPrice · vatAmount · vatDetail · net รวม VAT · ส่งซ้ำได้ใบเดิม", async () => {
+  DATA = PKG_DATA();
+  const h = packageOrder({ now: () => NOW });
+  const req = PKG_REQ({ packageIds: ["2"], expectedNet: 3745, vat: true, vatDetail: "บริษัท ก จำกัด 0105556000000" });
+  const r = await call(h, req);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(r.body.net, 3745);
+  const o = DATA.packageOrder[req.body.orderUUID];
+  assert.deepEqual([o.vat, o.totalPrice, o.vatAmount, o.vatDetail, o.net, o.email], [true, 3500, 245, "บริษัท ก จำกัด 0105556000000", 3745, ""]);
+  const again = await call(h, { ...req, body: { ...req.body } });
+  assert.deepEqual([again.code, again.body.duplicate, again.body.net], [200, true, 3745]);
+  assert.equal(DATA.admin.packageNumber.value, 6);
+});
+
+test("packageOrder vat: รายเดือนขอใบกำกับ → 409 tax_invoice_yearly_only ไม่เขียนอะไร · ยอดก่อน VAT ของรายปี → 409 price_changed {net รวม VAT}", async () => {
+  DATA = PKG_DATA();
+  const h = packageOrder({ now: () => NOW });
+  WRITES = [];
+  const m = await call(h, PKG_REQ({ packageIds: ["1"], expectedNet: 374.5, vat: true, vatDetail: "x" }));
+  assert.deepEqual([m.code, m.body.error, m.body.packageId], [409, "tax_invoice_yearly_only", "1"]);
+  assert.equal(Object.keys(DATA.packageOrder || {}).length, 0);
+  assert.equal(Object.keys(DATA.notification || {}).length, 0);
+  assert.equal(DATA.admin.packageNumber.value, 5);
+  const p = await call(h, PKG_REQ({ packageIds: ["2"], expectedNet: 3500, vat: true, vatDetail: "x" }));
+  assert.deepEqual([p.code, p.body.error, p.body.net], [409, "price_changed", 3745]);
+  // ไม่ขอใบกำกับ = รูปเดิม ไม่มีช่อง VAT เพิ่ม
+  const n = await call(h, PKG_REQ({ packageIds: ["1"], expectedNet: 350, vatDetail: "ค้างจากจอ" }));
+  assert.equal(n.code, 200);
+  const o = Object.values(DATA.packageOrder)[0];
+  assert.equal(o.vat, false);
+  for (const k of ["totalPrice", "vatAmount", "vatDetail"]) assert.equal(k in o, false, k);
+});
+
+test("packageOrder vat: samePackages แยกใบที่ขอใบกำกับกับไม่ขอ", () => {
+  const { samePackages } = require("./packageOrder");
+  assert.equal(samePackages({ packageId: ["2"], vat: true }, { packageIds: ["2"], vat: true }), true);
+  assert.equal(samePackages({ packageId: ["2"], vat: false }, { packageIds: ["2"] }), true);
+  assert.equal(samePackages({ packageId: ["2"], vat: false }, { packageIds: ["2"], vat: true }), false);
+  assert.equal(samePackages({ packageId: ["2"], vat: true }, { packageIds: ["2"], vat: false }), false);
 });
 
 // ── ④ สร้างร้าน: กดซ้ำ 2 ครั้งได้ร้านเดียว เลขเดียว ──
