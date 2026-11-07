@@ -38,7 +38,7 @@
     "usb": "^2.9.0",
     "vitest": "^0.29.2",
     "@shopchamp/schema": "file:vendor/shopchamp-schema-0.1.10.tgz",
-    "@shopchamp/logic": "file:vendor/shopchamp-logic-0.1.4.tgz"
+    "@shopchamp/logic": "file:vendor/shopchamp-logic-0.1.5.tgz"
   },
   "devDependencies": {
     "eslint": "^7.32.0",
