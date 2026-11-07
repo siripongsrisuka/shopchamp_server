@@ -7,7 +7,7 @@
 //   ③ checkIfAuthenticated  ไม่มี token / token ไม่ผ่าน = 401 no_auth (ตรวจก่อนอ่าน body · คนไม่มี token ส่งของใหญ่มาก็ไม่ถูกอ่าน)
 //   ④ bodyLimit + express.json   เกินเพดาน = 413 payload_too_large · JSON เสีย = 400 invalid_json
 //   ⑤ stripBody ลบ field ภายในจาก body อีกรอบหลังอ่าน (ลบแค่ใน body · req.auth ที่ ③ ตั้งต้องอยู่ต่อ)
-//   ⑥ requireShopAccess (route auth 'shop')   ร้านจาก body.shopId
+//   ⑥ requireShopAccess (route auth 'shop')   ร้านจาก body.shopId · แถว access:"reportRead" = requireReportReadAccess (legacy owner-web parity ชั่วคราว)
 //   ⑦ handler
 // ซองคำตอบเดียว: สำเร็จ 2xx {ok:true,...} · ไม่สำเร็จ non-2xx {ok:false, error, message} (respond.js) · รวม 404 และ error กลาง
 //
@@ -81,6 +81,9 @@ function checkRegistry(routes, publicRoutes) {
     seen.add(r.path);
     if (!["shop", "user", "public"].includes(r.auth)) problems.push(`${r.path} auth ไม่รู้จัก "${r.auth}"`);
     if (r.auth === "public" && !pub.has(r.path)) problems.push(`${r.path} ไม่มีด่านตัวตนแต่ไม่อยู่ใน public-routes.js`);
+    // access "reportRead" (legacy owner-web parity · ไม่ดู status/แพ็กเกจพนักงาน) ให้ได้เฉพาะ route รายงานอ่านอย่างเดียว
+    if (r.access !== undefined && r.access !== "reportRead") problems.push(`${r.path} access ไม่รู้จัก "${r.access}"`);
+    if (r.access === "reportRead" && (r.auth !== "shop" || !/^report\./.test(String(r.contract)))) problems.push(`${r.path} ใช้ access reportRead ได้เฉพาะ route report.* ที่ auth shop`);
   }
   for (const p of pub) {
     const r = routes.find((x) => x.path === p);
@@ -95,11 +98,13 @@ function checkRegistry(routes, publicRoutes) {
  *   checkIfAuthenticated / requireShopAccess ไม่ส่ง = ตัวจริงจาก _shared/auth.js
  *   routes / publicRoutes ไม่ส่ง = ทะเบียนจริง (เทสส่งตัวกลายพันธุ์มาพิสูจน์ว่าด่านจับได้)
  */
-function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, routes = ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
+function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requireReportReadAccess, routes = ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
   checkRegistry(routes, publicRoutes);
   const auth = require("./_shared/auth");
   const authn = checkIfAuthenticated || auth.checkIfAuthenticated;
   const shopz = requireShopAccess || auth.requireShopAccess;
+  // เทสที่ส่ง requireShopAccess ปลอมมาอย่างเดียว ⇒ route รายงานใช้ตัวปลอมเดียวกัน (ไม่ซ่อนตัวจริงไว้ใต้เทส)
+  const reportz = requireReportReadAccess || (requireShopAccess ? requireShopAccess : auth.requireReportReadAccess);
 
   const app = express();
   app.disable("x-powered-by");
@@ -116,7 +121,7 @@ function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, routes
     const chain = [scrubInternal];
     if (r.auth !== "public") chain.push(authn);
     chain.push(bodyLimit(limit), express.json({ limit }), stripBody);
-    if (r.auth === "shop") chain.push(shopz);
+    if (r.auth === "shop") chain.push(r.access === "reportRead" ? reportz : shopz);
     app.post(r.path, ...chain, handler);
   }
 

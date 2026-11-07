@@ -289,6 +289,9 @@ service cloud.firestore {
     match /officePasskeys/{id} { allow read, write: if false; }
     match /officePasskeyChallenges/{id} { allow read, write: if false; }
     match /officeAudit/{id} { allow read, write: if false; }
+    // ลิงก์ login ใช้ครั้งเดียว (DEV-0001 · owner-web-login-design.md §2.2): server เท่านั้น · doc มี secretHash + ผนึก HMAC
+    //   (ไม่มี match ก็ปัดอยู่แล้ว · เขียนไว้ให้เห็นชัด · rules ที่ live ยังเปิด ⇒ server ไม่เชื่อ doc ที่ผนึกไม่ตรง)
+    match /webLogin/{id} { allow read, write: if false; }
 
     // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
     // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex

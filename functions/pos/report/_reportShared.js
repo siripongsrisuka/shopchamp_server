@@ -7,6 +7,8 @@
 //   ไม่มี req.shopAccess 401 no_shop_access → body ผิด schema 400 invalid_request → body.shopId ≠ ร้านที่ผ่านด่าน 403 wrong_shop
 //   → สิทธิ์ (พนักงานต้องมีรหัสใดรหัสหนึ่ง · เจ้าของ/ทีมงานผ่าน) 403 right_required
 //   → อ่าน shop/{shopId} · ไม่มี 404 shop_not_found
+//   ⚠️ legacy owner-web parity ชั่วคราว (Pack เคาะ 2026-11-07 · owner-web-census.md): สิทธิ์ '107' ใช้แทนรหัสที่ route ขอได้เสมอ (reportRights)
+//     · ด่านร้านของ route รายงาน = requireReportReadAccess (routes.js access:"reportRead") · access.legacyReport = ตรวจซ้ำด้วย legacyReportGrant
 //   → ผู้เรียกที่ไม่ใช่ทีมงานต้องอยู่ใน humanResource และ status active (ด่านซ้ำของ requireShopAccess · Pack เคาะ B-11 2026-11-06)
 //     ไม่อยู่ 403 not_shop_member reason not_a_member · ไม่ active 403 not_shop_member reason inactive
 //   → resolveShopRef (ร้าน S5 doc id ≠ field · บิลเก่าถือค่า field) → คืน {access, input, shop, shopRef, keys}
@@ -15,7 +17,7 @@
 
 const { db } = require("../../firebase");
 const { fail, deny, sendDeny, parseOr400 } = require("../_shared/respond");
-const { callerAccess, resolveShopRef, hasRight, staffStatusOf, belongsToShop, isStaffAccess } = require("../_shared/auth");
+const { callerAccess, resolveShopRef, hasRight, staffStatusOf, belongsToShop, isStaffAccess, legacyReportGrant, reportRights } = require("../_shared/auth");
 const { readNow } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
 const logic = require("@shopchamp/logic");
@@ -36,13 +38,20 @@ async function openReport(req, res, schema, { rights } = {}) {
   if (input === null) return null;
   if (!gate.ok) { sendDeny(res, gate); return null; }
   const access = gate.access;
-  const need = Array.isArray(rights) ? rights : [];
+  // legacy owner-web parity (ชั่วคราว · auth.js › reportReadAccess): '107' ใช้แทน 106/117/102 ได้ทุก route รายงาน
+  const need = reportRights(rights);
   if (need.length && !need.some((r) => hasRight(access, r))) { sendDeny(res, deny(403, "right_required")); return null; }
 
   const shopSnap = await db.collection("shop").doc(access.shopId).get();
   if (!shopSnap.exists) { fail(res, 404, "shop_not_found"); return null; }
   const shop = shopSnap.data() || {};
-  if (!isStaffAccess(access)) {
+  if (access.legacyReport === true) {
+    // ผ่านด่านด้วย legacy grant (ไม่ดู status/แพ็กเกจ) ⇒ ตรวจซ้ำกับ doc ที่เพิ่งอ่านด้วยกติกาเดียวกัน (ไม่ใช่ status active)
+    if (!legacyReportGrant(shop, access.uid)) {
+      sendDeny(res, deny(403, "not_shop_member", undefined, { reason: "not_a_member" }));
+      return null;
+    }
+  } else if (!isStaffAccess(access)) {
     const st = staffStatusOf(shop, access.uid, access);
     if (st !== "active") {
       sendDeny(res, deny(403, "not_shop_member", undefined, { reason: st === "inactive" ? "inactive" : "not_a_member" }));

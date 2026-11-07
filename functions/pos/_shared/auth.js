@@ -115,6 +115,60 @@ async function resolveShopAccess({ shopDocId, shop, uid, now, roster } = {}) {
   return deny(403, "not_shop_member", undefined, { reason: m.status });
 }
 
+// ── reportReadAccess: โหมดเข้าร้านของ route รายงาน (อ่านอย่างเดียว) ─────────────────────────────
+//
+// ⚠️ LEGACY OWNER-WEB PARITY · ชั่วคราว (Pack เคาะ 2026-11-07 · `lanes/dev/source/owner-web-census.md`)
+//   กติกา: "ลูกค้าที่ใช้อยู่ต้องได้สิทธิ์ดูรายงานบนเว็บเจ้าของร้านเท่าวันนี้ทุกคน"
+//   เว็บ live (`shopchamp_webowner@db0833f:src/screens/HomeScreen.js:113` · `ShopListScreen.js:46-72`) ให้เข้า /master เมื่อ
+//     humanResource มีแถว id == uid ที่ rights มี '107' หรือ owner (truthy) หรือ position มี '001' (array หรือข้อความ)
+//     **ไม่ดู status และไม่ดูแพ็กเกจพนักงาน** · และไม่แยกสิทธิ์รายจอ (เข้าแล้วเห็นทุกรายงาน)
+//   census W1 วัด 271 คนที่จะเสียสิทธิ์ถ้าใช้ด่านปกติ (inActive 189 · แพ็กเกจพนักงานหมด 75 · สิทธิ์ 107 ไม่ตรง 8)
+//   🔒 ใช้ได้กับ route รายงานอ่านอย่างเดียวเท่านั้น (routes.js ช่อง access:"reportRead" · app.js ปัดถ้าไปผูก route ที่ไม่ใช่ report.*)
+//   🔒 เส้นเขียนทุกเส้นยังใช้ resolveShopAccess ปกติ (ไม่เปลี่ยน)
+//   ⏳ ขันให้แน่นที่นี่ที่เดียว (ตัด legacyReportGrant ออก) **หลังแจ้งร้านแล้วเท่านั้น** · ห้ามขันเงียบ
+//
+// ลำดับ: resolveShopAccess ผ่าน (root · สมาชิก active · watcher) = ใช้ผลนั้นทุกไบต์ → ไม่ผ่านแต่มี legacy grant (ไม่ดู status/แพ็กเกจ) → ปัดด้วย reason เดิม
+//   ⇒ ผลเป็น "ผลของด่านปกติ ∪ ผลของเว็บ live" · ไม่มีใครที่ผ่านด่านปกติแล้วโดนปัดในโหมดนี้
+const LEGACY_REPORT_RIGHT = "107";
+
+/** legacyReportGrant(shop, uid) — แถวแรกที่เว็บ live ใช้ให้ดูรายงาน · ไม่มี = null · คืน {person, ownerLike} */
+function legacyReportGrant(shop, uid) {
+  const hr = shop && Array.isArray(shop.humanResource) ? shop.humanResource : [];
+  if (!isNonEmptyString(uid)) return null;
+  for (const p of hr) {
+    if (!p || typeof p !== "object" || p.id !== uid) continue;
+    const r107 = Array.isArray(p.rights) && p.rights.includes(LEGACY_REPORT_RIGHT);
+    const pos001 = !!p.position && typeof p.position.includes === "function" && p.position.includes(OWNER_POSITION);
+    const ownerFlag = !!p.owner;
+    if (r107 || pos001 || ownerFlag) return { person: p, ownerLike: pos001 || ownerFlag };
+  }
+  return null;
+}
+
+/**
+ * resolveReportReadAccess({shopDocId, shop, uid, now, roster}) — รูปคืนเดียวกับ resolveShopAccess
+ *   legacy grant ที่ไม่ผ่านด่านปกติ → {shopId, uid, role, rights, legacyReport:true, readOnly:true}
+ *     role 'owner' เมื่อแถวมี owner/position 001 (เว็บ live ให้เห็นทุกจอ) · ไม่งั้น 'staff' + rights ของแถว (มี '107' แน่นอน)
+ *     readOnly = เผื่อมีคนเอาไปผูกเส้นเขียน callerAccess จะปัด 403 watcher_read_only (fail-closed)
+ */
+async function resolveReportReadAccess({ shopDocId, shop, uid, now, roster } = {}) {
+  const raw = typeof roster === "function" ? await roster() : roster;
+  const strict = await resolveShopAccess({ shopDocId, shop, uid, now, roster: raw });
+  if (strict.ok) return strict; // root · สมาชิก active · watcher = เหมือนวันนี้ทุกไบต์
+  const g = legacyReportGrant(shop, uid);
+  if (g) {
+    const rights = Array.isArray(g.person.rights) ? g.person.rights.filter((x) => typeof x === "string") : [];
+    return { ok: true, access: { shopId: shopDocId, uid, role: g.ownerLike ? "owner" : "staff", rights: g.ownerLike ? [] : rights, legacyReport: true, readOnly: true } };
+  }
+  return strict; // ปัด (reason เดิม)
+}
+
+/** reportRights(codes) — สิทธิ์ของ route รายงาน + '107' (สิทธิ์ "ข้อ 7. รายงาน" ของเว็บ live · ShopListScreen.js:63) · legacy parity */
+function reportRights(codes) {
+  const list = Array.isArray(codes) ? codes.map(String) : [];
+  return list.length && !list.includes(LEGACY_REPORT_RIGHT) ? [...list, LEGACY_REPORT_RIGHT] : list;
+}
+
 // ── ด่านในตัว handler ─────────────────────────────────────────────────────────────
 
 /**
@@ -296,7 +350,8 @@ function makeCheckIfAuthenticated({ verifyIdToken, log } = {}) {
  * makeRequireShopAccess({db, now, log}) → middleware (ต่อหลัง checkIfAuthenticated)
  *   db ไม่ส่ง = functions/firebase ตัวจริง · now = deps.now (ไม่ส่ง = new Date()) ใช้ตัดสินแพ็กเกจ staff
  */
-function makeRequireShopAccess({ db, now, log } = {}) {
+function makeRequireShopAccess({ db, now, log, resolve } = {}) {
+  const decide = typeof resolve === "function" ? resolve : resolveShopAccess;
   const getDb = () => db || realFirebase().db;
   const warn = typeof log === "function" ? log : console.warn;
   return async function requireShopAccess(req, res, next) {
@@ -310,7 +365,7 @@ function makeRequireShopAccess({ db, now, log } = {}) {
       const snap = await d.collection("shop").doc(shopId).get();
       if (!snap.exists) return fail(res, 404, "shop_not_found");
       const at = await readNow({ now });
-      verdict = await resolveShopAccess({
+      verdict = await decide({
         shopDocId: shopId,
         shop: snap.data() || {},
         uid,
@@ -322,7 +377,11 @@ function makeRequireShopAccess({ db, now, log } = {}) {
       return fail(res, 500, "internal_error");
     }
     if (!verdict.ok) {
-      try { warn("pos shopAccess deny", shopId, verdict.extra && verdict.extra.reason); } catch (_) { /* ไม่ล้มคำตอบ */ }
+      // uid6 + shared (owner-web-login-design.md §2.7 · §11 ข้อ 12): แยกเหตุ 403 ของบัญชีกลางออกจากคนจริงได้จาก log · ไม่ log อีเมล/uid เต็ม
+      try {
+        warn("pos shopAccess deny", shopId, verdict.extra && verdict.extra.reason,
+          `uid6=${String(uid).slice(0, 6)}`, `shared=${require("../webLogin/sharedAccounts").isSharedEmail(req.auth && req.auth.email)}`);
+      } catch (_) { /* ไม่ล้มคำตอบ */ }
       return sendDeny(res, verdict);
     }
     req.shopAccess = verdict.access;
@@ -332,12 +391,21 @@ function makeRequireShopAccess({ db, now, log } = {}) {
 
 const checkIfAuthenticated = makeCheckIfAuthenticated();
 const requireShopAccess = makeRequireShopAccess();
+// route รายงาน (routes.js access:"reportRead") · legacy owner-web parity ชั่วคราว ดู resolveReportReadAccess
+const makeRequireReportReadAccess = (opts = {}) => makeRequireShopAccess({ ...opts, resolve: resolveReportReadAccess });
+const requireReportReadAccess = makeRequireReportReadAccess();
 
 module.exports = {
   checkIfAuthenticated,
   requireShopAccess,
+  requireReportReadAccess,
   makeCheckIfAuthenticated,
   makeRequireShopAccess,
+  makeRequireReportReadAccess,
+  resolveReportReadAccess,
+  legacyReportGrant,
+  reportRights,
+  LEGACY_REPORT_RIGHT,
   rootAccess,
   watcherAccess,
   isStaffAccess,

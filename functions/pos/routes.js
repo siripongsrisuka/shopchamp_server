@@ -8,7 +8,9 @@
 //   fn        function ที่รับ path นี้ (workloads.js ใช้ segment แรกของ path ตัดสิน) · '*' = ทุก function
 //   auth      'shop'    = checkIfAuthenticated → requireShopAccess (ร้านจาก body.shopId)
 //             'user'    = checkIfAuthenticated อย่างเดียว (ยังไม่รู้ร้าน · profile.loading หาเองจาก profile)
-//             'public'  = ไม่มีด่านตัวตน · ต้องมีชื่ออยู่ใน public-routes.js ด้วย (ตอนนี้ไม่มีสักแถว)
+//             'public'  = ไม่มีด่านตัวตน · ต้องมีชื่ออยู่ใน public-routes.js ด้วย (ตอนนี้ 1 แถว: /web-login/consume)
+//   access    (เฉพาะ auth 'shop') ไม่ใส่ = requireShopAccess ปกติ · "reportRead" = requireReportReadAccess (legacy owner-web parity
+//             ชั่วคราว · ให้ได้เฉพาะ contract report.* · app.js ปัดตอนสร้าง app ถ้าผูกที่อื่น)
 //   load      คืน handler · factory = ต้องเรียกด้วย deps ก่อน (สัญญา display.factory: true)
 //   bodyLimit เพดานขนาด body ของแถวนี้ (ไม่ใส่ = 100kb)
 "use strict";
@@ -86,14 +88,15 @@ const ROUTES = Object.freeze([
   { contract: "device.signOutPush", path: "/device/sign-out-push", fn: "pos", auth: "user", factory: true, load: () => require("./device/signOutPush").signOutPush },
 
   // ก้อน 9e รายงาน · อ่านอย่างเดียว · pos_heavy
-  { contract: "report.billList", path: "/report/bill-list", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/billList").billList },
-  { contract: "report.salesTotals", path: "/report/sales-totals", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/salesTotals").salesTotals },
-  { contract: "report.taxInvoices", path: "/report/tax-invoices", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/taxInvoices").taxInvoices },
-  { contract: "report.duplicateNumbers", path: "/report/duplicate-numbers", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/duplicateNumbers").duplicateNumbers },
-  { contract: "report.shiftHistory", path: "/report/shift-history", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/shiftHistory").shiftHistory },
+  //   access "reportRead" = ด่านร้านแบบ legacy owner-web parity ชั่วคราว (auth.js › resolveReportReadAccess · Pack เคาะ 2026-11-07)
+  { contract: "report.billList", path: "/report/bill-list", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/billList").billList },
+  { contract: "report.salesTotals", path: "/report/sales-totals", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/salesTotals").salesTotals },
+  { contract: "report.taxInvoices", path: "/report/tax-invoices", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/taxInvoices").taxInvoices },
+  { contract: "report.duplicateNumbers", path: "/report/duplicate-numbers", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/duplicateNumbers").duplicateNumbers },
+  { contract: "report.shiftHistory", path: "/report/shift-history", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/shiftHistory").shiftHistory },
   // DEV-0002 เว็บเจ้าของร้าน: ยอดแยกมิติ 14 จอรายงาน · บิลของสมาชิก
-  { contract: "report.breakdown", path: "/report/breakdown", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/breakdown").breakdown },
-  { contract: "report.memberBills", path: "/report/member-bills", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/memberBills").memberBills },
+  { contract: "report.breakdown", path: "/report/breakdown", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/breakdown").breakdown },
+  { contract: "report.memberBills", path: "/report/member-bills", fn: "pos_heavy", auth: "shop", access: "reportRead", factory: true, load: () => require("./report/memberBills").memberBills },
 
   // ก้อน 9f เว็บแฟรนไชส์ (DEV-0002) · auth user (ไม่มีร้านใน body · ตัดสินสิทธิ์จาก doc แฟรนไชส์ใน handler) · segment franchise = pos · franchise-report = pos_heavy
   { contract: "franchise.list", path: "/franchise/list", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/read").list },
@@ -115,6 +118,11 @@ const ROUTES = Object.freeze([
   { contract: "franchise.billList", path: "/franchise-report/bill-list", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/billList").billList },
   // DEV-0002 Pack เคาะ 2026-11-07: ยอดแฟรนไชส์ใช้สูตรกลาง (logic.franchiseBreakdown = salesBreakdown ต่อสาขา)
   { contract: "franchise.breakdown", path: "/franchise-report/breakdown", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/breakdown").breakdown },
+
+  // DEV-0001 ปุ่มรายงานเปิดเว็บในแอป · ลิงก์ login ใช้ครั้งเดียว (owner-web-login-design.md §2) · start/approve = ID token ของแอป · consume = public (ลงทะเบียนใน public-routes.js)
+  { contract: "webLogin.start", path: "/web-login/start", fn: "pos", auth: "user", factory: true, load: () => require("./webLogin/webLogin").start },
+  { contract: "webLogin.approve", path: "/web-login/approve", fn: "pos", auth: "user", factory: true, load: () => require("./webLogin/webLogin").approve },
+  { contract: "webLogin.consume", path: "/web-login/consume", fn: "pos", auth: "public", factory: true, load: () => require("./webLogin/webLogin").consume },
 
   // DEV-0003 shopchampoffice · Watcher Console · auth user (คนในทะเบียน watcher/roster ตัดสินที่ handler · root เขียนได้ + passkey)
   { contract: "office.whoami", path: "/office/whoami", fn: "pos", auth: "user", factory: true, load: () => require("./office/whoami").whoami },

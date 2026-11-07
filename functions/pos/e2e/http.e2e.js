@@ -47,7 +47,12 @@ before(async () => {
 after(async () => { for (const s of servers) await new Promise((r) => s.close(r)); });
 
 test("ทุก route: ไม่มี token = 401 no_auth ในซองเดียว · token ปลอมรูปผิด = 401", async () => {
-  for (const r of ROUTES) {
+  // route public (ทะเบียน pos/public-routes.js · ตอนนี้ /web-login/consume ตัวเดียว) ไม่มีด่านตัวตน ⇒ ต้องไม่ได้ 401 (ถึง handler)
+  for (const r of ROUTES.filter((x) => x.auth === "public")) {
+    const no = await post(r.fn === "pos_heavy" ? HEAVY : POS, r.path, {});
+    assert.notEqual(no.status, 401, `${r.path} เป็น public แต่ได้ 401: ${shape(no)}`);
+  }
+  for (const r of ROUTES.filter((x) => x.auth !== "public")) {
     const base = r.fn === "pos_heavy" ? HEAVY : POS;
     const no = await post(base, r.path, { shopId: f.id.shopA });
     assert.deepEqual([no.status, no.body && no.body.ok, no.body && no.body.error], [401, false, "no_auth"], `${r.path}: ${shape(no)}`);

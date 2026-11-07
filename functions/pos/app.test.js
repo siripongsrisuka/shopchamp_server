@@ -82,11 +82,15 @@ test("ตัวกลายพันธุ์: ถอดด่านตัวต
   assert.throws(() => makeApp({ fnName: FN.POS, routes: sneaky }), /ไม่อยู่ใน public-routes/);
 });
 
-test("ทะเบียน public: ว่างตอนนี้ · แถวค้าง = แดง · ลงทะเบียนแล้วผ่าน", () => {
-  assert.deepEqual([...PUBLIC_ROUTES], []);
-  assert.throws(() => checkRegistry(ROUTES, ["/sale/create"]), /ไม่มี route สาธารณะนี้/);
+test("ทะเบียน public: มีแถวเดียว /web-login/consume · แถวค้าง = แดง · ลงทะเบียนแล้วผ่าน", () => {
+  // DEV-0001 (Pack เคาะ §11 ข้อ 2): route สาธารณะตัวแรกของ pos · เพิ่มแถวอื่น = ต้องแก้เทสนี้และเขียนเหตุผลใน public-routes.js
+  assert.deepEqual([...PUBLIC_ROUTES], ["/web-login/consume"]);
+  assert.deepEqual(ROUTES.filter((r) => r.auth === "public").map((r) => `${r.fn} ${r.path}`), ["pos /web-login/consume"]);
+  assert.throws(() => checkRegistry(ROUTES, [...PUBLIC_ROUTES, "/sale/create"]), /ไม่มี route สาธารณะนี้/);
+  // ถอด consume ออกจากทะเบียน public แต่ route ยังเป็น public = สร้าง app ไม่ได้
+  assert.throws(() => checkRegistry(ROUTES, []), /web-login\/consume ไม่มีด่านตัวตนแต่ไม่อยู่ใน public-routes/);
   const withHook = [...ROUTES, { contract: "x", path: "/hook/x", fn: "pos", auth: "public", factory: false, load: () => () => {} }];
-  assert.doesNotThrow(() => checkRegistry(withHook, ["/hook/x"]));
+  assert.doesNotThrow(() => checkRegistry(withHook, [...PUBLIC_ROUTES, "/hook/x"]));
   assert.throws(() => checkRegistry([...ROUTES, ROUTES[1]], []), /path ซ้ำ/);
 });
 
@@ -96,7 +100,8 @@ test("ลบ field ภายใน: amendVoid amendCarry amendOf shopAccess auth
     seen = { bodyKeys: Object.keys(req.body).sort(), amendVoid: req.amendVoid, amendCarry: req.amendCarry, amendOf: req.amendOf, access: req.shopAccess };
     res.json({ ok: true });
   } };
-  const app = makeApp({ fnName: FN.POS, routes: [echo], checkIfAuthenticated: realishAuth, requireShopAccess: passShop });
+  // ทะเบียน route ปลอมแถวเดียว ⇒ ทะเบียน public ต้องว่างคู่กัน (ทะเบียนจริงมี /web-login/consume)
+  const app = makeApp({ fnName: FN.POS, routes: [echo], publicRoutes: [], checkIfAuthenticated: realishAuth, requireShopAccess: passShop });
   const evil = { shopId: "shopA", billId: "b1", amendVoid: true, amendCarry: { x: 1 }, amendOf: "b0", shopAccess: { shopId: "shopA", uid: "u", role: "owner" }, auth: { uid: "admin" } };
   await serve(app, async (base) => {
     const r = await post(base, "/sale/echo", evil, { authorization: "Bearer tok-u1" });
