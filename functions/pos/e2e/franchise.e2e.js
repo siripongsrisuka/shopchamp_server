@@ -15,6 +15,7 @@ const L = require("../franchise/link");
 const B = require("../franchise/branch");
 const ST = require("../franchise/staff");
 const { billList } = require("../franchise/billList");
+const { breakdown } = require("../franchise/breakdown");
 
 const { call, seed, get, clock, reqId, T } = E;
 const NOW = clock("2026-11-10T03:00:00.000Z");
@@ -141,4 +142,13 @@ test("แฟรนไชส์ครบวง: สร้าง · หมวด �
   assert.equal(rep.status, 200, JSON.stringify(rep.body));
   assert.deepEqual(rep.body.bills.map((x) => x.id).sort(), [`bA${n}`, `bB${n}`].sort());
   assert.deepEqual(rep.body.voided, { count: 1, net: 40 });
+
+  // 8) ยอดแฟรนไชส์สูตรกลาง (Pack เคาะ 2026-11-07) · บิลชุดเดียวกับข้อ 7 + ส่วนลดท้ายบิล 10 กระจายลงสินค้า
+  await seed({ bill: b(`bD${n}`, "2026-11-10T07:00:00.000Z", { moneyMustPaid: 90, manualDiscount: 10, product: [{ id: "p", name: "น้ำ", barcode: "885001", qty: 1, net: 100, totalPrice: 100 }] }) });
+  const bd = await call(breakdown, NOW, { body: { franchiseId: fid, fromDay: "20261110", toDay: "20261110" }, auth: { uid: owner } });
+  assert.equal(bd.status, 200, JSON.stringify(bd.body));
+  assert.deepEqual([bd.body.totals.billQty, bd.body.totals.totalSale, bd.body.totals.voidQty, bd.body.totals.voidTotal], [3, 290, 1, 40]);
+  assert.deepEqual(bd.body.shops.map((x) => [x.shopId, x.totalSale, x.inFranchise]), [[shopFree, 290, true]]);
+  assert.equal(bd.body.items.find((x) => x.key === "bc:885001").netAfterBillDiscount, 90);
+  assert.equal((await call(breakdown, NOW, { body: { franchiseId: fid, fromDay: "20261110", toDay: "20261110" }, auth: { uid: staff } })).status, 403);
 });

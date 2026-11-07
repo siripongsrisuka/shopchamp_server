@@ -109,6 +109,8 @@ const ROUTES = Object.freeze([
   { contract: "franchise.staffFind", path: "/franchise/staff-find", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/staff").staffFind },
   { contract: "franchise.staffSave", path: "/franchise/staff-save", fn: "pos", auth: "user", factory: true, load: () => require("./franchise/staff").staffSave },
   { contract: "franchise.billList", path: "/franchise-report/bill-list", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/billList").billList },
+  // DEV-0002 Pack เคาะ 2026-11-07: ยอดแฟรนไชส์ใช้สูตรกลาง (logic.franchiseBreakdown = salesBreakdown ต่อสาขา)
+  { contract: "franchise.breakdown", path: "/franchise-report/breakdown", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/breakdown").breakdown },
 ]);
 
 module.exports = { ROUTES };

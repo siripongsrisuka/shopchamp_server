@@ -9,7 +9,9 @@
 //     สาขาที่ออกจากแฟรนไชส์แล้ว (บิลยังถือ franchiseId เดิม · WR-72 คงเดิม) อ่าน cutOff จาก doc ร้าน · หาร้านไม่เจอ = ตัดเที่ยงคืน
 //   WR-04: ใบยกเลิก (logic.isVoidedBill) ไม่อยู่ในรายการ · นับแยกใน voided {count, net}
 //   shopId (ไม่ส่งได้) = สาขาเดียว · ไม่ใช่สาขาของแฟรนไชส์ตอนนี้ = 409 shop_not_in_franchise
-// คำตอบ: แถวย่อเท่าที่ 3 จอใช้ (shopId billDate dateTime net product[id name barcode qty net]) · ไม่คืนสมาชิก/ช่องจ่าย
+// คำตอบ: แถวย่อ (shopId billDate dateTime net product[id name barcode qty net]) · ไม่คืนสมาชิก/ช่องจ่าย
+//   ยอดบิล net = สูตรกลาง logic.reportBillRow (Pack เคาะ 2026-11-07 · บิลรุ่นแรกได้สูตรรุ่นแรก) · product[].net = ก่อนกระจายส่วนลดท้ายบิล
+//   จอยอดขาย 3 จอย้ายไป franchise.breakdown (breakdown.js) แล้ว · เส้นนี้คงไว้เป็นรายการบิล
 "use strict";
 
 const { db } = require("../../firebase");
@@ -33,7 +35,12 @@ function calendarKeys(a, b) {
   return out;
 }
 
-const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }) => {
+/**
+ * loadFranchiseBills(input) — ด่านสิทธิ์ + ช่วงวัน + บิลของแฟรนไชส์ที่ค้นกว้าง (billDate fromDay-1..toDay+2) · ใช้ร่วม billList และ breakdown
+ * @returns {{branches: Map<string,{id,cutOff}>, branchList:[{id,cutOff}], docs:[QueryDocumentSnapshot], cutOffOf: Map<string,any>}}
+ *   branches: ค่า shopId ในบิล → สาขาตอนนี้ (doc id หรือ field shopId ของร้านรุ่นเก่า S5) · cutOffOf: ร้านที่ไม่ใช่สาขาแล้ว → cutOff จาก doc ร้าน
+ */
+async function loadFranchiseBills(input, uid) {
   await F.readGate(plain, input.franchiseId, uid, { rights: [F.RIGHT.DASHBOARD, F.RIGHT.BY_SHOP, F.RIGHT.BY_ITEM] });
   const probe = logic.reportRange({ fromDay: input.fromDay, toDay: input.toDay });
   if (!probe.ok) F.refuse(deny(400, "range_invalid", "ช่วงวันไม่ถูกต้อง (ไม่เกิน 31 วัน)", { reason: probe.reason }));
@@ -41,9 +48,11 @@ const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }
   // สาขาตอนนี้ · ค่า shopId ที่บิลถือได้ = doc id หรือ field shopId ของร้าน (ร้านรุ่นเก่า S5)
   const shopSnap = await db.collection("shop").where("franchiseId", "==", input.franchiseId).get();
   const branchOf = new Map(); // ค่าในบิล → {id, cutOff}
+  const branchList = [];
   for (const d of shopSnap.docs) {
     const s = d.data() || {};
     const b = { id: d.id, cutOff: s.cutOff };
+    branchList.push(b);
     branchOf.set(d.id, b);
     if (typeof s.shopId === "string" && s.shopId && !branchOf.has(s.shopId)) branchOf.set(s.shopId, b);
   }
@@ -67,6 +76,11 @@ const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }
   const unknown = [...new Set(docs.map((d) => F.str((d.data() || {}).shopId)).filter((k) => k && !branchOf.has(k)))];
   const extra = await Promise.all(unknown.map((k) => db.collection("shop").doc(k).get()));
   const cutOffOf = new Map(unknown.map((k, i) => [k, extra[i].exists ? (extra[i].data() || {}).cutOff : undefined]));
+  return { branches: branchOf, branchList, docs, cutOffOf };
+}
+
+const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }) => {
+  const { branches: branchOf, docs, cutOffOf } = await loadFranchiseBills(input, uid);
 
   const ranges = new Map();
   const rangeOf = (cutOff) => {
@@ -85,7 +99,8 @@ const billList = F.makeHandler("FranchiseBillListRequest", async ({ uid, input }
     const r = rangeOf(branch ? branch.cutOff : cutOffOf.get(raw));
     const ms = logic.saleMsOf(b);
     if (!r.ok || ms === null || !(ms > r.start.getTime() && ms <= r.end.getTime())) continue;
-    const net = num(b.moneyMustPaid);
+    // ยอดบิลสูตรกลาง (Pack เคาะ 2026-11-07): logic.reportBillRow ตัวเดียวกับรายงานร้าน · บิลรุ่นแรกได้สูตรรุ่นแรก · ไม่มี moneyMustPaid = 0
+    const net = logic.reportBillRow(d.id, b).net;
     if (logic.isVoidedBill(b)) { voided.count++; voided.net += net; continue; }
     rows.push({
       id: d.id,
@@ -109,4 +124,4 @@ function shiftKey(k, days) {
   return `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-module.exports = { billList, calendarKeys };
+module.exports = { billList, calendarKeys, loadFranchiseBills };

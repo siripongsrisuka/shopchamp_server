@@ -20,7 +20,7 @@ function load(file) {
   H = H || require(HARNESS);
   const fbAbs = require.resolve("../../firebase");
   require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: H.makeDb(() => DB, (w) => WRITES.push(w)), admin: {}, bucket: {} } };
-  for (const f of ["./_franchise", "./read", "./branch", "./staff", "./franchise"]) delete require.cache[require.resolve(f)];
+  for (const f of ["./_franchise", "./read", "./branch", "./staff", "./franchise", "./billList", "./breakdown"]) delete require.cache[require.resolve(f)];
   return require(file);
 }
 async function call(make, body, uid) {
@@ -40,6 +40,12 @@ const SEED = () => ({
   },
   shop: { s1: { shopId: "s1", name: "สาขา", tel: "0811000001", franchiseId: "FA", humanResource: [{ id: "u", password: "1234" }], line: { token: "t" }, vip: [] } },
   profile: { p1: { name: "ใหม่", tel: "0899999999", email: "n@x", imageId: "", port: [{ shopId: "s9" }], currentLogin: { shopId: "s9" }, birthday: "1999" } },
+  bill: {
+    b1: { franchiseId: "FA", shopId: "s1", billDate: "20261110", dateTime: { __ts__: "2026-11-10T05:00:00.000Z" }, receiptNumber: "R1", moneyMustPaid: 90, manualDiscount: 10,
+      member: { id: "m1", name: "สมาชิก", tel: "0899" }, payment: [{ id: 1, name: "เงินสด", amount: 90 }],
+      product: [{ id: "p1", name: "น้ำ", barcode: "885001", qty: 1, net: 60, totalPrice: 60, totalCost: 30 }, { id: "p2", name: "ขนม", barcode: "", qty: 1, net: 40, totalPrice: 40, totalCost: 20 }] },
+    bv: { franchiseId: "FA", shopId: "s1", billDate: "20261110", dateTime: { __ts__: "2026-11-10T06:00:00.000Z" }, receiptNumber: "RV", moneyMustPaid: 50, void: true, product: [] },
+  },
 });
 
 test("franchise.get · แถว humanRight มีแค่ช่องของแถว (SF-02 · ไม่มี port currentLogin birthday gender)", { skip }, async () => {
@@ -89,4 +95,24 @@ test("franchise.create · doc ใหม่ผ่าน schema อ่าน Franc
   const doc = { ...w.data, timestamp: new Date(w.data.timestamp) };
   assert.ok(S.Franchise.safeParse(doc).success);
   assert.deepEqual(doc.humanRight[0].rights, ["100", "103", "104", "107", "128", "723", "130"]);
+});
+
+test("franchise.breakdown · ตัวเลขเท่า logic.salesBreakdown ของสาขาตรง ๆ (สูตรกลาง · Pack เคาะ 2026-11-07) · แถวมีแค่ช่องของแถว ไม่มีบิล สมาชิก ช่องจ่าย ต้นทุน", { skip }, async () => {
+  const { breakdown } = load("./breakdown");
+  const logic = require("@shopchamp/logic");
+  const r = await call(breakdown, { franchiseId: "FA", fromDay: "20261110", toDay: "20261110" }, "u-owner");
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(Object.keys(r.body).sort(), ["fromDay", "hours", "items", "ok", "shops", "toDay", "totals"]);
+  assert.deepEqual(Object.keys(r.body.shops[0]).sort(), ["average", "billQty", "inFranchise", "shopId", "totalSale", "voidQty", "voidTotal"]);
+  assert.deepEqual(Object.keys(r.body.items[0]).sort(), ["barcode", "billDiscountShare", "count", "key", "name", "net", "netAfterBillDiscount", "qty", "totalPrice"]);
+  assert.deepEqual(Object.keys(r.body.hours[0]).sort(), ["billQty", "key", "totalSale"]);
+  const txt = JSON.stringify(r.body);
+  for (const leak of ["m1", "0899", "เงินสด", "totalCost", "R1"]) assert.ok(!txt.includes(leak), `คำตอบมี ${leak}`);
+  // ไม้บรรทัด: สาขาเดียว ⇒ ยอดเท่ารายงานร้าน (salesBreakdown) ของร้านนั้นวันเดียวกัน
+  const entries = Object.entries(H.reviveSeed(SEED()).bill).map(([id, data]) => ({ id, data }));
+  const shopTotals = logic.salesBreakdown(entries, { fromDay: "20261110", toDay: "20261110", dimension: "total" }).totals;
+  assert.deepEqual([r.body.totals.billQty, r.body.totals.totalSale, r.body.totals.voidQty, r.body.totals.voidTotal], [shopTotals.billQty, shopTotals.totalSale, shopTotals.voidQty, shopTotals.voidTotal]);
+  const shopItems = logic.salesBreakdown(entries, { fromDay: "20261110", toDay: "20261110", dimension: "item" }).rows;
+  assert.deepEqual(r.body.items.map((x) => x.netAfterBillDiscount).sort(), shopItems.map((x) => x.netAfterBillDiscount).sort());
+  assert.deepEqual(r.body.items.map((x) => x.netAfterBillDiscount).sort(), [36, 54]);
 });
