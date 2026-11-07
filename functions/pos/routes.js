@@ -115,6 +115,16 @@ const ROUTES = Object.freeze([
   { contract: "franchise.billList", path: "/franchise-report/bill-list", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/billList").billList },
   // DEV-0002 Pack เคาะ 2026-11-07: ยอดแฟรนไชส์ใช้สูตรกลาง (logic.franchiseBreakdown = salesBreakdown ต่อสาขา)
   { contract: "franchise.breakdown", path: "/franchise-report/breakdown", fn: "pos_heavy", auth: "user", factory: true, load: () => require("./franchise/breakdown").breakdown },
+
+  // DEV-0003 shopchampoffice · Watcher Console · auth user (คนในทะเบียน watcher/roster ตัดสินที่ handler · root เขียนได้ + passkey)
+  { contract: "office.whoami", path: "/office/whoami", fn: "pos", auth: "user", factory: true, load: () => require("./office/whoami").whoami },
+  { contract: "office.rosterGet", path: "/office/roster-get", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").rosterGet },
+  { contract: "office.resolveEmail", path: "/office/resolve-email", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").resolveEmail },
+  { contract: "office.rosterSave", path: "/office/roster-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").rosterSave },
+  { contract: "office.passkeyRegisterOptions", path: "/office/passkey-register-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").registerOptions },
+  { contract: "office.passkeyRegisterVerify", path: "/office/passkey-register-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").registerVerify },
+  { contract: "office.passkeyAssertOptions", path: "/office/passkey-assert-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertOptions },
+  { contract: "office.passkeyAssertVerify", path: "/office/passkey-assert-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertVerify },
 ]);
 
 module.exports = { ROUTES };

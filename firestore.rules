@@ -283,6 +283,12 @@ service cloud.firestore {
     match /watcherWriteLog/{id} { allow read, write: if false; }
     // ทะเบียนเครื่องรับแจ้งเตือนของแอปใหม่ (DEV-0001 push): server เท่านั้น · แอปลงทะเบียนผ่าน /pos/device/register-push-token
     match /pushDevices/{id} { allow read, write: if false; }
+    // shopchampoffice (DEV-0003): บันทึกการแก้ทะเบียน · กุญแจ passkey · challenge · รอยการกระทำ = server เท่านั้น
+    //   (ไม่มี match ก็ปัดอยู่แล้ว · เขียนไว้ให้เห็นชัด · กุญแจ/challenge รั่ว = ข้ามด่านลายนิ้วของ office ได้)
+    match /watcherRosterLog/{id} { allow read, write: if false; }
+    match /officePasskeys/{id} { allow read, write: if false; }
+    match /officePasskeyChallenges/{id} { allow read, write: if false; }
+    match /officeAudit/{id} { allow read, write: if false; }
 
     // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
     // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex
