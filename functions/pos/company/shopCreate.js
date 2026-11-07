@@ -13,7 +13,8 @@
 //      total ไม่ใช่จำนวนเต็ม ≥ 0 = 500 counter_broken (B4)
 //   4. เขียน (รูปเดิมทุก field · shopTemplate.js เทียบกับ main3 ในเทส):
 //      shop/{id} ทั้งก้อน + createRequestId · createdVia · shift/{id} · numOfStore.total = scShopId · profile {port:[...port, ใหม่], currentLogin}
-// push ต้อนรับและ tag OneSignal (NewShopScreen.js:142-143) ยังอยู่ฝั่งแอปหลังได้ 200
+// push ต้อนรับ (DEV-0001 push): หลัง commit (ไม่ใช่ duplicate) ส่งหาผู้สร้าง (uid · ทุกร้าน) ทั้ง 2 ท่อ
+//   แอปเก่าส่งทั้งร้านใหม่ (NewShopScreen.js:83 pushByOneFilter shopId) · ร้านเพิ่งเกิดยังไม่มีเครื่องลงทะเบียน ⇒ ส่งหาคนสร้างแทน (เครื่องเดียวกัน)
 "use strict";
 
 const crypto = require("crypto");
@@ -22,6 +23,7 @@ const { CompanyShopCreateRequest } = require("@shopchamp/schema");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { buildNewShop } = require("./shopTemplate");
+const { notify } = require("../_shared/push/notify");
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -83,6 +85,9 @@ function shopCreate(deps) {
         tx.update(profileRef, { port: [...port, built.port], currentLogin: built.currentLogin });
         return { duplicate: false, scShopId };
       });
+      if (!out.duplicate) {
+        await notify(deps, { to: { kind: "people", ids: [uid] }, heading: "สร้างร้านค้าสำเร็จ!", content: "ยินดีต้อนรับ เข้าสู่ครอบครัว ช็อปแชมป์ ระบบใช้งานง่าย ตอบโจทย์ร้านค้าค่ะ" });
+      }
       return ok(res, { shopId: shopDocId, shiftId, posId: out.posId || input.posId, scShopId: out.scShopId, duplicate: out.duplicate });
     } catch (e) {
       if (e instanceof Refusal) return sendDeny(res, e.deny);

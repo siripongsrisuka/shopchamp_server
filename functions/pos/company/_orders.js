@@ -11,7 +11,10 @@
 //     ตัวนับ: ไม่มี doc = สร้าง {value:1} (AC-38) · value เสีย = 500 counter_broken (ไม่เขียน NaN · admin B9)
 //   เขียน: ตัวนับ · ใบ (doc id = orderUUID) · notification/<collection>-<orderUUID> 1 ใบ categoryId 99 (รูปเดิม)
 // ทีมงาน (byAdmin) = ใบและ notification มี {byAdmin:true, adminUid} · คำตอบ 2xx มี byAdmin:true
-// push OneSignal ถึงผู้ซื้อและแอดมิน (PayScreen.js:162-165 ฯลฯ) ยังอยู่ฝั่งแอปหลังได้ 200 (ไม่ใช่ duplicate) · ไม่ทำที่ server
+// push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ครั้งที่ไม่ใช่ duplicate · orderPushes() ประกอบ 2 ข้อความ
+//   ① ผู้กดซื้อ (access.uid · ทุกร้าน = pushByIdFilter เดิม) ② ทีมงานในรายชื่อ admin/<doc>.admin (ทุกร้าน)
+//   รายชื่อทีมงานอ่านหลัง commit นอก transaction (doc เดียวกับที่แอปเก่าอ่าน: admin/package · admin/hardware) · อ่านไม่ได้ = ส่งแค่ผู้ซื้อ
+//   แทนจุดส่งในแอป PayScreen.js:172-174 · HardwareSummaryScreen.js:146-148 · ImageLimitScreen.js:135-137 · ImportStockPayScreen.js:135-137
 "use strict";
 
 const { db } = require("../../firebase");
@@ -39,7 +42,7 @@ const str = (v) => (typeof v === "string" ? v : "");
  *   sameOrder(prev, input) → true เมื่อรายการของใบเดิมตรงกับคำขอ (ยอดเทียบให้แล้วระดับสตางค์)
  *   buildOrder({shop, ref, shopDocId, profile, q, orderNumber}) → field ของใบ (ไม่รวม orderUUID/source/trail · ใส่ให้ที่นี่)
  *   buildNoti({shop, ref, shopDocId, q}) → {heading, notificationContent, shopId}
- * @returns {Promise<{duplicate:boolean, orderId, orderNumber, net}>} · ปัด = throw Refusal
+ * @returns {Promise<{duplicate:boolean, orderId, orderNumber, net, shopName}>} · ปัด = throw Refusal · shopName ใช้ประกอบ push (handler ตัดออกก่อนตอบ)
  */
 async function runOrder(p) {
   const { access, input, now, collection, counterDoc, priceDoc, quote, sameOrder, buildOrder, buildNoti } = p;
@@ -68,7 +71,7 @@ async function runOrder(p) {
       if (sat(prev.net) !== sat(input.expectedNet) || !sameOrder(prev, input)) {
         refuse(deny(409, "order_uuid_mismatch", "รหัสใบสั่งซื้อนี้ใช้กับรายการอื่นไปแล้ว"));
       }
-      return { duplicate: true, orderId: input.orderUUID, orderNumber: str(prev.orderNumber), net: logic.roundMoney(prev.net) };
+      return { duplicate: true, orderId: input.orderUUID, orderNumber: str(prev.orderNumber), net: logic.roundMoney(prev.net), shopName: str(shop.name) };
     }
     const priceData = priceSnap && priceSnap.exists ? priceSnap.data() : null;
     const q = quote(priceData);
@@ -101,7 +104,7 @@ async function runOrder(p) {
       timestamp: now,
       ...trail,
     });
-    return { duplicate: false, orderId: input.orderUUID, orderNumber: counter.orderNumber, net: q.net };
+    return { duplicate: false, orderId: input.orderUUID, orderNumber: counter.orderNumber, net: q.net, shopName: str(shop.name) };
   });
 }
 
@@ -111,4 +114,24 @@ const notiShopIdOf = (ref, shopDocId) => ref.shopId || shopDocId;
 /** ผู้กดซื้อ: ชื่อ/เบอร์จาก profile · ไม่มี = '' (เดิมเว็บเขียน undefined แล้วใบไม่เกิด · PO-05 PO-16) */
 const buyerOf = (access, profile) => ({ profileId: access.uid, profileName: str(profile.name), tel: str(profile.tel) });
 
-module.exports = { runOrder, Refusal, refuse, notiShopIdOf, buyerOf, COMPANY_ORDER_CATEGORY, sat, str };
+/**
+ * orderPushes({access, adminDoc, buyer, staff}) → [ข้อความผู้ซื้อ, ข้อความทีมงาน] (รูป notify)
+ *   buyer/staff = {heading, content, data?} · ทีมงาน = admin/<adminDoc>.admin (array ของ uid) · ตัดผู้ซื้อออกจากรายชื่อทีมงาน (กันคนเดียวได้ 2 ข้อความ)
+ *   🔒 ไม่ throw · อ่านรายชื่อพัง = คืนแค่ข้อความผู้ซื้อ
+ */
+async function orderPushes({ access, adminDoc, buyer, staff }) {
+  const out = [{ to: { kind: "people", ids: [access.uid] }, ...buyer }];
+  try {
+    const snap = await db.collection("admin").doc(adminDoc).get();
+    const list = snap && snap.exists && isObj(snap.data()) && Array.isArray(snap.data().admin) ? snap.data().admin : [];
+    const ids = [...new Set(list.filter((x) => typeof x === "string" && x !== "" && x !== access.uid))];
+    if (ids.length) out.push({ to: { kind: "people", ids }, ...staff });
+  } catch (e) {
+    console.warn(`push company admin list ${adminDoc} ${(e && e.message) || e}`);
+  }
+  return out;
+}
+
+const PENDING_PUSH_TEXT = "รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง";
+
+module.exports = { runOrder, Refusal, refuse, notiShopIdOf, buyerOf, orderPushes, PENDING_PUSH_TEXT, COMPANY_ORDER_CATEGORY, sat, str };

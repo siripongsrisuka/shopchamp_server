@@ -27,7 +27,9 @@
 //   during ตอนกะปิด: หา entryId ในประวัติรอบล่าสุด (shiftHistory/<shiftId>_<openMs>) ⇒ ส่งซ้ำหลังปิดกะได้ผลเดิม ไม่ได้ 409
 // แจ้งเตือน (A-9 · คงแบบแอปเก่า main3 `src/screens/ShiftScreen.js:155-310`): notification categoryId 2 ทุกครั้งที่ open/during/close สำเร็จ
 //   heading/notificationContent รูปเดิม · doc id = <shiftId>_<op>_<requestId> (ส่งซ้ำเขียนทับใบเดิม ไม่เพิ่มใบ) · ทีมงาน = มี {byAdmin, adminUid}
-//   push OneSignal (notiShift) และ LINE (lineNoti.shift) ยังอยู่ฝั่งแอป ไม่ทำที่นี่ (แบบเดียวกับ member.payCredit)
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ส่ง FCM หา shop.notiShift (รายคนในร้านนี้ = pushByTwoFilter เดิม
+//     `APP/src/screens/ShiftScreen.js:214,260,324`) · หัวข้อ/ข้อความเดียวกับ notification · data {screen:'HomeScreen', sound:<หัวข้อ>}
+//     duplicate = ไม่ส่ง · ส่งถึงเฉพาะเครื่องแอปใหม่ (pushDevices) · แอปเก่ายังส่ง OneSignal เองตามเดิม · LINE (lineNoti.shift) ยังอยู่ฝั่งแอป
 "use strict";
 
 const { db } = require("../../firebase");
@@ -37,6 +39,7 @@ const { ok, sendDeny, deny, parseOr400, internalError } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, resolveShopRef, belongsToShop, checkOwnedDoc, staffInShop, adminTrail, adminFlag } = require("../_shared/auth");
 const { shiftHistoryDocId } = require("../_shared/idempotency");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const SHIFT_MESSAGES = {
   shift_already_open: "กะนี้เปิดอยู่แล้วจากอีกเครื่อง",
@@ -222,6 +225,14 @@ const notiRefOf = (input) => db.collection("notification").doc(`${input.shiftId}
 function notificationDoc({ shopRef, noti, now, access }) {
   return { ...noti, shopId: shopRef.shopId || shopRef.id, categoryId: NOTI_CATEGORY_SHIFT, timestamp: now, ...adminTrail(access) };
 }
+/** pushOf — ข้อความ FCM ของกะ (ผู้รับ shop.notiShift ในร้านนี้) · open ของแอปเก่าไม่แนบ screen · during/close แนบ HomeScreen */
+function pushOf({ shop, access, noti, op }) {
+  return {
+    to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop && shop.notiShift) },
+    heading: noti.heading, content: noti.notificationContent,
+    data: op === "open" ? { sound: noti.heading } : { screen: "HomeScreen", sound: noti.heading },
+  };
+}
 
 async function readCommon(tx, access, input, staffOpts) {
   const shopSnap = await tx.get(db.collection("shop").doc(access.shopId));
@@ -250,8 +261,9 @@ async function runOpen(tx, ctx) {
   const w = openWrite({ input, now, shift, access });
   if (!w) throw new Error("nextShiftCount: now อ่านไม่ได้");
   tx.update(shiftRef, w.patch);
-  tx.set(notiRefOf(input), notificationDoc({ shopRef: c.shopRef, noti: openNotification({ input, count: w.count }), now, access }));
-  return { body: { op: "open", shiftId: input.shiftId, openTime: now.toISOString(), shiftCount: w.count, lastShiftDate: w.shiftDate, duplicate: false } };
+  const noti = openNotification({ input, count: w.count });
+  tx.set(notiRefOf(input), notificationDoc({ shopRef: c.shopRef, noti, now, access }));
+  return { body: { op: "open", shiftId: input.shiftId, openTime: now.toISOString(), shiftCount: w.count, lastShiftDate: w.shiftDate, duplicate: false }, push: pushOf({ shop: c.shop, access, noti, op: "open" }) };
 }
 
 async function runDuring(tx, ctx) {
@@ -279,8 +291,9 @@ async function runDuring(tx, ctx) {
     return { refusal: refuse(409, "shift_not_open") };
   }
   tx.update(shiftRef, { duringShift: [...list, duringEntry({ input, now, access })] });
-  tx.set(notiRefOf(input), notificationDoc({ shopRef: c.shopRef, noti: duringNotification({ input, shift }), now, access }));
-  return { body: { op: "during", shiftId: input.shiftId, entryId: input.requestId, warnings: [], duplicate: false }, afterCommit: { shop: c.shop, shopRef: c.shopRef, shift } };
+  const noti = duringNotification({ input, shift });
+  tx.set(notiRefOf(input), notificationDoc({ shopRef: c.shopRef, noti, now, access }));
+  return { body: { op: "during", shiftId: input.shiftId, entryId: input.requestId, warnings: [], duplicate: false }, afterCommit: { shop: c.shop, shopRef: c.shopRef, shift }, push: pushOf({ shop: c.shop, access, noti, op: "during" }) };
 }
 
 async function runClose(tx, ctx) {
@@ -326,8 +339,10 @@ async function runClose(tx, ctx) {
   }
   tx.set(histRef, historyDoc({ shiftId: input.shiftId, shift, closed, input, now, access }));
   tx.update(shiftRef, { status: false, duringShift: [] });
-  tx.set(notiRefOf(input), notificationDoc({ shopRef, noti: closeNotification({ input, shift, closed }), now, access }));
+  const noti = closeNotification({ input, shift, closed });
+  tx.set(notiRefOf(input), notificationDoc({ shopRef, noti, now, access }));
   return {
+    push: pushOf({ shop, access, noti, op: "close" }),
     body: {
       op: "close", shiftId: input.shiftId, shiftHistoryId: round.roundId,
       expectedCash: closed.expectedCash, closeDiff: closed.closeDiff, cashRemain: closed.cashRemain,
@@ -366,6 +381,7 @@ function manage(deps) {
       if (r.refusal) return sendDeny(res, r.refusal);
       const body = { ...r.body, ...adminFlag(access) };
       if (r.afterCommit) body.warnings = await duringWarnings(input, r.afterCommit);
+      if (r.push) await notify(deps, r.push);
       return ok(res, body);
     } catch (e) {
       return internalError(res, e);

@@ -26,6 +26,8 @@
 //     - บิลออฟไลน์ที่ soldAt ถูก clamp = unassigned · ไม่มี shiftId/shiftOpenTime · เก็บ shiftIdAtSale (B-8)
 //     - stock doc ที่ไม่มี / เป็นของร้านอื่น = ข้ามแถวนั้นและ log (แอปเก่า throw ทั้งใบ · สัญญา: ไม่ปัดการขาย · ติดลบได้ตอนซิงก์)
 //     - สต็อกตัดตามค่าตั้งใน stock doc ที่อ่านใน transaction (ไม่เชื่อ stockCountStatus/linkDetail จากเครื่อง · คำขอไม่มีช่องนี้)
+// push สต๊อกวิกฤต (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit (ไม่ใช่ duplicate) สินค้าที่ขายแล้วหมด/ต่ำกว่า safetyStock
+//   → FCM + OneSignal หา shop.notiStock ในร้านนี้ หัวข้อ 'แชมป์บอท 🤖' (รูปเดิมของแอปรุ่นก่อน · แอปใหม่ทำหายไปแล้ว) · lowStockTextOf
 "use strict";
 
 const { db } = require("../../firebase");
@@ -37,6 +39,7 @@ const { callerAccess, adminTrail, adminFlag, resolveShopRef, belongsToShop, chec
 const { nextBillNumber, billDateOf, billReceiptTypeOf, receiptTypeOf } = require("../_shared/billClock");
 const { resolveOfflineSync, stampOfflineFields } = require("../_shared/offlineSync");
 const { readReceiptUUID, classifyGuard, legacyDuplicateFromBill, guardDoc } = require("../_shared/idempotency");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 // ผลตรวจที่ปัดใน transaction ⇒ โยนออกมาตอบนอก transaction (ยังไม่เขียนอะไร)
 class Refusal extends Error {
@@ -297,10 +300,12 @@ function create(deps) {
         tx.set(billRef, bill);
         tx.set(guardRef, guardDoc({ now, receiptNumber, billId: billRef.id, shopDocId, trail }));
         tx.set(counterRef, { ...num.write, ...trail }, { merge: true });
+        const lowStock = [];
         for (const mv of stock.plan.moves) {
           const d = stock.docs.get(mv.id);
           if (!d) continue;
           const upd = { stock: logic.stockAfterMove(d.stock, -mv.qty), updateTime: now, ...trail };
+          if (stock.plan.soldIds.includes(mv.id)) lowStock.push({ doc: d, next: upd.stock });
           if (stock.plan.soldIds.includes(mv.id)) upd.latestSaleDate = now;
           tx.update(db.collection("stock").doc(mv.id), upd);
         }
@@ -316,6 +321,7 @@ function create(deps) {
         return {
           duplicate: false, billId: billRef.id, receiptNumber, billDate: bill.billDate, round,
           skipped: stock.skipped, issues: stock.plan.issues,
+          lowStockText: lowStockTextOf(lowStock), notiStock: idsOf(shop.notiStock),
         };
       });
 
@@ -324,6 +330,10 @@ function create(deps) {
       }
       if (out.skipped.length || out.issues.length) {
         console.warn("pos sale.create stock skipped", out.billId, JSON.stringify({ skipped: out.skipped, issues: out.issues }).slice(0, 2000));
+      }
+      // push สต๊อกวิกฤต (DEV-0001 push · แทนแอปเก่า main3/merchant_2025 `CheckOutScreen.js:819-831` · แอปใหม่ไม่มีจุดนี้แล้ว)
+      if (out.lowStockText) {
+        await notify(deps, { to: { kind: "staff", shopId: access.shopId, ids: out.notiStock }, heading: "แชมป์บอท 🤖", content: out.lowStockText, data: { screen: "HomeScreen" } });
       }
       const shift = { status: out.round.status };
       if (out.round.shiftHistoryId) shift.shiftHistoryId = out.round.shiftHistoryId;
@@ -348,4 +358,28 @@ function create(deps) {
   };
 }
 
-module.exports = { create, applyAmendCarry };
+/**
+ * lowStockTextOf([{doc, next}]) — ข้อความ "สินค้าคงเหลือวิกฤต" รูปเดิม (`shopcham_merchant_2025/src/db/firestore.js:75` alertStock)
+ *   ก่อนขาย ≤ 0 = ข้าม (เตือนไปแล้ว) · หลังขาย ≤ 0 = "<ชื่อ> หมดแล้วค่ะ" (ไม่ดูสวิตช์ · แบบเดิม)
+ *   สวิตช์ safetyStock.status ปิด = ข้าม · ก่อนขายต่ำกว่าระดับแล้ว = ข้าม · หลังขายต่ำกว่าระดับ = บรรทัดเตือน
+ *   ไม่มีบรรทัดเลย = null (ไม่ส่ง) · นับเฉพาะสินค้าที่ขายในบิล (ไม่รวมสมาชิกกลุ่มผูก)
+ */
+function lowStockTextOf(rows) {
+  let text = "สินค้าคงเหลือวิกฤต";
+  let lines = 0;
+  for (const { doc, next } of rows || []) {
+    const prev = logic.toNumber(doc.stock);
+    const after = logic.toNumber(next);
+    if (!Number.isFinite(prev) || !Number.isFinite(after) || prev <= 0) continue;
+    const name = typeof doc.name === "string" ? doc.name : "";
+    const unit = typeof doc.unit === "string" ? doc.unit : "";
+    if (after <= 0) { text += `\n${name} หมดแล้วค่ะ`; lines++; continue; }
+    const ss = doc.safetyStock && typeof doc.safetyStock === "object" ? doc.safetyStock : {};
+    const level = logic.toNumber(ss.qty);
+    if (!ss.status || !Number.isFinite(level) || prev < level) continue;
+    if (after < level) { text += `\n${name} เหลือ ${after} ${unit} น้อยกว่าระดับปลอดภัย(< ${level} ${unit})`; lines++; }
+  }
+  return lines ? text : null;
+}
+
+module.exports = { create, applyAmendCarry, lowStockTextOf };

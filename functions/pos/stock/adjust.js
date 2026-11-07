@@ -17,6 +17,8 @@
 //   op cost: สินค้าผูก = ต้นทุนต่อหน่วยเล็กสุด × ตัวคูณของแต่ละตัว (รูปเดียวกับตอนผูก)
 //   op expRemove: ลบ 1 ล็อตที่ตรงวัน (ST-110) ทุกตัวในกลุ่ม (ST-111) · ไม่มีล็อตวันนั้น = 200 unchanged · premium หมด 403
 //   แจ้งเตือน (price/stock) รูปเดิม {heading, shopId, notificationContent, categoryId, timestamp} + ชื่อคนแก้ (ST-092)
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): price/stock ที่เปลี่ยนจริง → FCM ทั้งร้าน (แทน pushByShopFilter ของแอป
+//     `APP/src/screens/LowProfitScreen.js:122` · `APP/src/modal/Modal_ImportProduct.js:199,217`) · หัวข้อ/ข้อความเดียวกับ notification · unchanged = ไม่ส่ง
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -27,6 +29,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const S = require("./_shared");
+const { notify } = require("../_shared/push/notify");
 
 const RIGHT_OF = Object.freeze({ price: S.RIGHTS.EDIT_PRICE, stock: S.RIGHTS.EDIT_STOCK, cost: S.RIGHTS.EDIT_COST, expRemove: S.RIGHTS.EXP });
 const str = (v) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
@@ -44,7 +47,9 @@ function adjust(deps) {
       const now = await readNow(deps);
       const trail = adminTrail(access);
 
+      let push = null; // ตั้งตอนเขียนแจ้งเตือน (price/stock) · ส่งหลัง commit
       const out = await db.runTransaction(async (tx) => {
+        push = null;
         const shopSnap = await tx.get(db.collection("shop").doc(access.shopId));
         if (!shopSnap.exists) S.refuse(404, "shop_not_found");
         const shop = shopSnap.data() || {};
@@ -55,10 +60,12 @@ function adjust(deps) {
         if (linked) await S.readStockDocs(db, tx, S.linkIdsOf(p), ref, { into: docs });
         S.requireActiveStaff(shop, input.staffId, access);
         const shopField = ref.shopId || access.shopId;
-        const noti = (heading, content, categoryId) =>
+        const noti = (heading, content, categoryId) => {
           tx.set(db.collection("notification").doc(), {
             heading, shopId: shopField, notificationContent: content, categoryId, timestamp: now, staffName: input.staffName, ...trail,
           });
+          push = { to: { kind: "shop", shopId: access.shopId }, heading, content };
+        };
         const name = str(p.name);
         const unit = str(p.unit);
         const mult = linked ? logic.readLinkMultiply(p.linkMultiply) : 1;
@@ -112,6 +119,7 @@ function adjust(deps) {
         return { unchanged: false, updated: changed };
       });
 
+      if (!out.unchanged && push) await notify(deps, push);
       return ok(res, { productId: input.productId, op: input.op, ...out, ...adminFlag(access) });
     } catch (e) {
       if (e instanceof S.Refusal) return sendDeny(res, e.deny);

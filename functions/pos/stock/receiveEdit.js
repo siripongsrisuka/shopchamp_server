@@ -16,6 +16,8 @@
 //   4. เขียน: stock {stock, cost, updateTime} (รูปเดิม `:282,301`) · ลดเป็น 0 แถวที่มีวันหมดอายุ = ลบล็อตนั้น 1 ล็อตจาก expReport ทุกตัวที่รับ (ST-112)
 //      nextExp (ใหม่ · ST-112 ครึ่งหลัง): ลบล็อตวันเดิม 1 ล็อต + ใส่วันใหม่ ทุกตัวในกลุ่ม · แถว exp = Date หรือ '' รูปเดิม · จำนวน/ทุนเท่าเดิม = ไม่แตะ stock cost
 //      importProduct {product, totalQty, totalCost} (รูปเดิม `:309`) แถวที่แก้เป็นเลข (เดิมเป็นสตริง C3) + ใหม่ lastEdit {...}
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit FCM หา shop.notiImport ในร้านนี้ (แทน pushByTwoFilter
+//     `APP/src/screens/ImportProductDetail.js:268`) · หัวข้อ 'ปรับแก้ไข รายการรับสินค้า' ข้อความรูปเดิม · unchanged = ไม่ส่ง
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -25,6 +27,8 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, checkOwnedDoc } = require("../_shared/auth");
 const S = require("./_shared");
+const { notify, idsOf } = require("../_shared/push/notify");
+const loc4 = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "");
 
 const same = (a, b) => S.round(S.num(a)) === S.round(S.num(b));
 
@@ -141,10 +145,16 @@ function receiveEdit(deps) {
           },
           ...trail,
         });
-        return { unchanged: false, updates, updateStock, totalQty: S.round(totalQty), totalCost: S.round(totalCost) };
+        const push = {
+          to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop.notiImport) }, heading: "ปรับแก้ไข รายการรับสินค้า",
+          content: `เลขที่ใบสั่งซื้อ ${bill.billNumber === undefined ? "" : bill.billNumber}\nโดย ${input.staffName}\n${typeof row.name === "string" ? row.name : ""}\nจำนวน(${current.qty} => ${input.nextQty})\nต้นทุน(${loc4(current.cost)} => ${loc4(input.nextCost)})\nคงเหลือ ${updateStock === null || updateStock === undefined ? "-" : updateStock} `,
+          data: { screen: "HomeScreen" },
+        };
+        return { unchanged: false, updates, updateStock, totalQty: S.round(totalQty), totalCost: S.round(totalCost), push };
       });
 
       if (out.unchanged) return ok(res, { importId: input.importId, unchanged: true, ...adminFlag(access) });
+      await notify(deps, out.push);
       return ok(res, {
         importId: input.importId,
         unchanged: false,

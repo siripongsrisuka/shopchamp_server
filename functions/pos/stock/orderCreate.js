@@ -10,7 +10,8 @@
 //     doc ตัวนับไม่มี = เลข 1 และสร้าง doc (เดิมไม่สร้าง ⇒ ทุกใบได้ 000001 · stockOrder.md SB7)
 // เขียน: stockOrder/{orderUUID} รูปเดิม {status:'order', imageId, shopId, shopName, profileId, profileName, timestamp, orderNumber, id, price, qty} + {orderUUID}
 //   admin/stockNumber {value, timestamp} · notification รูปเดิม {heading:'ซื้อรายการสินค้า <qty> รายการ', shopId, notificationContent, categoryId:99, timestamp}
-//   push ถึงทีมงาน/ผู้ซื้อ ยังอยู่ฝั่งแอป
+//   push (DEV-0001 push): หลัง commit (ไม่ใช่ duplicate) ผู้กดซื้อ (access.uid) + ทีมงานใน admin/package.admin · 2 ท่อ (FCM + OneSignal)
+//     แทน `APP/src/screens/ImportStockPayScreen.js:135-137` (ทีมงานเดิมส่งแบบ id AND shopId ร้านลูกค้า = แทบไม่ถึง ⇒ ส่งหาคนทุกร้าน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -19,6 +20,8 @@ const { ok, sendDeny, parseOr400, internalError } = require("../_shared/respond"
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminTrail, adminFlag, resolveShopRef, belongsToShop } = require("../_shared/auth");
 const S = require("./_shared");
+const { notify } = require("../_shared/push/notify");
+const { orderPushes, PENDING_PUSH_TEXT } = require("../company/_orders");
 
 // ตารางชุดที่ขายจริง (ชุด 0 1 ฟรี ไม่ผ่านทางนี้)
 const PACKS = Object.freeze({ 2: { qty: 1000, price: 100 }, 3: { qty: 1500, price: 150 }, 4: { qty: 2000, price: 200 }, 5: { qty: 3000, price: 300 }, 6: { qty: 4000, price: 400 } });
@@ -89,9 +92,17 @@ function orderCreate(deps) {
           timestamp: now,
           ...trail,
         });
-        return { duplicate: false, orderNumber };
+        return { duplicate: false, orderNumber, shopName: typeof shop.name === "string" ? shop.name : "" };
       });
-      return ok(res, { orderId: input.orderUUID, ...out, ...adminFlag(access) });
+      const { shopName, ...result } = out;
+      if (!out.duplicate) {
+        await notify(deps, await orderPushes({
+          access, adminDoc: "package",
+          buyer: { heading: "สั่งซื้อรายการสินค้าสำเร็จ!", content: PENDING_PUSH_TEXT },
+          staff: { heading: "ลูกค้าซื้อรายการสินค้า!", content: `ร้าน ${shopName}` },
+        }));
+      }
+      return ok(res, { orderId: input.orderUUID, ...result, ...adminFlag(access) });
     } catch (e) {
       if (e instanceof S.Refusal) return sendDeny(res, e.deny);
       return internalError(res, e);

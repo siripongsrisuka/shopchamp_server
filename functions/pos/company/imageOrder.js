@@ -18,7 +18,8 @@ const logic = require("@shopchamp/logic");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
-const { runOrder, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
+const { notify } = require("../_shared/push/notify");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
 
 function imageOrder(deps) {
   return async function handler(req, res) {
@@ -59,7 +60,16 @@ function imageOrder(deps) {
           notificationContent: logic.COMPANY_ORDER_PENDING_TEXT,
         }),
       });
-      return ok(res, { ...out, ...adminFlag(access) });
+      const { shopName, ...result } = out;
+      if (!out.duplicate) {
+        // ทีมงาน: แอปเก่าส่งแบบ id AND shopId ของร้านลูกค้า (ImageLimitScreen.js:137) = เครื่องทีมงานแทบไม่เคยได้ ⇒ ทางใหม่ส่งหาคนทุกร้านแบบใบแพ็กเกจ
+        await notify(deps, await orderPushes({
+          access, adminDoc: "package",
+          buyer: { heading: "สั่งซื้อพื้นที่เก็บรูปสำเร็จ!", content: PENDING_PUSH_TEXT },
+          staff: { heading: "ลูกค้าซื้อพื้นที่เก็บรูป!", content: `ร้าน ${shopName}` },
+        }));
+      }
+      return ok(res, { ...result, ...adminFlag(access) });
     } catch (e) {
       if (e instanceof Refusal) return sendDeny(res, e.deny);
       return internalError(res, e);

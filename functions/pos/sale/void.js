@@ -15,6 +15,9 @@
 //       ยกเว้นคำขอยกเลิกของการแก้นั้นเอง (req.amendVoid + amend.requestId ตรง) · pending เกิน 5 นาที = ค้าง ยกเลิกได้ตามปกติ
 //   4. เขียน: stock (คืนตาม logic.planVoidReturn + restoreOnVoid) · bill · member · notification
 //      เรียกจาก sale.amend (amendVoid ผ่าน) = ไม่เขียนแจ้งเตือน "ยกเลิกใบเสร็จ" · sale.amend เขียนหมวด "แก้ไขใบเสร็จ" เองที่ ⑤ (B-5)
+//   5. push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ส่ง FCM หา shop.notiCancelBill ในร้านนี้ (แทน pushByTwoFilter ของแอป
+//      `APP/src/screens/BillHistoryScreen.js:423`) · หัวข้อ 'ยกเลิกใบเสร็จ' · ข้อความเดียวกับ notification · data {screen:'HomeScreen', sound}
+//      ยิงซ้ำ (alreadyVoid) / เรียกจาก sale.amend = ไม่ส่ง (amend ส่ง "แก้ไขใบเสร็จ" เอง)
 //
 // รูปที่เขียน = รูปที่แอปเก่าเขียน + field เพิ่มอย่างเดียว (แอปเก่ายังอ่านได้):
 //   แอปเก่า `shopchamp_app/src/screens/BillHistoryScreen.js:341-470`
@@ -35,6 +38,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { AMEND_PENDING_TTL_MS } = require("../_shared/idempotency");
 const { amendLocks } = require("./amendRules");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -256,25 +260,32 @@ function makeVoid(deps) {
           tx.update(memberRef, { ...memberEffect.update, ...trail });
         }
 
+        const notiContent = notificationContentOf({
+          reason: input.reason,
+          moneyMustPaid: bill.moneyMustPaid,
+          staffName: input.staffName,
+          receiptNumber: bill.receiptNumber,
+        });
         if (!ownAmend) tx.set(db.collection("notification").doc(), {
           heading: NOTI_HEADING,
           shopId: ref.shopId || ref.id,
-          notificationContent: notificationContentOf({
-            reason: input.reason,
-            moneyMustPaid: bill.moneyMustPaid,
-            staffName: input.staffName,
-            receiptNumber: bill.receiptNumber,
-          }),
+          notificationContent: notiContent,
           categoryId: NOTI_CATEGORY_VOID,
           timestamp: now,
           ...trail,
         });
+        const push = ownAmend ? null : {
+          to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop.notiCancelBill) },
+          heading: NOTI_HEADING, content: notiContent,
+          data: { screen: "HomeScreen", sound: `ยกเลิกใบเสร็จ โดย ${input.staffName}` },
+        };
 
         return {
           voided: true,
           taxNumber: isNonEmptyString(bill.taxNumber) ? bill.taxNumber : undefined,
           voidShift: { status: shift.status },
           refundCash,
+          push,
         };
       });
 
@@ -293,6 +304,7 @@ function makeVoid(deps) {
         ...adminFlag(access),
       };
       if (result.taxNumber) out.taxNumber = result.taxNumber;
+      if (result.push) await notify(deps, result.push);
       return ok(res, out);
     } catch (err) {
       return internalError(res, err);

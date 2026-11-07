@@ -81,6 +81,10 @@ const ROUTES = Object.freeze([
   { contract: "company.deleteAccount", path: "/company/delete-account", fn: "pos", auth: "user", factory: true, load: () => require("./company/deleteAccount").deleteAccount },
   { contract: "company.shopCreate", path: "/company/shop-create", fn: "pos", auth: "user", factory: true, load: () => require("./company/shopCreate").shopCreate },
 
+  // DEV-0001 push: แอปรุ่นใหม่ไม่มี OneSignal (Pack เคาะ 2026-11-07) · ลงทะเบียน FCM token ต่อเครื่อง · ออกร้าน/ออกระบบ = เลิกรับ
+  { contract: "device.registerPushToken", path: "/device/register-push-token", fn: "pos", auth: "shop", factory: true, load: () => require("./device/registerPushToken").registerPushToken },
+  { contract: "device.signOutPush", path: "/device/sign-out-push", fn: "pos", auth: "user", factory: true, load: () => require("./device/signOutPush").signOutPush },
+
   // ก้อน 9e รายงาน · อ่านอย่างเดียว · pos_heavy
   { contract: "report.billList", path: "/report/bill-list", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/billList").billList },
   { contract: "report.salesTotals", path: "/report/sales-totals", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./report/salesTotals").salesTotals },

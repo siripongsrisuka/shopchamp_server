@@ -16,7 +16,8 @@
 //      importProduct/{receiveUUID}: รูปเดิม `ImportProductScreen.js:353-365`
 //        {shopId, dateTime, supplier (สำเนาจากฐาน + id), billNumber, product:[{id,name,qty,cost,exp,lot}], createBy, createName, totalQty, totalCost, date}
 //        + ใหม่ {receiveUUID, vatIncluded?} · ทีมงาน {byAdmin, adminUid}
-//   push OneSignal ของแอปเก่า (`:455-460`) ยังอยู่ฝั่งแอป
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit FCM หา shop.notiImport ในร้านนี้ (แทน pushByTwoFilter
+//     `APP/src/screens/ImportProductScreen.js:388`) · หัวข้อ 'รับสินค้า' ข้อความรูปเดิม · duplicate = ไม่ส่ง · ทางเดิมไม่เขียน notification doc (คงเดิม)
 // ต่างจากเดิมโดยตั้งใจ: dateTime/updateTime = นาฬิกา server · date = วันไทยของเวลา server (เดิมนาฬิกาเครื่อง)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
@@ -28,6 +29,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { thaiYmd } = require("../_shared/billClock");
 const S = require("./_shared");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 // issue ของ logic.mergeReceiveLines ที่แปลว่ายอดจะลงไม่ครบกลุ่ม ⇒ 409 receive_unsafe
 const UNSAFE_ISSUES = new Set(["bad_link_multiply", "missing_link_detail"]);
@@ -121,10 +123,15 @@ function receive(deps) {
         };
         if (input.vatIncluded !== undefined) doc.vatIncluded = input.vatIncluded;
         tx.set(importRef, doc);
-        return { duplicate: false, totalQty, totalCost, stocks, issues: merged.issues };
+        const push = {
+          to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop.notiImport) }, heading: "รับสินค้า",
+          content: `สินค้า ${product.length} รายการ \nจำนวน ${totalQty} ชิ้น \nต้นทุน ${totalCost} บาท`, data: { screen: "HomeScreen" },
+        };
+        return { duplicate: false, totalQty, totalCost, stocks, issues: merged.issues, push };
       });
 
       if (out.duplicate) return ok(res, { importId: input.receiveUUID, duplicate: true, ...adminFlag(access) });
+      await notify(deps, out.push);
       const body2 = { importId: input.receiveUUID, duplicate: false, totalQty: out.totalQty, totalCost: out.totalCost, stocks: out.stocks, ...adminFlag(access) };
       if (out.issues.length) body2.issues = out.issues;
       return ok(res, body2);

@@ -32,7 +32,9 @@
 //     เงินสด + ร้านใช้กะ: ไม่ส่ง shiftId 409 cash_shift_required · shift ไม่มี 404 shift_not_found · ร้านอื่น 409 shift_other_shop · ปิด 409 shift_not_open
 //     เงินสด + ร้านไม่ใช้กะ: เหมือนทางแอปของร้านไม่ใช้กะ (ก้อน 5 ข้อ ①)
 //     paidHistory ทางเว็บมี source:'web' (เพิ่ม field อย่างเดียว)
-//   push OneSignal / LINE ของแอปเก่า (Modal_CreditMember.js:111-127) ยังอยู่ฝั่งแอป ไม่ทำที่นี่
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ส่ง FCM หา shop.notiCredit ในร้านนี้ (แทน pushByTwoFilter ของแอป
+//     `APP/src/modal/Modal_CreditMember.js:71`) · หัวข้อ/ข้อความเดียวกับ notification · data {sound:<หัวข้อ>} · duplicate = ไม่ส่ง
+//     LINE ของแอป (Modal_CreditMember.js:111-127) ยังอยู่ฝั่งแอป
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น · เวลาเขียนเป็น Date (admin SDK แปลงเป็น Timestamp เอง)
 "use strict";
 
@@ -43,6 +45,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc, staffStatusOf } = require("../_shared/auth");
 const { billDateOf } = require("../_shared/billClock");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const NOTI_HEADING = "ลูกค้าชำระเงินเซ็น";
 const NOTI_CATEGORY_CREDIT = 4;
@@ -238,18 +241,21 @@ function payCredit(deps) {
           ...(fromWeb ? { source: "web" } : {}),
           ...trail,
         });
+        const notiContent = notificationContentOf(member.name, r.paid, r.existCredit);
         tx.set(notiRef, {
           heading: NOTI_HEADING,
           shopId: shopField,
-          notificationContent: notificationContentOf(member.name, r.paid, r.existCredit),
+          notificationContent: notiContent,
           categoryId: NOTI_CATEGORY_CREDIT,
           timestamp: now,
           ...trail,
         });
-        return { duplicate: false, paid: r.paid, existCredit: r.existCredit, cutBills };
+        const push = { to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop.notiCredit) }, heading: NOTI_HEADING, content: notiContent, data: { sound: NOTI_HEADING } };
+        return { duplicate: false, paid: r.paid, existCredit: r.existCredit, cutBills, push };
       });
 
       if (out.duplicate) return ok(res, { paidHistoryId: input.payUUID, duplicate: true, ...adminFlag(access) });
+      await notify(deps, out.push);
       return ok(res, {
         paidHistoryId: input.payUUID,
         paid: out.paid,

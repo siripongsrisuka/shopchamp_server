@@ -15,6 +15,7 @@
 //        cost/name/unit จากฐาน · totalCost = logic.requisitionLineCost (ไม่รู้ทุน = null · ST-118 ST-119)
 //        + ใหม่ {requisitionUUID, moves:[{id, qty}]} = ตัวที่ถูกตัดจริง (ST-010 เตรียมไว้ให้ยกเลิกได้ภายหลัง · ยังไม่มี endpoint ยกเลิก)
 //      notification: รูปเดิม `:185-191` {heading:'เบิกสินค้า', shopId, notificationContent, categoryId:7, timestamp}
+//   push (DEV-0001 push): หลัง commit FCM หา shop.notiRequisition ในร้านนี้ (แทน pushByTwoFilter `APP/src/screens/RequisitionScreen.js:152`) · duplicate = ไม่ส่ง
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -26,6 +27,7 @@ const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsTo
 const { isPremiumActive } = require("../_shared/premium");
 const { billDateOf } = require("../_shared/billClock");
 const S = require("./_shared");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const NOTI_HEADING = "เบิกสินค้า";
 const NOTI_CATEGORY = 7;
@@ -102,19 +104,22 @@ function requisition(deps) {
           moves: plan.moves,
           ...trail,
         });
+        const notiContent = notificationContentOf(input.reason, currentCarts);
         tx.set(notiRef, {
           heading: NOTI_HEADING,
           shopId: shopField,
-          notificationContent: notificationContentOf(input.reason, currentCarts),
+          notificationContent: notiContent,
           categoryId: NOTI_CATEGORY,
           timestamp: now,
           staffName: input.staffName,
           ...trail,
         });
-        return { duplicate: false, moves: plan.moves, issues: plan.issues };
+        const push = { to: { kind: "staff", shopId: access.shopId, ids: idsOf(shop.notiRequisition) }, heading: NOTI_HEADING, content: notiContent, data: { screen: "HomeScreen" } };
+        return { duplicate: false, moves: plan.moves, issues: plan.issues, push };
       });
 
       if (out.duplicate) return ok(res, { requisitionId: input.requisitionUUID, duplicate: true, ...adminFlag(access) });
+      await notify(deps, out.push);
       const resBody = { requisitionId: input.requisitionUUID, duplicate: false, moves: out.moves, ...adminFlag(access) };
       if (out.issues.length) resBody.issues = out.issues;
       return ok(res, resBody);

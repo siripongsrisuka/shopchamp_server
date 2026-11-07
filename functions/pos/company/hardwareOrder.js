@@ -22,7 +22,8 @@ const logic = require("@shopchamp/logic");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
-const { runOrder, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
+const { notify } = require("../_shared/push/notify");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
 
 function quoteOf(lines, vat) {
   return (doc) => {
@@ -90,7 +91,15 @@ function hardwareOrder(deps) {
           notificationContent: logic.companyHardwareNotiText(q.product),
         }),
       });
-      return ok(res, { ...out, ...adminFlag(access) });
+      const { shopName, ...result } = out;
+      if (!out.duplicate) {
+        await notify(deps, await orderPushes({
+          access, adminDoc: "hardware",
+          buyer: { heading: "สั่งซื้ออุปกรณ์สำเร็จ", content: PENDING_PUSH_TEXT, data: { sound: "สั่งซื้ออุปกรณ์สำเร็จค่ะ" } },
+          staff: { heading: `${shopName} ซื้ออุปกรณ์ ${out.net} บาท!`, content: `ร้าน ${shopName}`, data: { sound: `อุปกรณ์ขายออก ${out.net} บาทค่ะ` } },
+        }));
+      }
+      return ok(res, { ...result, ...adminFlag(access) });
     } catch (e) {
       if (e instanceof Refusal) return sendDeny(res, e.deny);
       return internalError(res, e);

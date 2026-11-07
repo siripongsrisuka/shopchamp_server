@@ -22,7 +22,9 @@
 //           checkInHistory/{requestId} = เนื้อใบเดิมทั้งหมด + {id: doc id ใบเดิม, clockOut: now, clockOutImage, clockOutRequestId} · ลบใบ checkIn
 //   ทั้ง 2 ทาง: notification/checkIn_{requestId} รูปเดิม `CheckInScreen.js:119-125` {heading, shopId, notificationContent, categoryId:3, timestamp}
 //           + ช่องใหม่ profileId checkInOp (เพิ่มอย่างเดียว · จอประวัติแจ้งเตือนเดิมไม่อ่าน)
-//   push OneSignal / LINE ของแอปเก่า (`CheckInScreen.js:126-142`) ยังอยู่ฝั่งแอป ไม่ทำที่นี่
+//   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ส่ง FCM หา shop.notiCheckin ในร้านนี้ (แทน pushByTwoFilter ของแอป
+//     `APP/src/screens/CheckInScreen.js:138`) · หัวข้อ/ข้อความเดียวกับ notification · data {sound:'แจ้งเตือนเข้าออกงานค่ะ'} · duplicate = ไม่ส่ง
+//     LINE ของแอป (`CheckInScreen.js:126-142`) ยังอยู่ฝั่งแอป
 // shopId ที่เขียน = doc id ร้าน (แอปเก่าเขียน shop.id · รายงานเว็บค้นด้วยค่านี้)
 "use strict";
 
@@ -35,9 +37,11 @@ const WR = require("../_shared/watcherRoster");
 const { isStaffPackageActive } = require("../_shared/premium");
 const { billDateOf } = require("../_shared/billClock");
 const { isObj, Refusal, refuse, thaiReceiptTime, displayName, toIsoDeep } = require("./common");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const CHECKIN_RIGHT = "103";
 const HEADING = "เข้า - ออกงาน";
+const pushOf = (shop, shopDocId, content) => ({ to: { kind: "staff", shopId: shopDocId, ids: idsOf(shop && shop.notiCheckin) }, heading: HEADING, content, data: { sound: "แจ้งเตือนเข้าออกงานค่ะ" } });
 const NOTI_CATEGORY_CHECKIN = 3;
 
 function checkIn(deps) {
@@ -103,8 +107,9 @@ function checkIn(deps) {
             staffName: name,
             ...trail,
           });
-          tx.set(notiRef, { heading: HEADING, shopId: shopDocId, notificationContent: `${name}\nประเภท:เข้างาน\nเวลา:${thaiReceiptTime(now)} `, categoryId: NOTI_CATEGORY_CHECKIN, timestamp: now, profileId: uid, checkInOp: "in", ...trail });
-          return { duplicate: false, clockIn: now.toISOString() };
+          const content = `${name}\nประเภท:เข้างาน\nเวลา:${thaiReceiptTime(now)} `;
+          tx.set(notiRef, { heading: HEADING, shopId: shopDocId, notificationContent: content, categoryId: NOTI_CATEGORY_CHECKIN, timestamp: now, profileId: uid, checkInOp: "in", ...trail });
+          return { duplicate: false, clockIn: now.toISOString(), push: pushOf(shop, shopDocId, content) };
         }
 
         // op out
@@ -117,11 +122,14 @@ function checkIn(deps) {
         if (!ci) refuse(deny(409, "not_checked_in", "ยังไม่ได้ลงเวลาเข้างาน"));
         tx.set(histRef, { ...ci, id: ciId, clockOut: now, clockOutImage: input.imageUrl, clockOutRequestId: input.requestId, ...trail });
         tx.delete(ciRef);
-        tx.set(notiRef, { heading: HEADING, shopId: shopDocId, notificationContent: `${name}\nประเภท:ออกจากงาน\nเวลา:${thaiReceiptTime(now)} `, categoryId: NOTI_CATEGORY_CHECKIN, timestamp: now, profileId: uid, checkInOp: "out", ...trail });
-        return { duplicate: false, clockIn: toIsoDeep(ci.clockIn), clockOut: now.toISOString() };
+        const content = `${name}\nประเภท:ออกจากงาน\nเวลา:${thaiReceiptTime(now)} `;
+        tx.set(notiRef, { heading: HEADING, shopId: shopDocId, notificationContent: content, categoryId: NOTI_CATEGORY_CHECKIN, timestamp: now, profileId: uid, checkInOp: "out", ...trail });
+        return { duplicate: false, clockIn: toIsoDeep(ci.clockIn), clockOut: now.toISOString(), push: pushOf(shop, shopDocId, content) };
       });
 
-      return ok(res, { op: input.op, checkInId: ciId, ...out, ...adminFlag(access) });
+      const { push, ...result } = out;
+      if (push) await notify(deps, push);
+      return ok(res, { op: input.op, checkInId: ciId, ...result, ...adminFlag(access) });
     } catch (e) {
       if (e instanceof Refusal) return sendDeny(res, e.deny);
       return internalError(res, e);

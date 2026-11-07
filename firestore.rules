@@ -281,6 +281,8 @@ service cloud.firestore {
     //   watcherWriteLog (บันทึกการผูกสาขาของ watcher) ก็ server เท่านั้น
     match /watcher/{docId} { allow read, write: if false; }
     match /watcherWriteLog/{id} { allow read, write: if false; }
+    // ทะเบียนเครื่องรับแจ้งเตือนของแอปใหม่ (DEV-0001 push): server เท่านั้น · แอปลงทะเบียนผ่าน /pos/device/register-push-token
+    match /pushDevices/{id} { allow read, write: if false; }
 
     // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
     // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex

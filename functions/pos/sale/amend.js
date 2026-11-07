@@ -15,6 +15,7 @@
 //      (amend ต้องมี status + requestId ให้ผ่าน schema Bill · ไม่งั้น sale.void / sale.get อ่านใบใหม่ไม่ได้)
 //   ④ voidSale ({body, access, amendVoid:true}) · requestId เดียวกับคำขอแก้ ⇒ ยิงซ้ำได้ alreadyVoid
 //   ⑤ txn: amend.status done + amendedBy + notification หมวด 8 "แก้ไขใบเสร็จ" (B-5 · 1 ใบต่อการแก้ · sale.void ที่เรียกจาก ④ ไม่เขียนหมวด 1 ซ้อน)
+//      หลัง ⑤ สำเร็จ: push FCM หา shop.notiCancelBill ในร้านนี้ หัวข้อ "แก้ไขใบเสร็จ" (DEV-0001 push · แอปใหม่ไม่มี OneSignal · แอปไม่เคยส่งเรื่องนี้ = ใหม่)
 //      เลข 8 = เลขว่างถัดไป: แอปเก่าใช้ 1-7 (main3 src/screens/NotificationHistory.js:52-60) และ 99 (PayScreen.js:158 ฯลฯ) · เว็บเจ้าของใช้ 4 99
 // ยิงซ้ำ requestId เดิมที่ค้าง pending = เดินต่อด้วย changes ที่ประทับไว้ (เปลี่ยนเนื้อไม่ได้) · ข้ามขั้นที่มีหลักฐานว่าทำแล้ว
 // amendedBy เขียนที่ ⑤ (หลังยกเลิก) ไม่ใช่ ③: สัญญา sale.void ตอบ already_void ให้บิลที่มี amendedBy
@@ -34,6 +35,7 @@ const { readNow, depOr } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
 const { amendReceiptUUID, amendLockState, sameRequestId } = require("../_shared/idempotency");
 const { amendLocks, checkAmendShape, refundDueOf } = require("./amendRules");
+const { notify, idsOf } = require("../_shared/push/notify");
 
 const AMEND_RIGHT = "143";
 const REASON_MAX = 500; // schema Reason (requests/sale.ts)
@@ -281,7 +283,7 @@ function amend(deps) {
         const resume = lock === "resume";
         const prior = resume ? bill.amend : null;
         // ยิงซ้ำหลังออกใบใหม่แล้ว = เดินต่อให้จบ (บิลเดิมอาจยกเลิกแล้วด้วยขั้น ④ ของคำขอนี้เอง)
-        if (resume && prior.newBillId) return { kind: "continue", bill, shopRef, changes: prior.changes, usesShift };
+        if (resume && prior.newBillId) return { kind: "continue", bill, shopRef, changes: prior.changes, usesShift, notiIds: idsOf(shop.notiCancelBill) };
 
         if (lock === "taken" || isVoidedBill(bill) || bill.amendedBy) refuse(409, "bill_void");
         const locks = amendLocks(bill);
@@ -313,7 +315,7 @@ function amend(deps) {
             }),
           });
         }
-        return { kind: "continue", bill, shopRef, changes, usesShift };
+        return { kind: "continue", bill, shopRef, changes, usesShift, notiIds: idsOf(shop.notiCancelBill) };
       });
     } catch (e) {
       if (e instanceof Deny) return refuseRes(e);
@@ -424,6 +426,16 @@ function amend(deps) {
     }
 
     // ⑤ จบ
+    const amendStaffName = stampedStaff(prior).name || input.staffName;
+    const amendContent = amendNotificationContentOf({
+      reason: prior.reason || input.reason,
+      oldReceiptNumber: oldBill.receiptNumber,
+      newReceiptNumber,
+      oldMust: oldBill.moneyMustPaid,
+      newMust: changes.moneyMustPaid,
+      refundDue,
+      staffName: amendStaffName,
+    });
     try {
       await db.runTransaction(async (txn) => {
         const cur = await txn.get(billDoc);
@@ -440,15 +452,7 @@ function amend(deps) {
         txn.set(db.collection("notification").doc(), {
           heading: NOTI_HEADING_AMEND,
           shopId: (step.shopRef && (step.shopRef.shopId || step.shopRef.id)) || access.shopId,
-          notificationContent: amendNotificationContentOf({
-            reason: prior.reason || input.reason,
-            oldReceiptNumber: oldBill.receiptNumber,
-            newReceiptNumber,
-            oldMust: oldBill.moneyMustPaid,
-            newMust: changes.moneyMustPaid,
-            refundDue,
-            staffName: stampedStaff(prior).name || input.staffName,
-          }),
+          notificationContent: amendContent,
           categoryId: NOTI_CATEGORY_AMEND,
           timestamp: now,
           ...trail,
@@ -458,6 +462,12 @@ function amend(deps) {
       log("pos/sale/amend: ปิดงานไม่สำเร็จ", e && e.message);
       return fail(res, 500, "amend_reverse_failed", MESSAGES.amend_reverse_failed, { oldBillId: input.billId, newBillId });
     }
+    // push (DEV-0001 push): แจ้ง notiCancelBill ในร้านนี้ หัวข้อ "แก้ไขใบเสร็จ" · ข้อความเดียวกับ notification หมวด 8 · ครั้งที่ปิดงานสำเร็จเท่านั้น (duplicate ไม่ถึงตรงนี้)
+    await notify(deps, {
+      to: { kind: "staff", shopId: access.shopId, ids: step.notiIds },
+      heading: NOTI_HEADING_AMEND, content: amendContent,
+      data: { screen: "HomeScreen", sound: `แก้ไขใบเสร็จ โดย ${amendStaffName}` },
+    });
 
     return ok(res, {
       ...adminFlag(access),
