@@ -25,6 +25,8 @@ const ROUTES = Object.freeze([
   { contract: "sale.discardPending", path: "/sale/discard-pending", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/discardPending").discardPending, bodyLimit: "1mb" },
   { contract: "sale.issueTaxInvoice", path: "/sale/issue-tax-invoice", fn: "pos", auth: "shop", factory: true, load: () => require("./sale/issueTaxInvoice").issueTaxInvoice },
   { contract: "shift.manage", path: "/shift/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/manage").manage },
+  // DEV-0002: เว็บถามกะที่เปิดอยู่ก่อนรับชำระเงินเซ็นเป็นเงินสด (อ่านอย่างเดียว)
+  { contract: "shift.openList", path: "/shift/open-list", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/openList").openList },
   { contract: "member.payCredit", path: "/member/pay-credit", fn: "pos", auth: "shop", factory: true, load: () => require("./member/payCredit").payCredit },
 
   // ก้อน 9a สต๊อก · segment stock = pos · stock-repair = pos_heavy (อ่านสินค้าทั้งร้าน)

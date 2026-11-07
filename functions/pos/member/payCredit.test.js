@@ -293,3 +293,114 @@ test("ข้อ ① คู่ควบคุม · ร้านใช้กะ �
   assert.equal(r.body.error, "shift_not_open");
   assert.equal(LOG.length, 0);
 });
+
+// ── DEV-0002 รับชำระผ่านเว็บแยกตามช่องทาง (Pack เคาะ 2026-11-07) · body.source 'web' ──
+//   seed: shopchampPayment [1 เงินสด · c-uuid-1 โอนเข้าบัญชี] · ช่อง 2 ไม่อยู่ในร้านนี้
+const web = (x) => { const { shiftId, ...b0 } = body({ source: "web", ...x }); return x && x.shiftId !== undefined ? { ...b0, shiftId: x.shiftId } : b0; };
+const shiftShop = (mut) => seed((d) => { d.shop.shopA.shift = true; if (mut) mut(d); });
+
+test("เว็บ · ร้านใช้กะ · โอน (ช่องของร้าน) ไม่ส่ง shiftId ⇒ 200 · paidHistory ไม่ผูกกะ · source web", async () => {
+  shiftShop((d) => { d.shift.sh1.status = false; });
+  const r = await call(web({ paymentId: "c-uuid-1" }), OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const ph = DATA.paidHistory[UUID];
+  assert.equal(ph.shiftId, null);
+  assert.equal(ph.shiftOpenTime, null);
+  assert.equal(ph.source, "web");
+  assert.equal(ph.paymentName, "โอนเข้าบัญชี");
+});
+
+test("เว็บ · ร้านใช้กะ · เงินสด + กะเปิด ⇒ 200 · ผูกกะ sh1 shiftOpenTime = openTime (เข้าเงินคาดของกะนั้น)", async () => {
+  shiftShop();
+  const r = await call(web({ paymentId: 1, shiftId: "sh1" }), OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const ph = DATA.paidHistory[UUID];
+  assert.deepEqual([ph.shiftId, ph.shiftOpenTime, ph.paymentId, ph.source], ["sh1", "OPEN-T", 1, "web"]);
+  assert.equal(logic.isCashChannel(ph.paymentId), true);
+});
+
+test("เว็บ · ร้านใช้กะ · เงินสดไม่ส่ง shiftId ⇒ 409 cash_shift_required ข้อความ 'ต้องเปิดกะก่อน หรือรับเป็นโอน' · ไม่เขียน", async () => {
+  shiftShop();
+  const r = await call(web({ paymentId: 1 }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "cash_shift_required");
+  assert.equal(r.body.message, "ต้องเปิดกะก่อน หรือรับเป็นโอน");
+  assert.equal(LOG.length, 0);
+});
+
+test("เว็บ · ร้านใช้กะ · เงินสด + กะปิด ⇒ 409 shift_not_open · ไม่เขียน", async () => {
+  shiftShop((d) => { d.shift.sh1.status = false; });
+  const r = await call(web({ paymentId: 1, shiftId: "sh1" }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_not_open");
+  assert.equal(r.body.message, "ต้องเปิดกะก่อน หรือรับเป็นโอน");
+  assert.equal(LOG.length, 0);
+});
+
+test("เว็บ · ร้านใช้กะ · เงินสด + กะร้านอื่น ⇒ 409 shift_other_shop · กะไม่มี ⇒ 404 shift_not_found · ไม่เขียน", async () => {
+  shiftShop((d) => { d.shift.shB = { shopId: "shopB", status: true, openTime: "B" }; });
+  let r = await call(web({ paymentId: 1, shiftId: "shB" }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_other_shop");
+  r = await call(web({ paymentId: 1, shiftId: "sh-x" }), OWNER);
+  assert.equal(r.code, 404);
+  assert.equal(r.body.error, "shift_not_found");
+  assert.equal(LOG.length, 0);
+});
+
+test("เว็บ · ไม่เชื่อเว็บแยกช่อง: ช่อง 2 ไม่อยู่ในร้าน ⇒ 409 payment_not_in_shop · ช่องปิดใช้ ⇒ 409 เหมือนกัน", async () => {
+  shiftShop();
+  let r = await call(web({ paymentId: 2 }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "payment_not_in_shop");
+  shiftShop((d) => { d.shop.shopA.shopchampPayment[1].status = false; });
+  r = await call(web({ paymentId: "c-uuid-1" }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "payment_not_in_shop");
+  assert.equal(LOG.length, 0);
+});
+
+test("เว็บ · ไม่ใช่เงินสดแต่ส่ง shiftId ⇒ 409 noncash_no_shift · ไม่เขียน (โอนไม่ผูกกะ)", async () => {
+  shiftShop();
+  const r = await call(web({ paymentId: "c-uuid-1", shiftId: "sh1" }), OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "noncash_no_shift");
+  assert.equal(LOG.length, 0);
+});
+
+test("เว็บ · ร้านไม่ใช้กะ · เงินสดไม่ส่ง shiftId ⇒ 200 รับได้ทุกช่องแบบเดิม · shiftId null", async () => {
+  seed();
+  const r = await call(web({ paymentId: 1 }), OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(DATA.paidHistory[UUID].shiftId, null);
+  assert.equal(DATA.paidHistory[UUID].source, "web");
+});
+
+test("เว็บ · doc ร้านไม่มี shopchampPayment ⇒ ใช้ช่องตั้งต้น 1 เงินสด 2 พร้อมเพย์ · 2 ผ่านไม่ผูกกะ", async () => {
+  shiftShop((d) => { delete d.shop.shopA.shopchampPayment; });
+  const r = await call(web({ paymentId: 2 }), OWNER);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(DATA.paidHistory[UUID].shiftId, null);
+  assert.equal(DATA.paidHistory[UUID].paymentName, "พร้อมเพย์");
+});
+
+test("คู่ควบคุม · ทางแอป (ไม่ส่ง source) ร้านใช้กะ โอนไม่ส่ง shiftId ⇒ 409 shift_not_open คงเดิม · paidHistory ไม่มี source", async () => {
+  shiftShop();
+  const { shiftId, ...b0 } = body({ paymentId: "c-uuid-1" });
+  let r = await call(b0, OWNER);
+  assert.equal(r.code, 409);
+  assert.equal(r.body.error, "shift_not_open");
+  shiftShop();
+  r = await call(body({ source: "app" }), OWNER);
+  assert.equal(r.code, 200);
+  assert.equal("source" in DATA.paidHistory[UUID], false);
+});
+
+test("shopChannelOf: เทียบ id แบบข้อความ · status false = null · ไม่มีรายการ = ค่าตั้งต้น", () => {
+  const shop = { shopchampPayment: [{ id: 1, name: "เงินสด" }, { id: "u1", name: "x", status: false }] };
+  assert.equal(P.shopChannelOf(shop, 1).name, "เงินสด");
+  assert.equal(P.shopChannelOf(shop, "u1"), null);
+  assert.equal(P.shopChannelOf(shop, 2), null);
+  assert.equal(P.shopChannelOf({}, 2).name, "พร้อมเพย์");
+  assert.equal(P.shopChannelOf({}, 4), null);
+});

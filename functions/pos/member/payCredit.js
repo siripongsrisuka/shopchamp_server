@@ -25,6 +25,13 @@
 //      notification/{auto}: รูปเดิม Modal_CreditMember.js:86-92 {heading, shopId, notificationContent, categoryId:4, timestamp}
 //      ทีมงาน (byAdmin) = paidHistory และ notification มี {byAdmin:true, adminUid} · member ไม่ติดป้าย (เป็นเอกสารที่มีอยู่แล้ว ไม่ใช่เอกสารที่เขียนเพิ่ม)
 //   shopId ที่เขียน = field shop.shopId (แอปเก่าเขียนด้วยค่านี้) · ไม่มี = doc id
+//   ทางเว็บ (body.source 'web' · DEV-0002 · Pack เคาะ 2026-11-07) — ตรวจหลังด่านสมาชิก ก่อนด่านคนรับ · ทางแอป (ไม่ส่ง/'app') คงเดิมทุกอย่าง
+//     ช่องรับเงินอ่านจาก shop.shopchampPayment เอง (ไม่มีช่องนี้ = ค่าตั้งต้น 1 เงินสด 2 พร้อมเพย์) · ไม่มีในร้าน/ปิดใช้ 409 payment_not_in_shop
+//     เงินสด = logic.isCashChannel(id ของแถวในร้าน) · ไม่เชื่อว่าเว็บแยกช่องถูก
+//     ไม่ใช่เงินสด: ไม่ผูกกะ (paidHistory.shiftId null) · ส่ง shiftId มา 409 noncash_no_shift
+//     เงินสด + ร้านใช้กะ: ไม่ส่ง shiftId 409 cash_shift_required · shift ไม่มี 404 shift_not_found · ร้านอื่น 409 shift_other_shop · ปิด 409 shift_not_open
+//     เงินสด + ร้านไม่ใช้กะ: เหมือนทางแอปของร้านไม่ใช้กะ (ก้อน 5 ข้อ ①)
+//     paidHistory ทางเว็บมี source:'web' (เพิ่ม field อย่างเดียว)
 //   push OneSignal / LINE ของแอปเก่า (Modal_CreditMember.js:111-127) ยังอยู่ฝั่งแอป ไม่ทำที่นี่
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น · เวลาเขียนเป็น Date (admin SDK แปลงเป็น Timestamp เอง)
 "use strict";
@@ -42,6 +49,9 @@ const NOTI_CATEGORY_CREDIT = 4;
 const DEFAULT_PAYMENT_NAMES = Object.freeze({ 1: "เงินสด", 2: "พร้อมเพย์" });
 const CREDIT_RIGHT = "124"; // จัดการเซ็น (main3 src/screens/StaffScreen.js:71)
 const CREDIT_PAYMENT_ID = 3; // ช่องเงินเซ็น · ตรงกับ schema
+// ช่องตั้งต้นเมื่อ doc ร้านไม่มี shopchampPayment (แบบ handleShop ของแอปและเว็บ · app:config/initialShop.js:104-116)
+const DEFAULT_CHANNELS = Object.freeze([{ id: 1, name: "เงินสด", status: true }, { id: 2, name: "พร้อมเพย์", status: true }]);
+const WEB_NEED_SHIFT = "ต้องเปิดกะก่อน หรือรับเป็นโอน";
 
 // สตางค์ด้วยตัวแปลงของ logic ตัวเดียวกับ applyCreditPayment ("1,000" อ่านได้ · verify W3)
 const sat = (v) => logic.toSatang(v);
@@ -67,6 +77,17 @@ function paymentNameOf(shop, paymentId) {
   const row = list.find((c) => isObj(c) && String(c.id) === String(paymentId));
   if (row && typeof row.name === "string" && row.name) return row.name;
   return DEFAULT_PAYMENT_NAMES[paymentId] || "";
+}
+
+/**
+ * shopChannelOf(shop, paymentId) — แถวช่องรับเงินของร้านที่ตรงกับ paymentId (ทางเว็บ) · ไม่มี/ปิดใช้ (status false) = null
+ *   เทียบด้วย String เพราะ paymentId ผ่าน paymentIdOf แล้ว ("1" → 1) · แถว uuid เทียบตรง
+ */
+function shopChannelOf(shop, paymentId) {
+  const list = Array.isArray(shop && shop.shopchampPayment) ? shop.shopchampPayment : DEFAULT_CHANNELS;
+  const row = list.find((c) => isObj(c) && c.id !== undefined && c.id !== null && String(c.id) === String(paymentId));
+  if (!row || row.status === false) return null;
+  return row;
 }
 
 /** บิลที่ถูกตัดหนี้: เทียบแถวเดิมกับแถวใหม่ (applyCreditPayment ข้ามแถวที่ไม่ใช่ object · ลำดับที่เหลือคงเดิม) */
@@ -157,7 +178,23 @@ function payCredit(deps) {
         //   ร้านใช้ระบบกะ = ต้องเข้ากะที่เปิดอยู่ตามเดิม (#17)
         const usesShift = shop.shift === true;
         let shiftForRow = null; // {shiftId, openTime} ที่เขียนลง paidHistory · null = ไม่ผูกกะ
-        if (usesShift) {
+        const fromWeb = input.source === "web";
+        let webCash = false;
+        if (fromWeb) {
+          const ch = shopChannelOf(shop, input.paymentId);
+          if (!ch) refuse(deny(409, "payment_not_in_shop", "ไม่พบช่องทางรับเงินนี้ในร้าน หรือช่องนี้ปิดใช้อยู่"));
+          webCash = logic.isCashChannel(ch.id);
+          if (!webCash && shiftRef) refuse(deny(409, "noncash_no_shift", "รับโอนหรือช่องทางที่ไม่ใช่เงินสด ไม่ต้องเลือกกะ"));
+        }
+        if (fromWeb && !webCash) {
+          // ไม่ใช่เงินสด: ไม่ผูกกะ ไม่ว่าร้านใช้กะหรือไม่ (Pack เคาะ 2026-11-07)
+        } else if (fromWeb && usesShift) {
+          if (!shiftRef) refuse(deny(409, "cash_shift_required", WEB_NEED_SHIFT));
+          const sc = checkOwnedDoc("shift", shift, ref);
+          if (!sc.ok) refuse(sc);
+          if (shift.status !== true) refuse(deny(409, "shift_not_open", WEB_NEED_SHIFT));
+          shiftForRow = { shiftId: input.shiftId, openTime: shift.openTime };
+        } else if (usesShift) {
           if (!shiftRef) refuse(deny(409, "shift_not_open", "กะปิดอยู่ กรุณาเปิดกะก่อนรับชำระ"));
           const sc = checkOwnedDoc("shift", shift, ref);
           if (!sc.ok) refuse(sc);
@@ -198,6 +235,7 @@ function payCredit(deps) {
           paymentId: input.paymentId,
           paymentName: paymentNameOf(shop, input.paymentId),
           cutBills,
+          ...(fromWeb ? { source: "web" } : {}),
           ...trail,
         });
         tx.set(notiRef, {
@@ -227,4 +265,4 @@ function payCredit(deps) {
   };
 }
 
-module.exports = { payCredit, paymentIdOf, paymentNameOf, cutBillsOf, notificationContentOf, sameRequest };
+module.exports = { payCredit, paymentIdOf, paymentNameOf, shopChannelOf, cutBillsOf, notificationContentOf, sameRequest };
