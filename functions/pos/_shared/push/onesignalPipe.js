@@ -6,7 +6,7 @@
 //   + filter tag แบบที่แอปเก่าใช้ (main3 `src/api/onesignal.js`): pushByShopFilter {shopId} · pushByTwoFilter {id AND shopId} · pushByIdFilter {id}
 //   หลายคน = ยิง 1 ครั้งต่อคนแบบแอปเก่า (filter ไม่เกิน 2 ตัว)
 //   tag shopId ของแอปเก่า = field `shop.shopId` (main3 `LoadingScreen.js:196` ส่ง shopInfo.shopId) ไม่ใช่ doc id ⇒ อ่าน doc ร้านหาค่า (ไม่มี field = doc id)
-// กุญแจ: env `ONESIGNAL_REST_API_KEY` เท่านั้น (ยังไม่มีใน Secret Manager · ยังไม่ผูกใน workloads.js)
+// กุญแจ: env `ONESIGNAL_REST_API_KEY` เท่านั้น (Pack สร้างใน Secret Manager 2026-11-07 · ผูกกับ `pos` ใน workloads.js)
 //   ไม่มีค่า = ข้ามท่อนี้ · log 1 บรรทัดต่อโปรเซส · ไม่ทำให้คำขอพัง · app id = env `ONESIGNAL_APP_ID` หรือค่าของแอป (ค่าสาธารณะที่อยู่ในแอปอยู่แล้ว)
 // 🔒 ไม่ throw · ไม่ส่งแบบไม่มี filter (legacy ไม่มี filter = ส่งทุกเครื่องทุกร้าน ⇒ ที่นี่ปัดเสมอ)
 "use strict";

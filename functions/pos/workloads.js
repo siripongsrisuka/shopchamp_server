@@ -21,7 +21,8 @@ const ALL = "*";
 
 const FUNCTION_CONFIG = Object.freeze({
   // pos ผูก GATEWAY_CRED_ENC_KEY (Pack สร้าง secret 2026-11-07 · ใช้กับที่ลับ token LINE `shop.lineSettings`)
-  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY"]) }),
+  //   + ONESIGNAL_REST_API_KEY (Pack สร้าง 2026-11-07 · ท่อ OneSignal ช่วงเปลี่ยนผ่าน `_shared/push/onesignalPipe.js` · ลบพร้อมท่อ)
+  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "ONESIGNAL_REST_API_KEY"]) }),
   [FN.HEAVY]: Object.freeze({ memory: "2GiB", concurrency: 1, maxInstances: 30, timeoutSeconds: 300 }),
 });
 

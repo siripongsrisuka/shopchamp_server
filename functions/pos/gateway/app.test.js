@@ -146,7 +146,7 @@ test("④ export: index.js ต่อท้าย exports.pos_gateway · function
   const SECRETS_CREATED = ["GATEWAY_CRED_ENC_KEY"];
   const bound = (ep.secretEnvironmentVariables || []).map((s) => s.key).sort();
   assert.deepEqual(bound, SECRETS_CREATED, "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
-  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key), SECRETS_CREATED, "pos ต้องผูกกุญแจเดียวกัน (ที่ลับ token LINE)");
+  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY"].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07)");
   assert.deepEqual(ep.httpsTrigger && ep.httpsTrigger.invoker, ["public"]);
   for (const k of ["pos", "pos_heavy"]) assert.equal(F[k].__endpoint.platform, "gcfv2", `${k} ไม่ถูกแตะ`);
 });
