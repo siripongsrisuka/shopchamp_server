@@ -1,7 +1,7 @@
-// pos/e2e/report-web.e2e.js — เส้นรายงานของเว็บเจ้าของร้านบน emulator (DEV-0002)
+// pos/e2e/owner-web.e2e.js — เส้นรายงานของเว็บเจ้าของร้านบน emulator (DEV-0002)
 //   report.breakdown (item · payment · total รายวัน) · report.billList detail · report.memberBills · report.shiftHistory dayBy open
 //   ฐานจริงของ emulator (Timestamp จริง · where/orderBy/limit จริง · path ซ้อน member.id จริง) · ร้านอื่นไม่ปน · ไม่เขียนอะไร
-// รัน: cd functions && node pos/e2e/run.js pos/e2e/report-web.e2e.js
+// รัน: cd functions && node pos/e2e/run.js pos/e2e/owner-web.e2e.js
 "use strict";
 
 const { test, before } = require("node:test");
