@@ -344,3 +344,27 @@ test("จอลูกค้าวิดีโอ: ตั้งวิดีโอ
   assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsMode", value: "image" }] }, weak)).code, 403);
   assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsMode", value: "loop" }] }, OWNER)).code, 400);
 });
+
+// ───────── ลำดับช่องทางชำระเงิน (DEV-0001 · Pack สั่ง 2026-11-08) ─────────
+test("ลำดับช่องทางชำระเงิน: ตั้งครั้งแรก base [] · shopchampPayment ไม่ถูกแตะ · base เก่าโดน 409 · ส่งซ้ำ = changed:false · id ซ้ำ/ตัวเลข 400 · ผ่าน entity Shop", async () => {
+  seed();
+  const rowsBefore = JSON.parse(JSON.stringify(store.data.shop.shopA.shopchampPayment));
+  const order = ["gw:kbank-qr", "c-1", "1"];
+  const r1 = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: [], value: order }] }, OWNER);
+  assert.equal(r1.code, 200); assert.deepEqual(r1.body.fields, ["paymentDisplayOrder"]);
+  const doc = store.data.shop.shopA;
+  assert.deepEqual(doc.paymentDisplayOrder, order);
+  assert.deepEqual(doc.shopchampPayment, rowsBefore);
+  assert.equal(schema.Shop.safeParse(doc).success, true);
+  // เครื่อง B ยังเห็นว่ายังไม่มีลำดับ (base []) แต่ส่งลำดับอื่น → 409 ไม่ทับ
+  const stale = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: [], value: ["1", "c-1"] }] }, STAFF);
+  assert.equal(stale.code, 409); assert.equal(stale.body.field, "paymentDisplayOrder");
+  assert.deepEqual(store.data.shop.shopA.paymentDisplayOrder, order);
+  // ส่งซ้ำ (เน็ตหลุดตอนรอคำตอบ) → 200 ไม่เขียน
+  const again = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: [], value: order }] }, OWNER);
+  assert.equal(again.code, 200); assert.equal(again.body.changed, false);
+  assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: order, value: ["1", "1"] }] }, OWNER)).code, 400);
+  assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: order, value: [1] }] }, OWNER)).code, 400);
+  const weak = { shopAccess: { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["100"] } };
+  assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: order, value: ["1"] }] }, weak)).code, 403);
+});

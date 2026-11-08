@@ -262,3 +262,13 @@ test("จอลูกค้าวิดีโอ (DEV-0001 · 2026-11-08): custo
   assert.equal("customerAdsVideo" in r2.body.shop, false);
   assert.equal("customerAdsMode" in r2.body.shop, false);
 });
+
+test("ลำดับช่องทางชำระเงิน (DEV-0001 · 2026-11-08): paymentDisplayOrder ออกในก้อน shop · ไม่มีในฐาน = ไม่มี key", async () => {
+  seed({ shop: { shopA: shopDoc({ paymentDisplayOrder: ["gw:kbank-qr", "1"] }) } });
+  const r = await call("u-owner");
+  assert.equal(r.code, 200);
+  assert.deepEqual(r.body.shop.paymentDisplayOrder, ["gw:kbank-qr", "1"]);
+  seed();
+  const r2 = await call("u-owner");
+  assert.equal("paymentDisplayOrder" in r2.body.shop, false);
+});
