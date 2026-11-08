@@ -368,3 +368,16 @@ test("ลำดับช่องทางชำระเงิน: ตั้ง
   const weak = { shopAccess: { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["100"] } };
   assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "paymentDisplayOrder", base: order, value: ["1"] }] }, weak)).code, 403);
 });
+
+// ───────── ปัดเศษ: show = พิมพ์บรรทัดปัดเศษในใบเสร็จ (DEV-0001 · Pack สั่ง 2026-11-08) ─────────
+test("ปัดเศษ: merge show:false รวมกับ status/type เดิม · ผ่าน entity Shop · type legal ยังไม่รับ (แอปเก่า 3.12 อ่านเป็นปัดขึ้น)", async () => {
+  seed();
+  store.data.shop.shopA.rounding = { status: true, type: "down" };
+  const r1 = await shopCall({ shopId: "shopA", ops: [{ op: "merge", field: "rounding", value: { show: false } }] }, OWNER);
+  assert.equal(r1.code, 200);
+  assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "down", show: false });
+  assert.equal(schema.Shop.safeParse(store.data.shop.shopA).success, true);
+  const r2 = await shopCall({ shopId: "shopA", ops: [{ op: "merge", field: "rounding", value: { type: "legal" } }] }, OWNER);
+  assert.equal(r2.code, 400);
+  assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "down", show: false });
+});
