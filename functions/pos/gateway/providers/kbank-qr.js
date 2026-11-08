@@ -97,7 +97,7 @@ function notFoundCodes(env) {
 const spec = {
   id: "kbank-qr", // ไม่ใช่ `kbank` เฉย ๆ — KBank มีหลายผลิตภัณฑ์คนละรูป
   labelKey: "screens.paymentGateway.provider.kbank-qr.name",
-  labelFallback: "ธนาคารกสิกรไทย (ไทยคิวอาร์)",
+  labelFallback: "KBank (ไทยคิวอาร์)", // Pack 2026-11-08: ใช้ KBank สั้นกว่า
   runtime: "server", // เซิร์ฟเวอร์เรายิงเอง (ผ่านตัวกลาง)
   connection: {
     fields: [
