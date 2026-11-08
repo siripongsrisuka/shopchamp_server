@@ -17,7 +17,7 @@ const { connectionsGet, testAndSave, channelsCheck } = require("./connections");
 
 const PW_BOX = K.sealTest("pw-secret-9999", { providerId: "ntt-h2h", field: "password", shopId: "shopA" });
 const seed = (x) => ({
-  "shop/shopA": { shopId: "shopA" },
+  "shop/shopA": { shopId: "shopA", vip: K.GATEWAY_VIP },
   "gatewayCreds/shopA": { "ntt-h2h": { terminalId: "TID-778899", password: PW_BOX }, "kbank-qr": { merchantId: "KB-MID-12345" } },
   "shop/shopA/meta/paymentGateway": {
     thaiQr: { legacy: true },
@@ -255,4 +255,51 @@ test("channelsCheck: เจ้าที่ตรวจไม่ได้ 400 · 
   assert.ok(!f.body.message.includes("TID-778899"));
   assert.equal(S.LOG.length, 0);
   assert.equal((await K.call(channelsCheck(deps()), req({ providerId: "ntt-h2h" }, K.STAFF))).code, 403);
+});
+
+// ── แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+const PG = require("./packageGate");
+const EXPIRED = [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }]; // 9 พ.ย. ไทย · K.NOW = 10 พ.ย.
+
+test("🔒 แพ็กเกจ: testAndSave · channelsCheck ไม่มีแพ็กเกจ / หมดแล้ว → 403 package_required ไม่ยิงเจ้า ไม่เขียน", async () => {
+  for (const vip of [undefined, EXPIRED]) {
+    S.reset(seed());
+    S.DATA["shop/shopA"] = vip ? { shopId: "shopA", vip } : { shopId: "shopA" };
+    const t = await K.call(testAndSave(deps()), req({ providerId: "ntt-h2h", fields: { terminalId: "TID-NEW-1", password: "new-pass-5555" } }));
+    assert.equal(t.code, 403);
+    assert.equal(t.body.error, "package_required");
+    const c = await K.call(channelsCheck(deps()), req({ providerId: "ntt-h2h" }));
+    assert.equal(c.code, 403);
+    assert.equal(c.body.error, "package_required");
+    assert.equal(REG.calls.testConnection, undefined);
+    assert.equal(REG.calls.checkChannels, undefined);
+    assert.equal(S.LOG.length, 0);
+  }
+});
+
+test("แพ็กเกจ: connectionsGet ไม่ติดด่าน · คืน packageActive true/false ตามแพ็กเกจ (พนักงานก็เห็น)", async () => {
+  const on = await K.call(connectionsGet(deps()), req({}, K.STAFF));
+  assert.equal(on.code, 200);
+  assert.equal(on.body.packageActive, true);
+  for (const shop of [{ shopId: "shopA" }, { shopId: "shopA", vip: EXPIRED }, undefined]) {
+    S.reset(seed());
+    if (shop === undefined) delete S.DATA["shop/shopA"];
+    else S.DATA["shop/shopA"] = shop;
+    const off = await K.call(connectionsGet(deps()), req({}, K.STAFF));
+    assert.equal(off.code, 200, JSON.stringify(shop));
+    assert.equal(off.body.packageActive, false);
+    assert.ok(Array.isArray(off.body.connections));
+  }
+});
+
+test("แพ็กเกจ: doc ร้านที่ด่านฝากไว้ = ไม่อ่าน shop/shopA ซ้ำ · ไม่มีของฝาก = อ่าน 1 ครั้ง", async () => {
+  await K.call(connectionsGet(deps()), req({}));
+  assert.equal(S.READS.filter((p) => p === "shop/shopA").length, 1);
+  S.reset(seed());
+  await K.call(connectionsGet(deps()), req({}, PG.attachShopData({ ...K.OWNER }, { shopId: "shopA", vip: K.GATEWAY_VIP })));
+  assert.equal(S.READS.filter((p) => p === "shop/shopA").length, 0);
+  S.reset(seed());
+  const t = await K.call(testAndSave(deps()), req({ providerId: "ntt-h2h", fields: { terminalId: "TID-NEW-1" } }, PG.attachShopData({ ...K.OWNER }, { shopId: "shopA", vip: K.GATEWAY_VIP })));
+  assert.equal(t.code, 200, JSON.stringify(t.body));
+  assert.equal(S.READS.filter((p) => p === "shop/shopA").length, 0);
 });

@@ -16,6 +16,8 @@
 //   ⑤ ระดับการยืนยัน 3 ขั้น: null (ยังไม่เคยกดทดสอบ) · 'partial' (บันทึกแล้วแต่ยืนยันไม่ครบช่อง หรือเซิร์ฟเวอร์ทดสอบแทนไม่ได้) · 'full'
 // ที่เก็บ (credStore.js): ค่า = gatewayCreds/{shopId}[providerId] (ช่องลับเป็นกล่อง secretBox) · สถานะ = shop/{shopId}/meta/paymentGateway[providerId]._status
 //   เครื่อง EDC (runtime device · ntt-edc) อยู่รายจุดคิดเงินที่ gatewayStations/{shopId} (เขียนผ่าน payment.stationEdcSet ไม่ใช่เส้นนี้)
+// แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08): testAndSave · channelsCheck ไม่มีแพ็กเกจ = 403 package_required
+//   connectionsGet ไม่ติดด่าน (อ่านอย่างเดียว) แต่คืน packageActive:boolean ให้จอแสดงสถานะ
 // แอปเก่า: ไม่เห็นอะไรเปลี่ยน (collection ใหม่ทั้งหมด · ไม่แตะ 6 ก้อนเดิมใน meta/paymentGateway)
 "use strict";
 
@@ -29,6 +31,7 @@ const { readNow, depOr } = require("../_shared/deps");
 const { callerAccess, isOwner, adminTrail, adminFlag } = require("../_shared/auth");
 const SB = require("./secretBox");
 const CS = require("./credStore");
+const PG = require("./packageGate");
 
 const STATUS_KEY = CS.STATUS_KEY;
 const PROVIDER_FN_NAMES = Object.freeze(["testConnection", "checkChannels", "pair", "unpair", "inquiry"]);
@@ -285,9 +288,9 @@ function connectionsGet(deps) {
       const reg = registryOf(deps);
       const { db } = require("../../firebase");
       const mods = reg.listProviderModules();
-      const reads = [CS.credsRef(db, access.shopId).get(), CS.statusRef(db, access.shopId).get()];
-      if (input.stationId) reads.push(CS.stationsRef(db, access.shopId).get());
-      const [credsSnap, statusSnap, stationsSnap] = await Promise.all(reads);
+      const now = await readNow(deps);
+      const reads = [CS.credsRef(db, access.shopId).get(), CS.statusRef(db, access.shopId).get(), input.stationId ? CS.stationsRef(db, access.shopId).get() : null];
+      const [credsSnap, statusSnap, stationsSnap, packageActive] = await Promise.all([...reads, PG.gatewayPackageActive({ db, access, now })]);
       const creds = credsSnap.exists ? asObj(credsSnap.data()) : {};
       const statusDoc = statusSnap.exists ? asObj(statusSnap.data()) : {};
       const stationsDoc = stationsSnap && stationsSnap.exists ? asObj(stationsSnap.data()) : {};
@@ -296,6 +299,7 @@ function connectionsGet(deps) {
         connections: mods.map((m) =>
           projectShopConnection(reg, m.spec, { block: creds[m.spec.id], statusDoc, stationsDoc, stationId: input.stationId })),
         ...(input.stationId ? { stationId: input.stationId } : {}),
+        packageActive,
         ...adminFlag(access),
       });
     } catch (e) {
@@ -334,6 +338,7 @@ function testAndSave(deps) {
 
       const { db } = require("../../firebase");
       const now = await readNow(deps);
+      if (!(await PG.passesPackage({ db, access, now, res }))) return undefined; // 🔒 ก่อนอ่านค่า/ทดสอบ/เขียน
       const credsSnap = await CS.credsRef(db, shopId).get();
       const oldBlock = credsSnap.exists ? asObj(credsSnap.data())[spec.id] : undefined;
 
@@ -466,6 +471,7 @@ function channelsCheck(deps) {
       const { db } = require("../../firebase");
       const now = await readNow(deps);
       const shopId = access.shopId;
+      if (!(await PG.passesPackage({ db, access, now, res }))) return undefined; // 🔒 ก่อนถามผู้ให้บริการ
       const cfg = await loadConfig({ db, deps, spec, shopId });
       if (!cfg.ok) return credFailure(res, cfg);
       if (cfg.missing.length) return fail(res, 409, "gateway_not_configured", `ยังตั้งค่าไม่ครบ — ขาด: ${cfg.missing.join(", ")}`, { missing: cfg.missing });

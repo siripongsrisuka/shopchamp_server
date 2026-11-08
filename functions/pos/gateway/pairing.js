@@ -14,6 +14,7 @@
 //   ⑤ unpair = ทางล้างค่าที่ตั้งใจ (ลบช่อง ownership ออกจากก้อน · ลบแถวทะเบียน)
 // แกนกลางไม่รู้จักชื่อเจ้า: อ่าน spec.connection.ownership ผ่าน registry.ownershipOf · ความสามารถผ่าน registry.canPairOf
 // ของยุคก่อน (ร้านถือค่าแต่ทะเบียนไม่มีแถว) = ถือว่าเป็นเจ้าของ · ค่าที่ทะเบียนบอกว่าเป็นของร้านอื่น = ตัดไม่ได้ แต่จับคู่เครื่องตัวเองทับได้
+// แพ็กเกจ Payment Gateway (packageGate.js): pair ไม่มีแพ็กเกจ = 403 package_required · unpair ไม่ติด (ถอดเครื่องได้เสมอ)
 // แอปเก่า: ไม่เห็นอะไรเปลี่ยน (เส้นใหม่ · collection ใหม่)
 "use strict";
 
@@ -22,6 +23,7 @@ const { ok, fail, deny, sendDeny, parseOr400 } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, isOwner, adminTrail, adminFlag } = require("../_shared/auth");
 const CS = require("./credStore");
+const PG = require("./packageGate");
 const C = require("./connections")._internal;
 
 const { STATUS_KEY, OWNED_BY_OTHER, AbortTx, asObj, isSafeDocId } = C;
@@ -99,6 +101,7 @@ function pair(deps) {
       const shopId = access.shopId;
       const { db } = require("../../firebase");
       const now = await readNow(deps);
+      if (!(await PG.passesPackage({ db, access, now, res }))) return undefined; // 🔒 แพ็กเกจ · ก่อนยิงเจ้า (unpair ไม่ติด)
       // เครื่องแสดงตัวพิมพ์ใหญ่ · ร้านพิมพ์เล็กมาก็ให้ผ่าน
       const pairingCode = input.pairingCode.trim().toUpperCase();
 

@@ -18,7 +18,7 @@ const body = (x) => ({ shopId: TEST_SHOP, referenceId: "pg1", ...x });
 let H;
 
 beforeEach(() => {
-  S.reset({ "pgWebhook/pg1": doc() });
+  S.reset({ "pgWebhook/pg1": doc(), [`shop/${TEST_SHOP}`]: { shopId: TEST_SHOP, vip: K.GATEWAY_VIP } });
   H = simulate({ now: () => NOW });
 });
 
@@ -56,6 +56,7 @@ test("🔒 พนักงานร้านทดสอบ → 403 simulate_not
 test("env GATEWAY_SIMULATE_SHOPS ตั้งเอง → ใช้รายชื่อนั้นแทนค่าตั้งต้น", async () => {
   H = simulate({ now: () => NOW, env: { GATEWAY_SIMULATE_SHOPS: " shopA , shopZ" } });
   S.DATA["pgWebhook/pg1"] = doc({ shopId: "shopA" });
+  S.DATA["shop/shopA"] = { shopId: "shopA", vip: K.GATEWAY_VIP };
   assert.equal((await K.callHandler(H, { shopId: "shopA", referenceId: "pg1" }, K.OWNER)).code, 200);
   assert.equal((await K.callHandler(H, body(), OWNER_T)).code, 403);
 });
@@ -73,4 +74,18 @@ test("ใบไม่มี 404 · ร้านอื่น 409 · success 409 a
 
 test("outcome แปลก → 400", async () => {
   assert.equal((await K.callHandler(H, body({ outcome: "free" }), OWNER_T)).code, 400);
+});
+
+// ── แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+test("🔒 แพ็กเกจ: ร้านทดสอบไม่มีแพ็กเกจ / หมดแล้ว → 403 package_required ไม่เขียน · ร้านลูกค้ายังได้ simulate_not_allowed ก่อน", async () => {
+  for (const vip of [undefined, [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }]]) {
+    S.reset({ "pgWebhook/pg1": doc(), [`shop/${TEST_SHOP}`]: vip ? { shopId: TEST_SHOP, vip } : { shopId: TEST_SHOP } });
+    const r = await K.callHandler(H, body(), OWNER_T);
+    assert.equal(r.code, 403);
+    assert.equal(r.body.error, "package_required");
+    assert.equal(S.LOG.length, 0);
+    assert.equal(S.DATA["pgWebhook/pg1"].process, "request");
+  }
+  S.reset({ "pgWebhook/pg1": doc({ shopId: "shopA" }), "shop/shopA": { shopId: "shopA", vip: K.GATEWAY_VIP } });
+  assert.equal((await K.callHandler(H, { shopId: "shopA", referenceId: "pg1" }, K.OWNER)).body.error, "simulate_not_allowed");
 });

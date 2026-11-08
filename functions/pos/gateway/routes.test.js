@@ -114,3 +114,49 @@ test("④ ทุกแถวมีไฟล์สัญญา · หัวไฟ
   const mine = ["payment.connectionsGet", "payment.testAndSave", "payment.channelsCheck", "payment.pair", "payment.unpair", "gateway.webhookNtt", "gateway.webhookKbank", "gateway.webhookBeam"];
   assert.deepEqual(missing.filter((c) => mine.includes(c)), []);
 });
+
+// ── ⑤ ด่านแพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+const GATED = ["/payment/request-qr", "/payment/test-and-save", "/payment/channels-check", "/payment/pair", "/payment/station-edc-set", "/payment/simulate"];
+
+test("⑤ ทุกแถวประกาศ pkg · ชุดที่ติดด่านตรงที่ Pack เคาะ · webhook ติดด่านไม่ได้ · แถวใหม่ที่ลืมประกาศ = สร้าง router ไม่ได้", () => {
+  assert.deepEqual(R.GATEWAY_ROUTES.filter((r) => r.pkg && r.pkg.required === true).map((r) => r.path).sort(), [...GATED].sort());
+  for (const r of R.GATEWAY_ROUTES) {
+    assert.equal(typeof r.pkg.required, "boolean", r.path);
+    if (!r.pkg.required) assert.ok(r.pkg.why, `${r.path} EXEMPT ต้องมีเหตุผล`);
+  }
+  const newcomer = [...fakeRoutes, { contract: "payment.new", path: "/payment/new", auth: "shop", load: () => echo("/payment/new") }];
+  assert.throws(() => R.makeGatewayRouter({ checkIfAuthenticated: authn, requireShopAccess: shopz, routes: newcomer }), /ไม่ได้ประกาศด่านแพ็กเกจ/);
+  const gatedHook = fakeRoutes.map((r) => (r.path === "/webhook/beam" ? { ...r, pkg: { required: true } } : r));
+  assert.throws(() => R.makeGatewayRouter({ checkIfAuthenticated: authn, requireShopAccess: shopz, routes: gatedHook }), /webhook ห้ามติดด่านแพ็กเกจ/);
+});
+
+test("⑤ handler ของทุกเส้นที่ติดด่านเรียก passesPackage จริง · เส้นที่ยกเว้นไม่เรียก (connectionsGet อ่าน packageActive)", () => {
+  const src = (file) => fs.readFileSync(path.join(__dirname, `${file}.js`), "utf8");
+  const fnBody = (file, fn) => {
+    const s = src(file);
+    const i = s.indexOf(`function ${fn}(deps)`);
+    assert.ok(i >= 0, `ไม่พบ function ${fn}(deps) ใน ${file}.js`);
+    const next = s.indexOf("\nfunction ", i + 10);
+    return s.slice(i, next < 0 ? undefined : next);
+  };
+  const fileOf = { requestQr: "requestQr", inquire: "inquire", cancelQr: "cancelQr", connectionsGet: "connections", testAndSave: "connections", channelsCheck: "connections", pair: "pairing", unpair: "pairing", deviceSaleRecord: "deviceSale", stationEdcSet: "stations", simulate: "simulate" };
+  for (const r of R.GATEWAY_ROUTES.filter((x) => x.auth === "shop")) {
+    const fn = r.contract.split(".")[1];
+    const body = fnBody(fileOf[fn], fn);
+    assert.equal(body.includes("PG.passesPackage("), r.pkg.required, `${r.path} pkg.required=${r.pkg.required} แต่ handler ${r.pkg.required ? "ไม่" : ""}เรียก passesPackage`);
+  }
+});
+
+test("⑤ ด่านร้านตัวจริงของ pos_gateway ฝาก doc ร้านไว้บน access (ไม่ enumerable) · ปัด = ไม่ฝาก", async () => {
+  const PG = require("./packageGate");
+  const shopDoc = { shopId: "shopA", vip: [{ type: "gateway", expire: "2099-01-01T00:00:00.000Z" }], person: [{ uid: "u-owner", position: ["001"], status: "active" }] };
+  const roster = { uids: ["u-company"], rootUids: ["u-company"] };
+  const root = await R.resolveWithShopData({ shopDocId: "shopA", shop: shopDoc, uid: "u-company", now: new Date("2026-11-10T03:00:00Z"), roster });
+  assert.equal(root.ok, true);
+  assert.equal(root.access[PG.SHOP_DATA], shopDoc);
+  assert.equal(JSON.stringify(root.access).includes("vip"), false);
+  assert.equal(Object.keys(root.access).length, Object.keys({ ...root.access }).length);
+  const nope = await R.resolveWithShopData({ shopDocId: "shopA", shop: { shopId: "shopA" }, uid: "u-stranger", now: new Date("2026-11-10T03:00:00Z"), roster });
+  assert.equal(nope.ok, false);
+  assert.equal(nope.access, undefined);
+});

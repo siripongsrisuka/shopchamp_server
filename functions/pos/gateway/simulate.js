@@ -12,6 +12,7 @@
 //   ① callerAccess → 401/403
 //   ② ต้องเป็นเจ้าของ **และ** ร้านอยู่ในรายชื่อ env `GATEWAY_SIMULATE_SHOPS` (คั่นด้วย , · ไม่ตั้ง = `wJNgra1ik0pzRQFlZNOD`) ไม่งั้น 403 simulate_not_allowed
 //   ③ Zod PaymentSimulateRequest → 400
+//   ③' ร้านไม่มีแพ็กเกจ Payment Gateway = 403 package_required (packageGate.js · หลังด่านร้านทดสอบ ⇒ ร้านลูกค้ายังได้ simulate_not_allowed ก่อน)
 //   ④ pgWebhook/{referenceId}: ไม่มี = 404 · ร้านอื่น = 409 pgwebhook_other_shop · success แล้ว = 409 already_paid · ไม่ใช่ request = 409 pgwebhook_not_waiting
 //   ⑤ confirmPaid(verifiedBy:'simulate', simulated:true) → marked = 200 state paid · mismatch = 200 state amount_mismatch (settle ประทับ verifyMismatch)
 "use strict";
@@ -22,6 +23,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, isOwner, adminFlag } = require("../_shared/auth");
 const { COLLECTION, toSatang, confirmPaid } = require("./settle");
 const { _internal: G } = require("./requestQr");
+const PG = require("./packageGate");
 
 const SIMULATE_ENV = "GATEWAY_SIMULATE_SHOPS";
 const DEFAULT_SIMULATE_SHOPS = "wJNgra1ik0pzRQFlZNOD"; // ร้านทดสอบ (.claude/rules/test-accounts.md)
@@ -45,6 +47,8 @@ function simulate(deps) {
 
     try {
       const { db } = require("../../firebase");
+      const now = await readNow(deps);
+      if (!(await PG.passesPackage({ db, access, now, res }))) return undefined;
       const referenceId = input.referenceId;
       const snap = await db.collection(COLLECTION).doc(referenceId).get();
       if (!snap.exists) return fail(res, 404, "pgwebhook_not_found", "ไม่พบรายการชำระเงินนี้");
@@ -58,7 +62,6 @@ function simulate(deps) {
       const outcome = input.outcome || "paid";
       const amountPaid = outcome === "amount_mismatch" ? Math.max(sat - 1, 0) / 100 : sat / 100;
 
-      const now = await readNow(deps);
       const m = await confirmPaid({
         db, referenceId, verified: { state: "paid", amountPaid }, verifiedBy: "simulate", now, simulated: true, expectShopId: access.shopId,
       });

@@ -221,4 +221,7 @@ const STAFF = Object.freeze({ shopId: "shopA", uid: "u-staff", role: "staff", ri
 const ADMIN = Object.freeze({ shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true });
 const NOW = new Date("2026-11-10T03:00:00.000Z");
 
-module.exports = { TEST_KEY, NOW, makeStore, installFakeFirebase, sealTest, beamSign, makeRegistry, makeRes, call, OWNER, STAFF, ADMIN };
+// แพ็กเกจ Payment Gateway ที่ยังไม่หมด (packageGate.js) · seed ของเส้นที่ติดด่านต้องมีแถวนี้ใน shop/{shopId}.vip
+const GATEWAY_VIP = Object.freeze([{ type: "gateway", expire: "2099-12-31T00:00:00.000Z" }]);
+
+module.exports = { GATEWAY_VIP, TEST_KEY, NOW, makeStore, installFakeFirebase, sealTest, beamSign, makeRegistry, makeRes, call, OWNER, STAFF, ADMIN };

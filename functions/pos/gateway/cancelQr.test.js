@@ -108,3 +108,11 @@ test("ทีมงาน → ใบมี byAdmin adminUid", async () => {
   await K.callHandler(H, body(), K.ADMIN);
   assert.equal(S.DATA["pgWebhook/pg1"].adminUid, "u-company");
 });
+
+// ── แพ็กเกจ Payment Gateway: cancelQr ไม่ติดด่าน (ใบที่ออกก่อนแพ็กเกจหมดต้องยกเลิกได้ · Pack เคาะ 2a 2026-11-08) ──
+test("แพ็กเกจหมดกลางการจ่าย → cancelQr ยังยกเลิกได้", async () => {
+  S.DATA["shop/shopA"] = { shopId: "shopA", vip: [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }] };
+  const r = await K.callHandler(H, body(), K.STAFF);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(r.body.cancelled, true);
+});

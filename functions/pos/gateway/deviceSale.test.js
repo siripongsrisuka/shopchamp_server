@@ -83,3 +83,11 @@ test("ไม่ส่ง stationId/tradeType → เก็บ null · ช่อ�
 test("shopId ในใบ = ร้านที่ผ่านด่าน · body ร้านอื่น 403", async () => {
   assert.equal((await K.callHandler(H, body({ shopId: "shopB" }), K.STAFF)).body.error, "wrong_shop");
 });
+
+// ── แพ็กเกจ Payment Gateway: deviceSaleRecord ไม่ติดด่าน (EDC อนุมัติแล้ว = เงินเคลื่อนแล้ว · ปัดตอนบันทึก = หลักฐานเงินหาย) ──
+test("แพ็กเกจหมด / ไม่มี vip → ยังบันทึกผลเครื่องได้", async () => {
+  S.reset({ "shop/shopA": { shopId: "shopA", vip: [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }] } });
+  const r = await K.callHandler(H, body({ approvalCode: "A1" }), K.STAFF);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal(r.body.duplicate, false);
+});

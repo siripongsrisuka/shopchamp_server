@@ -15,6 +15,7 @@ let REG;
 const deps = () => ({ now: () => K.NOW, credKey: K.TEST_KEY, registry: REG.registry });
 const req = (body, shopAccess = K.OWNER) => ({ body: { shopId: "shopA", providerId: "beam-bolt", ...body }, shopAccess });
 const seed = (x) => ({
+  "shop/shopA": { shopId: "shopA", vip: K.GATEWAY_VIP },
   "shop/shopA/meta/paymentGateway": { "beam-bolt": { _status: { channels: { beamBoltPromptPay: { enabled: true, open: null, checkedAt: null } } } } },
   ...(x || {}),
 });
@@ -127,4 +128,23 @@ test("🔒 unpair: ไม่ได้จับคู่ 409 · ทะเบี�
   P.unpair = { ok: false, error: { code: "beam_credentials_invalid", message: "401" } };
   assert.equal((await K.call(unpair(deps()), req({}))).code, 502);
   assert.equal(S.LOG.length, 0);
+});
+
+// ── แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+test("🔒 แพ็กเกจ: pair ไม่มีแพ็กเกจ / หมดแล้ว → 403 package_required ไม่ยิงเจ้า ไม่เขียน · unpair ยังถอดได้ (ไม่ติดด่าน)", async () => {
+  for (const vip of [undefined, [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }]]) {
+    S.reset(seed());
+    S.DATA["shop/shopA"] = vip ? { shopId: "shopA", vip } : { shopId: "shopA" };
+    const r = await K.call(pair(deps()), req({ pairingCode: "AB12CD34" }));
+    assert.equal(r.code, 403);
+    assert.equal(r.body.error, "package_required");
+    assert.equal(REG.calls.pair, undefined);
+    assert.equal(S.LOG.length, 0);
+    S.DATA["gatewayCreds/shopA"] = { "beam-bolt": { boltConnectionId: "BC-1234" } };
+    S.DATA["beamBoltConnections/BC-1234"] = { shopId: "shopA" };
+    const u = await K.call(unpair(deps()), req({}));
+    assert.equal(u.code, 200, JSON.stringify(u.body));
+    assert.equal(u.body.unpaired, true);
+    assert.equal(S.DATA["beamBoltConnections/BC-1234"], undefined);
+  }
 });

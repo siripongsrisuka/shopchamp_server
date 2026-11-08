@@ -11,6 +11,7 @@
 // ลำดับ:
 //   ① callerAccess → 401 no_shop_access / 403 wrong_shop   ② Zod PaymentRequestQrRequest → 400 invalid_request
 //   ③ ทะเบียน: ไม่รู้จัก = 400 unknown_channel · เจ้า runtime device = 400 channel_not_server_runtime (ไม่แตะฐาน)
+//   ③' แพ็กเกจ Payment Gateway ไม่มี/หมด = 403 package_required (packageGate.js · ไม่อ่านค่าเชื่อมต่อ ไม่เขียน)
 //   ④ อ่าน `shop/{shopId}/meta/paymentGateway` (สถานะ) + `gatewayCreds/{shopId}` (ค่าเชื่อมต่อ)
 //      ผลตรวจกระเป๋าของร้านชนะทะเบียน → ยังไม่เปิด = 400 unknown_channel
 //      ถอด config (ช่องลับ = กล่อง secretBox) · ช่องบังคับขาด = 409 gateway_not_configured {missing: ชื่อช่องเท่านั้น}
@@ -30,6 +31,7 @@ const { callerAccess, adminTrail, adminFlag } = require("../_shared/auth");
 const CS = require("./credStore");
 const SB = require("./secretBox");
 const { COLLECTION, toSatang, sameSatang } = require("./settle");
+const PG = require("./packageGate");
 
 const REUSE_WINDOW_MS = 15 * 60 * 1000; // หน้าต่างกันกดซ้ำ (เท่าพี่น้อง)
 const REUSE_SCAN_LIMIT = 10;
@@ -206,6 +208,8 @@ function requestQr(deps) {
       const now = await readNow(deps);
       const { db } = require("../../firebase");
       const shopId = access.shopId;
+      // 🔒 แพ็กเกจ Payment Gateway (packageGate.js) · ก่อนอ่านค่าเชื่อมต่อ/ยิงผู้ให้บริการ/เขียนใบ
+      if (!(await PG.passesPackage({ db, access, now, res }))) return undefined;
       // 💰 ปัดสตางค์ครั้งเดียวที่ปากทาง (K18 · B-08) · ยอดบนใบ = ยอดที่ยิงผู้ให้บริการ = ยอดที่ด่านเทียบ
       const amount = toSatang(input.amount) / 100;
 

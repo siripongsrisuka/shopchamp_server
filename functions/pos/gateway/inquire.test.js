@@ -141,3 +141,15 @@ test("referenceId มี / → 400 invalid_request", async () => {
   const r = await K.callHandler(H, body({ referenceId: "a/b" }), K.STAFF);
   assert.equal(r.code, 400);
 });
+
+// ── แพ็กเกจ Payment Gateway: inquire ไม่ติดด่าน (ใบที่ออกก่อนแพ็กเกจหมดต้องถามผลจนจบได้ · Pack เคาะ 2a 2026-11-08) ──
+test("แพ็กเกจหมดกลางการจ่าย / ไม่มี vip → inquire ยังถามได้และ mark success ได้", async () => {
+  for (const shop of [{ shopId: "shopA", vip: [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }] }, { shopId: "shopA" }]) {
+    S.DATA["pgWebhook/pg1"] = doc();
+    S.DATA["shop/shopA"] = shop;
+    P.inquiry = { ok: true, data: { state: "paid", amountPaid: 120.5 } };
+    const r = await K.callHandler(H, body(), K.STAFF);
+    assert.equal(r.code, 200, JSON.stringify(r.body));
+    assert.equal(r.body.state, "paid");
+  }
+});

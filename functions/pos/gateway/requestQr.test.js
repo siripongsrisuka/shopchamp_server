@@ -20,7 +20,7 @@ const mk = (extra) => requestQr({ now: () => NOW, credKey: K.TEST_KEY, registry:
 const PASSWORD = "secret-pass-1234";
 const nttCreds = () => ({ "ntt-h2h": { terminalId: "TID001", password: K.sealTest(PASSWORD, { providerId: "ntt-h2h", field: "password", shopId: "shopA" }) } });
 const base = () => ({
-  "shop/shopA": { shopId: "shopA" },
+  "shop/shopA": { shopId: "shopA", vip: K.GATEWAY_VIP },
   "gatewayCreds/shopA": { ...nttCreds(), "kbank-qr": { merchantId: "KB001" }, "beam-bolt": { boltConnectionId: "conn-1" } },
 });
 const body = (x) => ({ shopId: "shopA", channelId: "nttThaiQr", amount: 120.5, ...x });
@@ -278,4 +278,45 @@ test("สวิตช์ at-bill ปิด → ไม่คืนแม้ใบ
   const r = await K.callHandler(H, body({ channelId: "beamBoltPromptPay", clientRequestId: "x" }), K.OWNER);
   assert.equal(r.code, 409);
   assert.equal(R.calls.inquiry.length, 0);
+});
+
+// ── แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+test("🔒 แพ็กเกจ: ไม่มี vip · มีแต่ premium · หมดเมื่อวาน (ไทย) · ไม่มี doc ร้าน → 403 package_required ไม่ยิงเจ้า ไม่เขียน", async () => {
+  const cases = [
+    { shopId: "shopA" },
+    { shopId: "shopA", vip: [{ type: "premium", expire: "2099-01-01T00:00:00.000Z" }] },
+    { shopId: "shopA", vip: [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }] }, // 17:00 ไทย 9 พ.ย. · วันนี้ 10 พ.ย.
+    undefined,
+  ];
+  for (const shop of cases) {
+    S.reset(base());
+    if (shop === undefined) delete S.DATA["shop/shopA"];
+    else S.DATA["shop/shopA"] = shop;
+    const r = await K.callHandler(mk(), body(), K.OWNER);
+    assert.equal(r.code, 403, JSON.stringify(shop));
+    assert.equal(r.body.error, "package_required");
+    assert.equal(r.body.package, "gateway");
+    assert.equal(R.calls.createQR.length, 0);
+    assert.equal(S.LOG.length, 0);
+  }
+});
+
+test("แพ็กเกจ: วันหมดอายุ = วันนี้ (ไทย) ยังใช้ได้ · มีหลายแถว แถวไหนยังไม่หมดก็พอ → 200 (ชุดควบคุม)", async () => {
+  S.DATA["shop/shopA"] = { shopId: "shopA", vip: [{ type: "gateway", expire: "2026-11-10T01:00:00.000Z" }] };
+  assert.equal((await K.callHandler(mk(), body(), K.OWNER)).code, 200);
+  S.reset(base());
+  S.DATA["shop/shopA"] = { shopId: "shopA", vip: [{ type: "gateway", expire: "2025-01-01T00:00:00.000Z" }, { type: "gateway", expire: "2027-01-01T00:00:00.000Z" }] };
+  assert.equal((await K.callHandler(mk(), body(), K.OWNER)).code, 200);
+});
+
+test("แพ็กเกจ: doc ร้านที่ด่านฝากไว้ (Symbol) ชนะการอ่านฐาน · ไม่อ่าน shop ซ้ำ", async () => {
+  const PG = require("./packageGate");
+  S.DATA["shop/shopA"] = { shopId: "shopA" }; // ฐานไม่มีแพ็กเกจ
+  const withPkg = PG.attachShopData({ ...K.OWNER }, { shopId: "shopA", vip: K.GATEWAY_VIP });
+  assert.equal((await K.callHandler(mk(), body(), withPkg)).code, 200);
+  S.reset(base()); // ฐานมีแพ็กเกจ แต่ของฝากบอกไม่มี ⇒ ปัด (ใช้ของฝากจริง)
+  const noPkg = PG.attachShopData({ ...K.OWNER }, { shopId: "shopA" });
+  assert.equal((await K.callHandler(mk(), body(), noPkg)).body.error, "package_required");
+  assert.equal(Object.keys(withPkg).includes(String(PG.SHOP_DATA)), false);
+  assert.equal(JSON.stringify(withPkg).includes("vip"), false, "ของฝากไม่ออกทาง JSON");
 });

@@ -159,5 +159,7 @@ async function callHandler(handler, body, shopAccess) {
 const OWNER = { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] };
 const STAFF = { shopId: "shopA", uid: "u-staff", role: "staff", rights: [] };
 const ADMIN = { shopId: "shopA", uid: "u-company", role: "owner", rights: [], byAdmin: true };
+// แพ็กเกจ Payment Gateway ที่ยังไม่หมด (packageGate.js) · seed ของเส้นที่ติดด่านต้องมีแถวนี้ใน shop/{shopId}.vip
+const GATEWAY_VIP = Object.freeze([{ type: "gateway", expire: "2099-12-31T00:00:00.000Z" }]);
 
-module.exports = { TEST_KEY, makeStore, installFakeFirebase, makeRegistry, sealTest, makeRes, callHandler, OWNER, STAFF, ADMIN };
+module.exports = { GATEWAY_VIP, TEST_KEY, makeStore, installFakeFirebase, makeRegistry, sealTest, makeRes, callHandler, OWNER, STAFF, ADMIN };

@@ -8,6 +8,8 @@
 //
 // ลำดับ:
 //   ① callerAccess → 401/403   ② ไม่ใช่เจ้าของ (ทีมงานได้ role owner) → 403 owner_required   ③ Zod PaymentStationEdcSetRequest → 400
+//   ③' device ≠ null (ผูก/แก้) + ไม่มีแพ็กเกจ Payment Gateway = 403 package_required ไม่เขียน (packageGate.js)
+//      device = null (ถอด) ไม่ติดด่าน — ถอดเครื่องได้เสมอเหมือน unpair
 //   ④ transaction อ่านก่อนเขียน:
 //      device = null → ถอดจุดนั้นออก (ไม่มีอยู่แล้ว = 200 removed:false ไม่เขียน)
 //      device = {ip, port, name?} → ผูก/แก้ · จุดใหม่เมื่อมีครบ 20 จุดแล้ว = 409 too_many_stations ไม่เขียน
@@ -20,6 +22,7 @@ const { ok, fail, deny, sendDeny, parseOr400, internalError } = require("../_sha
 const { readNow } = require("../_shared/deps");
 const { callerAccess, isOwner, adminTrail, adminFlag } = require("../_shared/auth");
 const CS = require("./credStore");
+const PG = require("./packageGate");
 
 const MAX_STATIONS = 20;
 const EDC_PROVIDER_ID = "ntt-edc";
@@ -39,6 +42,7 @@ function stationEdcSet(deps) {
     try {
       const now = await readNow(deps);
       const { db } = require("../../firebase");
+      if (input.device !== null && !(await PG.passesPackage({ db, access, now, res }))) return undefined;
       const ref = CS.stationsRef(db, access.shopId);
       const trail = adminTrail(access);
       const sid = input.stationId;

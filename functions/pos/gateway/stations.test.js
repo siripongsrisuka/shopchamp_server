@@ -14,7 +14,7 @@ let H;
 const body = (x) => ({ shopId: "shopA", stationId: "cashier-1", stationName: "หน้าร้าน", device: { ip: "192.168.1.50", port: 8020 }, ...x });
 
 beforeEach(() => {
-  S.reset({});
+  S.reset({ "shop/shopA": { shopId: "shopA", vip: K.GATEWAY_VIP } });
   H = stationEdcSet({ now: () => NOW });
 });
 
@@ -75,4 +75,19 @@ test("IP ผิดรูป / พอร์ตเกิน → 400", async () => 
   assert.equal((await K.callHandler(H, body({ device: { ip: "999.1.1.1", port: 8020 } }), K.OWNER)).code, 400);
   assert.equal((await K.callHandler(H, body({ device: { ip: "10.0.0.1", port: 70000 } }), K.OWNER)).code, 400);
   assert.equal(S.LOG.length, 0);
+});
+
+// ── แพ็กเกจ Payment Gateway (packageGate.js · Pack เคาะ 2a 2026-11-08) ──
+test("🔒 แพ็กเกจ: ผูก/แก้เครื่อง ไม่มีแพ็กเกจ / หมดแล้ว → 403 package_required ไม่เขียน · ถอด (device:null) ยังทำได้", async () => {
+  for (const vip of [undefined, [{ type: "gateway", expire: "2026-11-09T10:00:00.000Z" }]]) {
+    S.reset({ "shop/shopA": vip ? { shopId: "shopA", vip } : { shopId: "shopA" } });
+    const r = await K.callHandler(H, body(), K.OWNER);
+    assert.equal(r.code, 403);
+    assert.equal(r.body.error, "package_required");
+    assert.equal(S.LOG.length, 0);
+    S.DATA["gatewayStations/shopA"] = { stations: { "cashier-1": { name: "หน้าร้าน", providerId: "ntt-edc", device: { ip: "10.0.0.1", port: 8020 } } } };
+    const c = await K.callHandler(H, body({ device: null }), K.OWNER);
+    assert.equal(c.code, 200, JSON.stringify(c.body));
+    assert.equal(c.body.removed, true);
+  }
 });
