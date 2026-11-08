@@ -32,6 +32,8 @@ const SHOP_FIELDS = Object.freeze([
   "smartCoupon", "smartReward", "categoryExpense", "soundPlayers", "soundStatus", "customerAds",
   "imageUrl", "imageLimit", "imageMore", "totalMember", "printers", "payment", "receiptPay", "smartAddress",
   "notiImport", "notiShift", "notiStaff", "notiStock", "notiSummary", "notiCancelBill", "notiCheckin", "notiCredit", "notiRequisition",
+  // จอลูกค้าวิดีโอ (DEV-0001 · Pack สั่ง 2026-11-08): ช่องใหม่ แอปเก่าไม่อ่าน · ไม่มีในฐาน = ไม่มี key (แอปใหม่ถือว่า mode image · วิดีโอว่าง)
+  "customerAdsVideo", "customerAdsMode",
 ]);
 // ช่องของพนักงานแต่ละคนที่ส่งได้ · ❌ password (รหัสแคชเชียร์) · rights ของคนอื่น
 const STAFF_FIELDS = Object.freeze(["id", "name", "position", "status", "owner"]);

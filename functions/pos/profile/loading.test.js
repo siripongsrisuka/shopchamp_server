@@ -249,3 +249,16 @@ test("ทะเบียนไม่มี/ว่าง → ไม่มีใ�
     assert.equal(r.body.access.role, "staff"); // u-company เป็นพนักงานของร้าน · ได้สิทธิ์ตามแถวตัวเอง
   }
 });
+
+test("จอลูกค้าวิดีโอ (DEV-0001 · 2026-11-08): customerAdsVideo customerAdsMode ออกในก้อน shop แบบ customerAds · ไม่มีในฐาน = ไม่มี key", async () => {
+  seed({ shop: { shopA: shopDoc({ customerAds: ["https://img.example.com/a.png"], customerAdsVideo: ["https://v.example.com/a.mp4"], customerAdsMode: "video" }) } });
+  const r = await call("u-owner");
+  assert.equal(r.code, 200);
+  assert.deepEqual(r.body.shop.customerAds, ["https://img.example.com/a.png"]);
+  assert.deepEqual(r.body.shop.customerAdsVideo, ["https://v.example.com/a.mp4"]);
+  assert.equal(r.body.shop.customerAdsMode, "video");
+  seed();
+  const r2 = await call("u-owner");
+  assert.equal("customerAdsVideo" in r2.body.shop, false);
+  assert.equal("customerAdsMode" in r2.body.shop, false);
+});

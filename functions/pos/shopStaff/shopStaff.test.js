@@ -319,3 +319,28 @@ test("POSs: เพิ่มแถวใหม่หรือลบแถว ผ�
     { id: "pos-2", name: "จุด 2", printerEthernet: "192.168.1.50" },
   ]);
 });
+
+// ───────── จอลูกค้าวิดีโอ (DEV-0001 · Pack สั่ง 2026-11-08) ─────────
+test("จอลูกค้าวิดีโอ: ตั้งวิดีโอ + โหมด video · customerAds (รูป · แอปเก่าอ่าน) ไม่ถูกแตะ · เครื่องถือ base เก่าโดน 409 · ส่งซ้ำ = changed:false · ผ่าน entity Shop", async () => {
+  seed();
+  store.data.shop.shopA.customerAds = ["https://img.example.com/a.png"];
+  const v1 = "https://firebasestorage.googleapis.com/v0/b/x/o/customerAds%2Fv1.mp4?alt=media";
+  const v2 = "https://firebasestorage.googleapis.com/v0/b/x/o/customerAds%2Fv2.mp4?alt=media";
+  const r1 = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsVideo", base: [], value: [v1] }, { op: "set", field: "customerAdsMode", value: "video" }] }, OWNER);
+  assert.equal(r1.code, 200); assert.deepEqual(r1.body.fields.sort(), ["customerAdsMode", "customerAdsVideo"]);
+  const doc = store.data.shop.shopA;
+  assert.deepEqual(doc.customerAdsVideo, [v1]); assert.equal(doc.customerAdsMode, "video");
+  assert.deepEqual(doc.customerAds, ["https://img.example.com/a.png"]);
+  assert.equal(schema.Shop.safeParse(doc).success, true);
+  // เครื่อง B ยังเห็นวิดีโอว่าง (ค่าก่อนเครื่อง A) → 409 ไม่ทับ
+  const stale = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsVideo", base: [], value: [v2] }] }, STAFF);
+  assert.equal(stale.code, 409); assert.equal(stale.body.error, "shop_changed"); assert.equal(stale.body.field, "customerAdsVideo");
+  assert.deepEqual(store.data.shop.shopA.customerAdsVideo, [v1]);
+  // เครื่อง A ส่งคำขอเดิมซ้ำ (เน็ตหลุดตอนรอคำตอบ) → 200 ไม่เขียน
+  const again = await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsVideo", base: [], value: [v1] }, { op: "set", field: "customerAdsMode", value: "video" }] }, OWNER);
+  assert.equal(again.code, 200); assert.equal(again.body.changed, false);
+  // พนักงานไม่มี 101 → 403 · โหมดนอกรายการ → 400
+  const weak = { shopAccess: { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["100"] } };
+  assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsMode", value: "image" }] }, weak)).code, 403);
+  assert.equal((await shopCall({ shopId: "shopA", ops: [{ op: "set", field: "customerAdsMode", value: "loop" }] }, OWNER)).code, 400);
+});
