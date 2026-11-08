@@ -370,7 +370,7 @@ test("ลำดับช่องทางชำระเงิน: ตั้ง
 });
 
 // ───────── ปัดเศษ: show = พิมพ์บรรทัดปัดเศษในใบเสร็จ (DEV-0001 · Pack สั่ง 2026-11-08) ─────────
-test("ปัดเศษ: merge show:false รวมกับ status/type เดิม · ผ่าน entity Shop · type legal ยังไม่รับ (แอปเก่า 3.12 อ่านเป็นปัดขึ้น)", async () => {
+test("ปัดเศษ: merge show:false รวมกับ status/type เดิม · ผ่าน entity Shop · type legal รับแล้ว (Pack เคาะไม่ซ่อน 2026-11-08) · type ที่ไม่รู้จัก 400", async () => {
   seed();
   store.data.shop.shopA.rounding = { status: true, type: "down" };
   const r1 = await shopCall({ shopId: "shopA", ops: [{ op: "merge", field: "rounding", value: { show: false } }] }, OWNER);
@@ -378,6 +378,10 @@ test("ปัดเศษ: merge show:false รวมกับ status/type เด
   assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "down", show: false });
   assert.equal(schema.Shop.safeParse(store.data.shop.shopA).success, true);
   const r2 = await shopCall({ shopId: "shopA", ops: [{ op: "merge", field: "rounding", value: { type: "legal" } }] }, OWNER);
-  assert.equal(r2.code, 400);
-  assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "down", show: false });
+  assert.equal(r2.code, 200);
+  assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "legal", show: false });
+  assert.equal(schema.Shop.safeParse(store.data.shop.shopA).success, true);
+  const r3 = await shopCall({ shopId: "shopA", ops: [{ op: "merge", field: "rounding", value: { type: "nearest" } }] }, OWNER);
+  assert.equal(r3.code, 400);
+  assert.deepEqual(store.data.shop.shopA.rounding, { status: true, type: "legal", show: false });
 });
