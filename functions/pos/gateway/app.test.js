@@ -144,8 +144,10 @@ test("④ export: index.js ต่อท้าย exports.pos_gateway · function
   assert.equal(ep.maxInstances, 20);
   // Pack สร้าง GATEWAY_CRED_ENC_KEY แล้ว 2026-11-07 · ตัวอื่นยังไม่มี ⇒ ผูกตัวที่ไม่มีจริง = deploy ล้ม
   const SECRETS_CREATED = ["GATEWAY_CRED_ENC_KEY"];
+  // Pack สร้าง KBANK_PROXY_URL/KEY/KEY_HEADER แล้ว 2026-11-08 (ตรวจ `gcloud secrets list`) · ผูกให้ pos_gateway เท่านั้น
+  const KBANK_SECRETS = ["KBANK_PROXY_URL", "KBANK_PROXY_KEY", "KBANK_PROXY_KEY_HEADER"];
   const bound = (ep.secretEnvironmentVariables || []).map((s) => s.key).sort();
-  assert.deepEqual(bound, SECRETS_CREATED, "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
+  assert.deepEqual(bound, [...SECRETS_CREATED, ...KBANK_SECRETS].sort(), "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
   assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY"].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07)");
   assert.deepEqual(ep.httpsTrigger && ep.httpsTrigger.invoker, ["public"]);
   for (const k of ["pos", "pos_heavy"]) assert.equal(F[k].__endpoint.platform, "gcfv2", `${k} ไม่ถูกแตะ`);

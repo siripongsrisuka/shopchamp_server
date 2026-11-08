@@ -57,8 +57,9 @@ function gateFor(fnName, routes = ROUTES) {
 
 // pos_gateway = app แยก (gateway/app.js · ทะเบียน gateway/routes.js) ไม่ผ่าน gateFor · config อยู่ที่นี่ให้เห็นคู่กับ 2 ตัวบน
 //   512MiB · concurrency 40 · maxInstances 20 · timeout 60 วิ (ยิงผู้ให้บริการนานสุด 20 วิ kbank-qr) · ไม่ตั้ง minInstances
-//   ผูกเฉพาะ GATEWAY_CRED_ENC_KEY (Pack สร้างแล้ว 2026-11-07) · secret ของผู้ให้บริการอื่นยังไม่มี ⇒ ยังไม่ผูก (ผูกตัวที่ไม่มีจริง = deploy ล้ม)
+//   ผูก GATEWAY_CRED_ENC_KEY (Pack สร้าง 2026-11-07) + KBANK_PROXY_URL/KEY/KEY_HEADER (Pack สร้าง 2026-11-08 จากค่าเครื่องกลางของพี่น้อง)
+//   secret ของผู้ให้บริการอื่น (BEAM_*) ยังไม่มี ⇒ ยังไม่ผูก (ผูกตัวที่ไม่มีจริง = deploy ล้ม)
 const GATEWAY_FN = "pos_gateway";
-const GATEWAY_CONFIG = Object.freeze({ memory: "512MiB", concurrency: 40, maxInstances: 20, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY"]) });
+const GATEWAY_CONFIG = Object.freeze({ memory: "512MiB", concurrency: 40, maxInstances: 20, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "KBANK_PROXY_URL", "KBANK_PROXY_KEY", "KBANK_PROXY_KEY_HEADER"]) });
 
 module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, gateFor, segmentOf, segmentMap };
