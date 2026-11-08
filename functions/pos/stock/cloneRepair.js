@@ -21,6 +21,7 @@
 //   stock {linkDetail, linkId, linkNext, updateTime, cloneRepair:{at, approvalRef, by}} · stockLink {stockLink, cloneRepair}
 //   stockRepairLog/{auto} {shopId, approvalRef, adminUid, at, planHash, counts} (collection ใหม่ · server เขียนอย่างเดียว)
 // ด่าน: callerAccess (เส้นเขียน ⇒ watcher 403 watcher_read_only ทั้ง plan และ apply) → schema → access.byAdmin (root เท่านั้น · Pack เคาะ 2026-11-07 ข้อ 4) ไม่ใช่ = 403 admin_required
+// stock updateTime = serverTimestamp() เวลา commit ของแต่ละ batch (DEV-0007 · ../_shared/stockJournal.js ①) · ไม่เปลี่ยนยอด ⇒ ไม่ลงสมุด
 // route: pos_heavy (อ่านสินค้าทั้งร้าน) · ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -28,6 +29,7 @@ const { db } = require("../../firebase");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const { callerAccess, resolveShopRef } = require("../_shared/auth");
+const { serverTime } = require("../_shared/stockJournal");
 const S = require("./_shared");
 const { buildPlan } = require("./cloneRepairPlan");
 
@@ -74,7 +76,7 @@ function cloneRepair(deps) {
       if (input.planHash !== plan.planHash) return sendDeny(res, deny(409, "plan_changed", "ข้อมูลร้านเปลี่ยนหลังดูแผน กรุณาดูแผนใหม่", { planHash: plan.planHash }));
       const stamp = { at: now, approvalRef: input.approvalRef, by: access.uid };
       const writes = [
-        ...plan.stockFixes.map((f) => ({ c: "stock", id: f.id, v: { linkDetail: f.linkDetail, linkId: f.linkId, linkNext: f.linkNext, updateTime: now, cloneRepair: stamp } })),
+        ...plan.stockFixes.map((f) => ({ c: "stock", id: f.id, v: { linkDetail: f.linkDetail, linkId: f.linkId, linkNext: f.linkNext, updateTime: serverTime(), cloneRepair: stamp } })),
         ...plan.linkFixes.map((f) => ({ c: "stockLink", id: f.id, v: { stockLink: f.stockLink, cloneRepair: stamp } })),
       ];
       for (let i = 0; i < writes.length; i += BATCH) {

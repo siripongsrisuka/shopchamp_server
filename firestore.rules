@@ -292,6 +292,10 @@ service cloud.firestore {
     // ลิงก์ login ใช้ครั้งเดียว (DEV-0001 · owner-web-login-design.md §2.2): server เท่านั้น · doc มี secretHash + ผนึก HMAC
     //   (ไม่มี match ก็ปัดอยู่แล้ว · เขียนไว้ให้เห็นชัด · rules ที่ live ยังเปิด ⇒ server ไม่เชื่อ doc ที่ผนึกไม่ตรง)
     match /webLogin/{id} { allow read, write: if false; }
+    // สมุดเคลื่อนไหวสต๊อกรายวัน (DEV-0007 · functions/pos/_shared/stockJournal.js): server เขียนใน tx เดียวกับ stock เท่านั้น
+    //   client อ่าน/เขียนไม่ได้ทุกคน รวมเจ้าของร้าน (อ่านผ่าน API ของ server เมื่อมีจอรายงาน) · ไม่มี match ก็ปัดอยู่แล้ว · เขียนไว้ให้เห็นชัด
+    //   ⚠️ rules ที่ live ยังเป็นตัวเปิด (login แล้วเขียนได้ทุก collection) ⇒ ก่อน deploy rules ชุดนี้ client ยังแก้สมุดได้
+    match /stockJournal/{id} { allow read, write: if false; }
 
     // ไม่มี match อื่น ⇒ ปัดเป็นค่าตั้งต้น: collection ใหม่ทุกตัว · subcollection ทุกตัว (เช่น shop/*/meta/paymentGateway)
     // · ของ server (shopAlias gatewayCreds gatewayStations beamBoltConnections beamMerchantCreds beamMerchantIndex

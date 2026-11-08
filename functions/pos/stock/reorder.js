@@ -11,6 +11,7 @@
 // เขียน: stock {timestamp, updateTime} รูปเดิม + ทีมงาน {byAdmin, adminUid} · batch ชุดละ 450
 //   ❗ ไม่ใช่ transaction (สินค้าได้ถึง 5,000 ตัว เกินเพดาน transaction) · ทุกชุดเขียนค่าที่คิดจาก now เดียวกัน ⇒ ส่งซ้ำได้ผลเดิม
 //   ชุดหลังล้มกลางทาง = ลำดับบางส่วนเปลี่ยน (ช่องเดียวกับแอปเดิม · ส่งใหม่ได้ผลครบ)
+//   updateTime = serverTimestamp() เวลา commit ของแต่ละ batch (DEV-0007 · ../_shared/stockJournal.js ① · รูปเดียวกับแอปเดิม) · ไม่เปลี่ยนยอด ⇒ ไม่ลงสมุด
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -19,6 +20,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop } = require("../_shared/auth");
 const S = require("./_shared");
+const { serverTime } = require("../_shared/stockJournal");
 
 const READ_CHUNK = 300;
 const WRITE_CHUNK = 450;
@@ -63,7 +65,7 @@ function reorder(deps) {
       for (let i = 0; i < plan.length; i += WRITE_CHUNK) {
         const batch = db.batch();
         for (const p of plan.slice(i, i + WRITE_CHUNK)) {
-          batch.update(db.collection("stock").doc(p.id), { timestamp: p.timestamp, updateTime: now, ...trail });
+          batch.update(db.collection("stock").doc(p.id), { timestamp: p.timestamp, updateTime: serverTime(), ...trail });
         }
         await batch.commit();
       }

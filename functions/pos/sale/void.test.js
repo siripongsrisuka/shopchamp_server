@@ -6,6 +6,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
+const FV = require("../_shared/fakeFieldValue");
+let COMMIT_MS = Date.parse("2026-11-10T03:01:00.000Z"); // เวลา commit ปลอม (serverTimestamp · DEV-0007)
 
 const NOW = new Date("2026-11-10T03:00:00.000Z");
 const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMillis: () => d.getTime(), seconds: Math.floor(d.getTime() / 1000), nanoseconds: 0 }; };
@@ -28,12 +30,13 @@ function makeDb() {
           return { exists: d !== undefined, id: r.id, data: () => d };
         },
         update: (r, v) => { writes.push({ op: "update", c: r.c, id: r.id, v }); },
-        set: (r, v) => { writes.push({ op: "set", c: r.c, id: r.id, v }); },
+        set: (r, v, o) => { writes.push({ op: "set", c: r.c, id: r.id, v, merge: !!(o && o.merge) }); },
       };
       const out = await fn(tx);
+      const commitTime = new Date(++COMMIT_MS);
       for (const w of writes) {
         DATA[w.c] = DATA[w.c] || {};
-        DATA[w.c][w.id] = w.op === "set" ? { ...w.v } : { ...DATA[w.c][w.id], ...w.v };
+        DATA[w.c][w.id] = FV.applyWrite(DATA[w.c][w.id], w.v, { op: w.op, merge: w.merge, commitTime });
       }
       LOG.push(...writes);
       return out;
@@ -41,7 +44,7 @@ function makeDb() {
   };
 }
 const fbAbs = require.resolve(path.join(__dirname, "..", "..", "firebase"));
-require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {} } };
+require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {}, FieldValue: FV.FieldValue } };
 const V = require("./void");
 
 const handler = V.void({ now: () => NOW, log: () => {} });

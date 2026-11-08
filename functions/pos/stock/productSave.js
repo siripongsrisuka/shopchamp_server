@@ -16,6 +16,7 @@
 //   เขียนเฉพาะช่องที่เปลี่ยน (ST-022: ❌ stock cost link* ไม่มีในคำขอเลย) · ไม่มีอะไรเปลี่ยน = 200 unchanged (ST-091)
 //   เปลี่ยนบาร์โค้ดเป็นของตัวอื่น = 409 barcode_taken · ราคาเปลี่ยน = แจ้งเตือน categoryId 5 พร้อมชื่อคนแก้ (ST-092)
 // คลังบาร์โค้ดกลาง `product` (ProductSetting.js:672-689) ไม่อยู่ที่นี่ = โดเมน 9b
+// updateTime = serverTimestamp() (DEV-0007 · ../_shared/stockJournal.js ①) · create ลงสมุด stockJournal kind 'create' = ยอดตั้งต้น (duplicate ไม่ถึงจุดเขียน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -25,6 +26,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { vipActive } = require("../_shared/premium");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 
 const BASE_LIMIT = 5000;
 const MAX_LIMIT = 50000;
@@ -176,12 +178,15 @@ function productSave(deps) {
             linkMultiply: "",
             linkQty: 0,
             linkId: "",
-            updateTime: now,
+            updateTime: serverTime(),
             createdBy: { staffId: input.staffId, staffName: input.staffName },
             ...trail,
           };
           if (input.product.promotion) doc.promotion = promotionOf(input.product.promotion);
           tx.set(pRef, doc);
+          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+          journal.move("create", input.productUUID, 0, input.stock);
+          journal.write(tx, db, trail);
           return { productId: input.productUUID, duplicate: false };
         }
 
@@ -198,7 +203,7 @@ function productSave(deps) {
         if (owner) S.refuse(409, "barcode_taken", "บาร์โค้ดนี้มีสินค้าอื่นในร้านใช้อยู่แล้ว", { productId: owner });
         const changed = Object.keys(patch);
         if (!changed.length) return { productId: input.productId, unchanged: true };
-        tx.update(pRef, { ...patch, updateTime: now, updatedBy: { staffId: input.staffId, staffName: input.staffName }, ...trail });
+        tx.update(pRef, { ...patch, updateTime: serverTime(), updatedBy: { staffId: input.staffId, staffName: input.staffName }, ...trail });
         if (patch.price !== undefined) {
           const name = typeof cur.name === "string" ? cur.name : String(cur.name === undefined ? "" : cur.name);
           tx.set(db.collection("notification").doc(), {

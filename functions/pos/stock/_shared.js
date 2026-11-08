@@ -10,6 +10,7 @@
 //   4. transaction: อ่านครบก่อนเขียน · doc สินค้าทุกตัวต้องเป็นของร้านนี้ (ไม่มี 404 · ร้านอื่น 409 · ไม่คืนเนื้อ)
 //      ⇒ ร้าน clone ที่กลุ่มผูกยังชี้ร้านต้นทาง (#10 ST-001) จะเขียนข้ามร้านไม่ได้เลยผ่าน API ใหม่
 //   5. เขียนเพิ่ม field อย่างเดียว (แอปเก่าอ่านได้ตามเดิม) · เวลา = นาฬิกา server (deps.now) แทน serverTimestamp()
+//      ยกเว้น stock updateTime = serverTimestamp() เวลา commit (DEV-0007 · ../_shared/stockJournal.js) + สมุด stockJournal ใน tx เดียวกัน
 "use strict";
 
 const logic = require("@shopchamp/logic");

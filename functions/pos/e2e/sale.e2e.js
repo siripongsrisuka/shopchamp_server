@@ -27,7 +27,9 @@ before(() => E.ready());
 test("ขายเงินสดออนไลน์: bill · receiptGuard · ตัวนับ billId · สต็อก · ทุกตัวผ่าน schema อ่าน", async () => {
   const f = await fresh();
   const body = saleBody(f);
+  const wallBefore = Date.now();
   const r = await call(create, NOW, { body, shopAccess: f.access.owner });
+  const wallAfter = Date.now();
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.receiptNumber, "202611000042");
   assert.deepEqual(r.body.shift, { status: "open" });
@@ -67,9 +69,27 @@ test("ขายเงินสดออนไลน์: bill · receiptGuard · 
 
   const st = await get("stock", f.id.pWater);
   assert.equal(st.stock, 48);
-  assert.equal(ms(st.updateTime), Date.parse(NOW_ISO));
+  // DEV-0007: updateTime = เวลา commit ของ emulator (serverTimestamp) ไม่ใช่นาฬิกาคำขอ (deps.now) · ชนิดยังเป็น Timestamp แบบเดิม
+  assert.equal(typeof st.updateTime.toMillis, "function", "updateTime เป็น Firestore Timestamp");
+  assert.ok(ms(st.updateTime) >= wallBefore - 2000 && ms(st.updateTime) <= wallAfter + 2000, `updateTime ${ms(st.updateTime)} ต้องอยู่ช่วงเวลา commit`);
   assert.equal(ms(st.latestSaleDate), Date.parse(NOW_ISO));
   parseOk(S.Stock, st, "stock");
+
+  // DEV-0007: สมุด stockJournal ลงใน tx เดียวกัน · set merge + increment ของ SDK จริง (map ซ้อน) · ขายซ้ำอีกบิลบวกต่อ ไม่ทับ
+  const jid = `${f.id.shopA}_20261110_sale_0`;
+  const j1 = await get("stockJournal", jid);
+  assert.equal(j1.qty[f.id.pWater], -2);
+  assert.equal(j1.events, 1);
+  assert.equal(j1.day, "20261110");
+  parseOk(S.StockJournal, j1, "stockJournal");
+  const r2 = await call(create, NOW, { body: saleBody(f), shopAccess: f.access.owner });
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+  const again = await call(create, NOW, { body, shopAccess: f.access.owner });
+  assert.equal(again.body.duplicate, true);
+  const j2 = await get("stockJournal", jid);
+  assert.equal(j2.qty[f.id.pWater], -4, "บิลที่ 2 บวกต่อ · ส่งซ้ำบิลแรกไม่นับ");
+  assert.equal(j2.events, 2);
+  assert.equal((await get("stock", f.id.pWater)).stock, 46);
 });
 
 test("ร้านรายวัน: เลข 14 หลักจาก billDayId · billId ไม่ขยับ", async () => {

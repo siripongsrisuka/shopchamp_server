@@ -19,6 +19,8 @@
 //   แจ้งเตือน (price/stock) รูปเดิม {heading, shopId, notificationContent, categoryId, timestamp} + ชื่อคนแก้ (ST-092)
 //   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): price/stock ที่เปลี่ยนจริง → FCM ทั้งร้าน (แทน pushByShopFilter ของแอป
 //     `APP/src/screens/LowProfitScreen.js:122` · `APP/src/modal/Modal_ImportProduct.js:199,217`) · หัวข้อ/ข้อความเดียวกับ notification · unchanged = ไม่ส่ง
+//   stock updateTime = serverTimestamp() ทุก op (DEV-0007 · ../_shared/stockJournal.js ①) · op stock ลงสมุด stockJournal kind 'adjust' ใน tx เดียวกัน
+//     (ผลต่างยอดในฐานกับยอดใหม่ ทุกตัวในกลุ่ม · ส่งซ้ำ = unchanged ไม่ถึงจุดเขียน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -29,6 +31,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 const { notify } = require("../_shared/push/notify");
 
 const RIGHT_OF = Object.freeze({ price: S.RIGHTS.EDIT_PRICE, stock: S.RIGHTS.EDIT_STOCK, cost: S.RIGHTS.EDIT_COST, expRemove: S.RIGHTS.EXP });
@@ -75,7 +78,7 @@ function adjust(deps) {
         if (input.op === "price") {
           const prev = S.num(p.price);
           if (S.round(prev) === input.newPrice && typeof p.price === "number") return { unchanged: true };
-          tx.update(db.collection("stock").doc(input.productId), { price: input.newPrice, updateTime: now, ...trail });
+          tx.update(db.collection("stock").doc(input.productId), { price: input.newPrice, updateTime: serverTime(), ...trail });
           noti(`อัปเดตราคา ${name} เป็น ${input.newPrice} บาท`, `ราคาเดิม : ${str(p.price)}\nราคาใหม่ : ${input.newPrice} \nโดย : ${input.staffName}`, 5);
           return { unchanged: false, price: input.newPrice };
         }
@@ -86,7 +89,12 @@ function adjust(deps) {
           if (current === S.round(input.newStock) && typeof p.stock === "number") return { unchanged: true };
           if (current !== S.round(input.seenStock)) S.refuse(409, "stock_changed", "คงเหลือเปลี่ยนไปแล้วระหว่างแก้ กรุณายืนยันอีกครั้ง", { currentStock: current });
           const base = S.round(input.newStock * mult);
-          for (const id of group) tx.update(db.collection("stock").doc(id), { stock: base, updateTime: now, ...trail });
+          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+          for (const id of group) {
+            tx.update(db.collection("stock").doc(id), { stock: base, updateTime: serverTime(), ...trail });
+            journal.move("adjust", id, docs.get(id).stock, base);
+          }
+          journal.write(tx, db, trail);
           noti(`อัปเดตจำนวน ${name} เป็น ${input.newStock} ${unit}`, `คงเหลือเดิม : ${current}\nคงเหลือใหม่ : ${input.newStock} \nโดย : ${input.staffName}`, 6);
           return { unchanged: false, stock: input.newStock, baseStock: base, updated: group };
         }
@@ -99,7 +107,7 @@ function adjust(deps) {
             const m = id === input.productId ? mult : logic.readLinkMultiply(docs.get(id).linkMultiply);
             if (m === null) S.refuse(409, "stock_link_broken", "ตัวคูณของสินค้าผูกเสีย กรุณาติดต่อทีมงาน", { productId: id });
             const c = S.round(perBase * m);
-            tx.update(db.collection("stock").doc(id), { cost: c, updateTime: now, ...trail });
+            tx.update(db.collection("stock").doc(id), { cost: c, updateTime: serverTime(), ...trail });
             costs.push({ id, cost: c });
           }
           return { unchanged: false, costs };
@@ -112,7 +120,7 @@ function adjust(deps) {
         for (const id of group) {
           const x = S.removeOneExp(docs.get(id).expReport, day);
           if (!x.removed) continue;
-          tx.update(db.collection("stock").doc(id), { expReport: x.list, updateTime: now, ...trail });
+          tx.update(db.collection("stock").doc(id), { expReport: x.list, updateTime: serverTime(), ...trail });
           changed.push(id);
         }
         if (!changed.length) return { unchanged: true };

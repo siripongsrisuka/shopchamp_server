@@ -20,7 +20,9 @@
 //   ร้านไม่ใช้ระบบกะ (ก้อน 5 ข้อ ①): รูปบิลเท่าแอปเก่าเป๊ะในส่วนกะ = shiftId ประจำจุดขาย (ถ้าส่ง) · ไม่มี shiftOpenTime/shiftUnassigned
 //   ต่างจากแอปเก่าโดยตั้งใจ:
 //     - `bill.shopId` = field `shop.shopId` แบบแอปเก่า (ร้านเก่า ≠ doc id ได้ · ทุก query ของบิลใช้ค่านี้) · guard.shopId = shop doc id ตามสัญญา
-//     - `updateTime` `latestSaleDate` `lastTime` = นาฬิกา server (deps.now) แทน serverTimestamp()
+//     - `latestSaleDate` `lastTime` = นาฬิกา server (deps.now) แทน serverTimestamp()
+//     - stock `updateTime` = serverTimestamp() เหมือนแอปเก่า (DEV-0007 · เดิมใช้ deps.now ที่อ่านก่อน tx ⇒ เครื่องอื่นซิงก์หลุด · _shared/stockJournal.js ①)
+//   สมุด stockJournal kind 'sale' ใน tx เดียวกัน (DEV-0007 · _shared/stockJournal.js ②) · duplicate = ไม่ถึงจุดเขียน ⇒ ไม่นับซ้ำ
 //     - ช่องที่ server คิดเอง ทับค่าจากเครื่องเสมอ: franchiseId (= shop.franchiseId | '') · gainPoint usedPoint (= ผล saleMemberEffect)
 //     - pointDiscount campaign ที่คำขอไม่ส่ง = เติม {value:0, point:0} และ [] (C-1 · แอปเก่าเขียน 2 ช่องนี้ทุกบิล)
 //     - บิลออฟไลน์ที่ soldAt ถูก clamp = unassigned · ไม่มี shiftId/shiftOpenTime · เก็บ shiftIdAtSale (B-8)
@@ -40,6 +42,7 @@ const { nextBillNumber, billDateOf, billReceiptTypeOf, receiptTypeOf } = require
 const { resolveOfflineSync, stampOfflineFields } = require("../_shared/offlineSync");
 const { readReceiptUUID, classifyGuard, legacyDuplicateFromBill, guardDoc } = require("../_shared/idempotency");
 const { notify, idsOf } = require("../_shared/push/notify");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 
 // ผลตรวจที่ปัดใน transaction ⇒ โยนออกมาตอบนอก transaction (ยังไม่เขียนอะไร)
 class Refusal extends Error {
@@ -301,14 +304,17 @@ function create(deps) {
         tx.set(guardRef, guardDoc({ now, receiptNumber, billId: billRef.id, shopDocId, trail }));
         tx.set(counterRef, { ...num.write, ...trail }, { merge: true });
         const lowStock = [];
+        const journal = makeJournal({ shopDocId, now, cutOff: shop.cutOff });
         for (const mv of stock.plan.moves) {
           const d = stock.docs.get(mv.id);
           if (!d) continue;
-          const upd = { stock: logic.stockAfterMove(d.stock, -mv.qty), updateTime: now, ...trail };
+          const upd = { stock: logic.stockAfterMove(d.stock, -mv.qty), updateTime: serverTime(), ...trail };
+          journal.move("sale", mv.id, d.stock, upd.stock);
           if (stock.plan.soldIds.includes(mv.id)) lowStock.push({ doc: d, next: upd.stock });
           if (stock.plan.soldIds.includes(mv.id)) upd.latestSaleDate = now;
           tx.update(db.collection("stock").doc(mv.id), upd);
         }
+        journal.write(tx, db, trail);
         if (memberUpdate) tx.update(db.collection("member").doc(memberId), { ...memberUpdate, ...trail });
         if (round.status === "late") {
           const h = round.data || {};

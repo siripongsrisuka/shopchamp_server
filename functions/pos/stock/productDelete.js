@@ -12,6 +12,8 @@
 //   เขียน: stock/{productId} {deleted:true, updateTime} (รูปเดิม) + {deletedBy, deletedAt}
 //     สมาชิกที่เหลือ {stock, linkDetail:[], linkNext:'', linkMultiply:'', linkQty:0, linkId:'', updateTime} · ลบ stockLink
 //   ลบรูปใน Storage ยังเป็นงานของแอปหลังได้ 200 (ST-098 · เดิมลบรูปก่อนแล้วไม่รอผลลบข้อมูล)
+// DEV-0007: updateTime = serverTimestamp() (เวลา commit · เครื่องอื่นในร้านเห็นการลบในรอบซิงก์ถัดไปแน่นอน · ../_shared/stockJournal.js ①)
+//   สมุด stockJournal kind 'delete': −stock ของตัวที่ลบ (ยอดที่ออกจากคลัง) + ผลต่างของสมาชิกที่เหลือ · alreadyDeleted ไม่ถึงจุดเขียน
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -21,6 +23,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { unlinkWrites } = require("./link");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 
 function productDelete(deps) {
   return async function handler(req, res) {
@@ -69,15 +72,19 @@ function productDelete(deps) {
           // ตัวฐานของการแจก = ตัวที่ลบเอง (ยอดเดียวกันทั้งกลุ่ม · linkDetail ของตัวนี้มีตัวเองอยู่ ⇒ removeId ทำงาน)
           live = [{ id: input.productId, doc: product }, ...live];
         }
-        const members = live.length ? unlinkWrites(tx, live, { now, trail, removeId: input.productId }) : [];
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const members = live.length ? unlinkWrites(tx, live, { now, trail, removeId: input.productId, journal, kind: "delete" }) : [];
         if (linkExists) tx.delete(db.collection("stockLink").doc(String(product.linkId)));
         tx.update(db.collection("stock").doc(input.productId), {
           deleted: true,
-          updateTime: now,
+          updateTime: serverTime(),
           deletedAt: now,
           deletedBy: { staffId: input.staffId, staffName: input.staffName },
           ...trail,
         });
+        // ช่อง stock ของตัวที่ลบไม่เปลี่ยน แต่ยอดนั้นออกจากคลัง · สินค้าผูก = ยอดย้ายไปหน่วยที่เหลือแล้ว (ลงจากสมาชิกข้างบน) ⇒ ตัวที่ลบ −stock ตามจริง
+        journal.add("delete", input.productId, -S.num(product.stock));
+        journal.write(tx, db, trail);
         return { alreadyDeleted: false, members, linkDeleted: linkExists };
       });
 

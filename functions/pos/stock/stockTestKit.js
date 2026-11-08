@@ -7,10 +7,13 @@
 //    · ปัดการอ่านหลังเขียนใน transaction เดียว (กฎของ Firestore) · commit แล้วค่าเปลี่ยนจริง ⇒ ยิงซ้ำเห็นผลรอบแรก
 //    · บันทึกทุกการเขียนใน LOG
 // 3. loadHandler(rel, fnName): แทน functions/firebase ใน require.cache ก่อนโหลด handler (ไม่แตะฐานจริง)
+// 4. FieldValue ปลอม (DEV-0007 · ../_shared/fakeFieldValue.js): serverTimestamp = เวลา commit จาก commitClock() · increment บวกจริง
+//    hooks.beforeCommit(): เรียกหลัง fn ของ tx จบ ก่อนลงค่า = ช่องให้เทสแทรก "tx อื่น commit + เครื่องซิงก์" กลางทาง (syncTime.test.js)
 "use strict";
 
 const path = require("path");
 const fs = require("fs");
+const FV = require("../_shared/fakeFieldValue");
 
 const FUNCTIONS = path.resolve(__dirname, "..", "..");
 const CENTER = path.resolve(FUNCTIONS, "..", "..", "shopchamp-center");
@@ -39,26 +42,30 @@ function installStockSchemas() {
 
 let DATA = {};
 let LOG = [];
+// เวลา commit ปลอม: เริ่ม 1 นาทีหลังนาฬิกาของคำขอ (call() ใช้ 2026-11-10T03:00Z) และเดินหน้า 1 ms ทุก commit
+let CLOCK_MS = Date.parse("2026-11-10T03:01:00.000Z");
+const hooks = { beforeCommit: null };
+const commitClock = () => new Date(++CLOCK_MS);
 function reset(data) {
   DATA = JSON.parse(JSON.stringify(data || {}), (k, v) => (v && typeof v === "object" && v.__date__ ? new Date(v.__date__) : v));
   LOG = [];
+  hooks.beforeCommit = null;
 }
 const data = () => DATA;
 const log = () => LOG;
 
+// ตัวนับ id อัตโนมัติอยู่ระดับไฟล์: loadHandler สร้างฐานปลอมใหม่ทุกครั้ง ⇒ ตัวนับต่อฐานทำให้ doc() ไม่ระบุ id ชนกันข้าม handler (บิลทับกัน)
+let auto = 0;
 function makeDb() {
-  let auto = 0;
   const getDoc = (c, id) => (DATA[c] || {})[id];
   const snapOf = (c, id) => {
     const d = getDoc(c, id);
     return { exists: d !== undefined, id, data: () => d };
   };
-  const applyWrite = (w) => {
+  const applyWrite = (w, commitTime) => {
     DATA[w.c] = DATA[w.c] || {};
     if (w.op === "delete") delete DATA[w.c][w.id];
-    else if (w.op === "update") DATA[w.c][w.id] = { ...(DATA[w.c][w.id] || {}), ...w.v };
-    else if (w.op === "set" && w.merge) DATA[w.c][w.id] = { ...(DATA[w.c][w.id] || {}), ...w.v };
-    else DATA[w.c][w.id] = w.v;
+    else DATA[w.c][w.id] = FV.applyWrite(DATA[w.c][w.id], w.v, { op: w.op, merge: w.merge, commitTime });
   };
   const query = (c, filters, lim) => ({
     __query: true,
@@ -101,7 +108,7 @@ function makeDb() {
       get: async () => query(c, [], null).get(),
       add: async (v) => {
         const id = `auto${++auto}`;
-        applyWrite({ op: "set", c, id, v });
+        applyWrite({ op: "set", c, id, v }, commitClock());
         LOG.push({ op: "add", c, id, v });
         return { id };
       },
@@ -118,14 +125,16 @@ function makeDb() {
         ...w,
       };
       const out = await fn(tx);
-      for (const x of writes) { applyWrite(x); LOG.push(x); }
+      if (typeof hooks.beforeCommit === "function") { const h = hooks.beforeCommit; hooks.beforeCommit = null; await h(); }
+      const t = commitClock();
+      for (const x of writes) { applyWrite(x, t); LOG.push(x); }
       return out;
     },
     batch: () => {
       const writes = [];
       return {
         ...writer(writes),
-        commit: async () => { for (const x of writes) { applyWrite(x); LOG.push(x); } },
+        commit: async () => { const t = commitClock(); for (const x of writes) { applyWrite(x, t); LOG.push(x); } },
       };
     },
   };
@@ -134,7 +143,7 @@ function makeDb() {
 function loadHandler(rel, fnName) {
   installStockSchemas();
   const fbAbs = require.resolve(path.join(FUNCTIONS, "firebase"));
-  require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {}, bucket: {} } };
+  require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {}, bucket: {}, FieldValue: FV.FieldValue } };
   const abs = require.resolve(path.join(FUNCTIONS, "pos", "stock", rel));
   delete require.cache[abs];
   return require(abs)[fnName];
@@ -155,4 +164,4 @@ const OWNER = { shopAccess: { shopId: "shopA", uid: "u-owner", role: "owner", ri
 const ADMIN = { shopAccess: { shopId: "shopA", uid: "u-admin", role: "owner", rights: [], byAdmin: true } };
 const staff = (rights) => ({ shopAccess: { shopId: "shopA", uid: "u-staff", role: "staff", rights } });
 
-module.exports = { installStockSchemas, reset, data, log, makeDb, loadHandler, makeRes, call, OWNER, ADMIN, staff };
+module.exports = { installStockSchemas, reset, data, log, makeDb, loadHandler, makeRes, call, OWNER, ADMIN, staff, hooks, commitClock };

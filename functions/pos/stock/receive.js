@@ -18,7 +18,8 @@
 //        + ใหม่ {receiveUUID, vatIncluded?} · ทีมงาน {byAdmin, adminUid}
 //   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit FCM หา shop.notiImport ในร้านนี้ (แทน pushByTwoFilter
 //     `APP/src/screens/ImportProductScreen.js:388`) · หัวข้อ 'รับสินค้า' ข้อความรูปเดิม · duplicate = ไม่ส่ง · ทางเดิมไม่เขียน notification doc (คงเดิม)
-// ต่างจากเดิมโดยตั้งใจ: dateTime/updateTime = นาฬิกา server · date = วันไทยของเวลา server (เดิมนาฬิกาเครื่อง)
+// ต่างจากเดิมโดยตั้งใจ: dateTime = นาฬิกา server · date = วันไทยของเวลา server (เดิมนาฬิกาเครื่อง)
+//   stock updateTime = serverTimestamp() (DEV-0007 · ../_shared/stockJournal.js ①) · สมุด stockJournal kind 'receive' ใน tx เดียวกัน (duplicate ไม่ถึงจุดเขียน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -29,6 +30,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { thaiYmd } = require("../_shared/billClock");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 
 // issue ของ logic.mergeReceiveLines ที่แปลว่ายอดจะลงไม่ครบกลุ่ม ⇒ 409 receive_unsafe
@@ -88,14 +90,17 @@ function receive(deps) {
         await S.readStockDocs(db, tx, merged.rows.map((r) => r.id), ref, { into: docs });
 
         const stocks = [];
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
         for (const row of merged.rows) {
           const d = docs.get(row.id);
           const next = logic.applyReceive(d, row);
           const exps = row.exps.map(S.dateOf).filter(Boolean);
           const expReport = (Array.isArray(d.expReport) ? d.expReport : []).concat(exps);
-          tx.update(db.collection("stock").doc(row.id), { stock: next.stock, cost: next.cost, expReport, updateTime: now, ...trail });
+          tx.update(db.collection("stock").doc(row.id), { stock: next.stock, cost: next.cost, expReport, updateTime: serverTime(), ...trail });
+          journal.move("receive", row.id, d.stock, next.stock);
           stocks.push({ id: row.id, stock: next.stock, cost: next.cost });
         }
+        journal.write(tx, db, trail);
 
         let totalQty = 0;
         let totalCost = 0;

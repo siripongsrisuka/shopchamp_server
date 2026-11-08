@@ -18,6 +18,8 @@
 //      importProduct {product, totalQty, totalCost} (รูปเดิม `:309`) แถวที่แก้เป็นเลข (เดิมเป็นสตริง C3) + ใหม่ lastEdit {...}
 //   push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit FCM หา shop.notiImport ในร้านนี้ (แทน pushByTwoFilter
 //     `APP/src/screens/ImportProductDetail.js:268`) · หัวข้อ 'ปรับแก้ไข รายการรับสินค้า' ข้อความรูปเดิม · unchanged = ไม่ส่ง
+//   stock updateTime = serverTimestamp() (DEV-0007 · ../_shared/stockJournal.js ①) · สมุด stockJournal kind 'receiveEdit' (ผลต่างช่อง stock) ใน tx เดียวกัน
+//     unchanged / ส่งซ้ำ ไม่ถึงจุดเขียน ⇒ ไม่นับซ้ำ
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -27,6 +29,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, checkOwnedDoc } = require("../_shared/auth");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 const loc4 = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "");
 
@@ -112,7 +115,12 @@ function receiveEdit(deps) {
           }
         }
         if (!touch.size && qtyCostSame) return { unchanged: true };
-        for (const [id, upd] of touch) tx.update(db.collection("stock").doc(id), { ...upd, updateTime: now, ...trail });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        for (const [id, upd] of touch) {
+          tx.update(db.collection("stock").doc(id), { ...upd, updateTime: serverTime(), ...trail });
+          if (upd.stock !== undefined) journal.move("receiveEdit", id, docs.get(id).stock, upd.stock);
+        }
+        journal.write(tx, db, trail);
         if (updateStock === null) updateStock = S.round(S.num(edited.stock) / (edited.linkId ? logic.readLinkMultiply(edited.linkMultiply) || 1 : 1));
 
         const product = rows.map((p, i) => {

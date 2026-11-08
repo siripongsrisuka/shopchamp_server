@@ -16,6 +16,7 @@
 //        + ใหม่ {requisitionUUID, moves:[{id, qty}]} = ตัวที่ถูกตัดจริง (ST-010 เตรียมไว้ให้ยกเลิกได้ภายหลัง · ยังไม่มี endpoint ยกเลิก)
 //      notification: รูปเดิม `:185-191` {heading:'เบิกสินค้า', shopId, notificationContent, categoryId:7, timestamp}
 //   push (DEV-0001 push): หลัง commit FCM หา shop.notiRequisition ในร้านนี้ (แทน pushByTwoFilter `APP/src/screens/RequisitionScreen.js:152`) · duplicate = ไม่ส่ง
+//   stock updateTime = serverTimestamp() (DEV-0007 · ../_shared/stockJournal.js ①) · สมุด stockJournal kind 'requisition' ใน tx เดียวกัน (duplicate ไม่ถึงจุดเขียน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -27,6 +28,7 @@ const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsTo
 const { isPremiumActive } = require("../_shared/premium");
 const { billDateOf } = require("../_shared/billClock");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 
 const NOTI_HEADING = "เบิกสินค้า";
@@ -75,10 +77,14 @@ function requisition(deps) {
         const plan = logic.planStockDeduction(lines, { requirePositiveQty: true });
         await S.readStockDocs(db, tx, plan.moves.map((m) => m.id), ref, { into: docs });
 
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
         for (const mv of plan.moves) {
           const d = docs.get(mv.id);
-          tx.update(db.collection("stock").doc(mv.id), { stock: logic.stockAfterMove(d.stock, -mv.qty), updateTime: now, ...trail });
+          const next = logic.stockAfterMove(d.stock, -mv.qty);
+          tx.update(db.collection("stock").doc(mv.id), { stock: next, updateTime: serverTime(), ...trail });
+          journal.move("requisition", mv.id, d.stock, next);
         }
+        journal.write(tx, db, trail);
         const currentCarts = input.lines.map((l) => {
           const d = docs.get(l.id);
           const cost = S.num(d.cost);

@@ -26,7 +26,9 @@
 //   เพิ่ม: bill voidAt voidStaffId voidRequestId voidShiftId voidShiftOpenTime voidRefundCash · ทีมงาน byAdmin adminUid ทุกเอกสาร
 //     voidRefundCash = refundCash ของครั้งแรก (B-10) ⇒ ยิงซ้ำตอบ refundCash เดิม · บิลที่ยกเลิกก่อนมี field นี้ ยิงซ้ำไม่มี refundCash
 //   ต่างจากแอปเก่าโดยตั้งใจ:
-//     - `updateTime` `timestamp` = นาฬิกา server (deps.now) แทน serverTimestamp() เพราะไม่โหลด SDK ในไฟล์นี้
+//     - `timestamp` = นาฬิกา server (deps.now) แทน serverTimestamp()
+//     - stock `updateTime` = serverTimestamp() เหมือนแอปเก่า (DEV-0007 · _shared/stockJournal.js ①) · สมุด stockJournal kind 'void' ใน tx เดียวกัน
+//       (ยิงซ้ำ replay / already_void ไม่ถึงจุดเขียน ⇒ ไม่นับซ้ำ)
 //     - stock doc ที่ไม่มีแล้ว / เป็นของร้านอื่น = ข้ามแถวนั้นและ log (แอปเก่า throw ทั้งใบ ⇒ บิลที่สินค้าถูกลบยกเลิกไม่ได้เลย)
 //     - แต้มต่ำสุด 0 และคืนแต้มที่แลก (#16 · logic.applyVoidToMember)
 "use strict";
@@ -39,6 +41,7 @@ const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsTo
 const { AMEND_PENDING_TTL_MS } = require("../_shared/idempotency");
 const { amendLocks } = require("./amendRules");
 const { notify, idsOf } = require("../_shared/push/notify");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -231,12 +234,15 @@ function makeVoid(deps) {
 
         // ── เขียน (หลังอ่านครบ)
         const skipped = [];
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
         for (const move of plan.moves) {
           const d = stockDocs.get(move.id);
           if (!d) { skipped.push(move.id); continue; }
           const next = logic.restoreOnVoid(d, move);
-          tx.update(db.collection("stock").doc(move.id), { stock: next.stock, cost: next.cost, updateTime: now, ...trail });
+          tx.update(db.collection("stock").doc(move.id), { stock: next.stock, cost: next.cost, updateTime: serverTime(), ...trail });
+          journal.move("void", move.id, d.stock, next.stock);
         }
+        journal.write(tx, db, trail);
         if (skipped.length) log("pos sale.void stock_skipped", input.billId, JSON.stringify(skipped));
 
         const billUpdate = {

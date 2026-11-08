@@ -7,6 +7,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
+const FV = require("../_shared/fakeFieldValue");
+let COMMIT_MS = Date.parse("2026-11-10T03:01:00.000Z"); // เวลา commit ปลอม (serverTimestamp · DEV-0007) เดินหน้าทุก commit
 
 const NOW = new Date("2026-11-10T03:00:00.000Z");
 const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMillis: () => d.getTime(), seconds: Math.floor(d.getTime() / 1000), nanoseconds: 0 }; };
@@ -58,10 +60,11 @@ function makeDb() {
         set: (r, v, o) => { writes.push({ op: o && o.merge ? "merge" : "set", c: r.c, id: r.id, v }); },
       };
       const out = await fn(tx);
+      const commitTime = new Date(++COMMIT_MS);
       for (const w of writes) {
         DATA[w.c] = DATA[w.c] || {};
         if (w.op === "update" && DATA[w.c][w.id] === undefined) throw new Error(`update ${w.c}/${w.id} ที่ไม่มี doc`);
-        DATA[w.c][w.id] = w.op === "set" ? { ...w.v } : { ...DATA[w.c][w.id], ...w.v };
+        DATA[w.c][w.id] = FV.applyWrite(DATA[w.c][w.id], w.v, { op: w.op === "merge" ? "set" : w.op, merge: w.op === "merge", commitTime });
       }
       LOG.push(...writes);
       return out;
@@ -69,7 +72,7 @@ function makeDb() {
   };
 }
 const fbAbs = require.resolve(path.join(__dirname, "..", "..", "firebase"));
-require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {} } };
+require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: makeDb(), admin: {}, FieldValue: FV.FieldValue } };
 const C = require("./create");
 
 async function call(body, { now = NOW, shopAccess = OWNER } = {}) {

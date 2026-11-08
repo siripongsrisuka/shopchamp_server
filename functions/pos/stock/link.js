@@ -24,6 +24,8 @@
 //   แจกยอดรวมลงหน่วยใหญ่ไปเล็ก logic.spreadLinkStock (เศษและยอดติดลบไปหน่วยเล็กสุด ST-057)
 //   เขียนสมาชิก {stock, linkDetail:[], linkNext:'', linkMultiply:'', linkQty:0, linkId:'', updateTime} (รูปเดิม) · ลบ stockLink
 //   ทุนคงเดิม (ST-148 คงเดิม)
+// DEV-0007: stock updateTime = serverTimestamp() (../_shared/stockJournal.js ①) · ยอดที่แปลงหน่วยตอนสร้าง/เลิกผูก ลงสมุด stockJournal kind 'link'
+//   (ไม่ใช่ของเข้าออกจริง · ให้ ยอดต้นวัน + Σqty = ยอดปลายวัน ต่อ doc) · duplicate/alreadyDeleted ไม่ถึงจุดเขียน
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -34,6 +36,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const S = require("./_shared");
+const { serverTime, makeJournal } = require("../_shared/stockJournal");
 
 const str = (v) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
 
@@ -76,7 +79,7 @@ function linkCreate(deps) {
   return guarded(deps, "StockLinkCreateRequest", async ({ input, access, now, trail }) => {
     const linkRef = db.collection("stockLink").doc(input.linkUUID);
     return db.runTransaction(async (tx) => {
-      const { ref, premium } = await openShop(tx, access, now, { needPremium: true });
+      const { shop, ref, premium } = await openShop(tx, access, now, { needPremium: true });
       const linkSnap = await tx.get(linkRef);
       if (linkSnap.exists) {
         if (!belongsToShop((linkSnap.data() || {}).shopId, ref)) S.refuse(409, "link_uuid_other_shop", "รหัสกลุ่มนี้เป็นของร้านอื่น");
@@ -103,7 +106,9 @@ function linkCreate(deps) {
         id: input.linkUUID,
         ...trail,
       });
+      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
       for (const m of g.members) {
+        journal.move("link", m.id, docs.get(m.id).stock, m.stock);
         tx.update(db.collection("stock").doc(m.id), {
           stock: m.stock,
           linkDetail: m.linkDetail,
@@ -112,10 +117,11 @@ function linkCreate(deps) {
           cost: m.cost,
           linkMultiply: m.linkMultiply,
           linkId: input.linkUUID,
-          updateTime: now,
+          updateTime: serverTime(),
           ...trail,
         });
       }
+      journal.write(tx, db, trail);
       return { linkId: input.linkUUID, duplicate: false, stock: g.stock, averageCost: g.averageCost, members: g.members.map(({ id, stock, cost }) => ({ id, stock, cost })) };
     });
   });
@@ -162,7 +168,7 @@ function linkUpdate(deps) {
           .map(({ id, doc }) => ({ id, linkMultiply: logic.readLinkMultiply(doc.linkMultiply) }))
           .filter((r) => r.linkMultiply !== null);
         for (const r of rows) {
-          tx.update(db.collection("stock").doc(r.id), { ...upgradeFieldsOf(r.linkMultiply, rows, input.upgrade), updateTime: now, ...trail });
+          tx.update(db.collection("stock").doc(r.id), { ...upgradeFieldsOf(r.linkMultiply, rows, input.upgrade), updateTime: serverTime(), ...trail });
         }
       }
       const out = { linkId: input.linkId, unchanged: false, changed: Object.keys(patch) };
@@ -175,11 +181,13 @@ function linkUpdate(deps) {
 function linkDelete(deps) {
   return guarded(deps, "StockLinkDeleteRequest", async ({ input, access, now, trail }) => {
     return db.runTransaction(async (tx) => {
-      const { ref, premium } = await openShop(tx, access, now, { needPremium: true });
+      const { shop, ref, premium } = await openShop(tx, access, now, { needPremium: true });
       const { link, live, skipped } = await readGroup(tx, input.linkId, ref);
       if (!link) return { linkId: input.linkId, alreadyDeleted: true };
       if (!premium) S.refuse(403, "premium_required");
-      const members = unlinkWrites(tx, live, { now, trail });
+      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+      const members = unlinkWrites(tx, live, { now, trail, journal, kind: "link" });
+      journal.write(tx, db, trail);
       tx.delete(db.collection("stockLink").doc(input.linkId));
       const out = { linkId: input.linkId, alreadyDeleted: false, members };
       if (skipped.length) out.skipped = skipped;
@@ -189,11 +197,12 @@ function linkDelete(deps) {
 }
 
 /**
- * unlinkWrites(tx, live, {now, trail, removeId}) — เขียนเลิกผูกให้สมาชิกที่ยังอยู่ · คืน [{id, stock}]
+ * unlinkWrites(tx, live, {now, trail, removeId, journal, kind}) — เขียนเลิกผูกให้สมาชิกที่ยังอยู่ · คืน [{id, stock}]
+ *   journal (ไม่ส่งได้) = ลงผลต่างช่อง stock ของสมาชิกแต่ละตัวเป็นชนิด kind · ผู้เรียกเรียก journal.write เอง
  *   ยอดรวม = stock ของสมาชิกตัวแรกที่อ่านได้ (ทุกตัวเก็บยอดหน่วยเล็กสุดค่าเดียวกัน) · แจกด้วย linkDetail ในฐานของตัวนั้น
  *   removeId = ตัวที่กำลังถูกลบ (stock.productDelete · ST-009: ยอดของตัวนั้นย้ายไปหน่วยที่เหลือ ไม่หาย)
  */
-function unlinkWrites(tx, live, { now, trail, removeId }) {
+function unlinkWrites(tx, live, { trail, removeId, journal, kind }) {
   if (!live.length) return [];
   const base = live.find((m) => Array.isArray(m.doc.linkDetail) && m.doc.linkDetail.length) || live[0];
   const spread = logic.spreadLinkStock(base.doc.stock, base.doc.linkDetail, removeId ? { removeId } : undefined);
@@ -211,9 +220,10 @@ function unlinkWrites(tx, live, { now, trail, removeId }) {
       linkMultiply: "",
       linkQty: 0,
       linkId: "",
-      updateTime: now,
+      updateTime: serverTime(),
       ...trail,
     });
+    if (journal) journal.move(kind, id, doc.stock, stock);
     out.push({ id, stock });
   }
   return out;
