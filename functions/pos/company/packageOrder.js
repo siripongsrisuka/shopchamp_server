@@ -6,7 +6,7 @@
 // ยังไม่ export จาก index.js และยังไม่ deploy
 //
 // ลำดับ: callerAccess (401/403) → รูปคำขอ (400) → runOrder (_orders.js)
-//   ราคา: admin/package ใน transaction · แถว status truthy เท่านั้น (logic.companyPackageOrderQuote)
+//   ราคา: admin/package ใน transaction · แถว status truthy หรือ newApp === true (logic.companyPackageOrderQuote · logic 0.1.8 · gateway ขายเฉพาะแอปใหม่)
 //     doc ไม่มี/ผิดรูป 503 package_config_unavailable · id ไม่ขาย 409 package_unavailable {packageId} · ซ้ำ 400 (schema กันแล้ว)
 //   VAT (DEV-0002 · Pack เคาะ 2026-11-07): vat:true = ขอใบกำกับ · ได้เฉพาะเมื่อทุกแพ็กเกจเป็นรายปี (price[].day = 12 เดือน)
 //     ไม่ใช่ 409 tax_invoice_yearly_only {packageId} · VAT 7% ของยอดรวมปัดสตางค์ · expectedNet เทียบกับยอดรวม VAT แล้ว (price_changed)
