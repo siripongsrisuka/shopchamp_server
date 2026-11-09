@@ -29,7 +29,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, checkOwnedDoc } = require("../_shared/auth");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 const loc4 = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 }) : "");
 
@@ -115,7 +115,7 @@ function receiveEdit(deps) {
           }
         }
         if (!touch.size && qtyCostSame) return { unchanged: true };
-        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.importId }) });
         for (const [id, upd] of touch) {
           tx.update(db.collection("stock").doc(id), { ...upd, updateTime: serverTime(), ...trail });
           if (upd.stock !== undefined) journal.move("receiveEdit", id, docs.get(id).stock, upd.stock);

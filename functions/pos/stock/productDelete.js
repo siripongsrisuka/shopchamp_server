@@ -23,7 +23,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { unlinkWrites } = require("./link");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 
 function productDelete(deps) {
   return async function handler(req, res) {
@@ -72,7 +72,7 @@ function productDelete(deps) {
           // ตัวฐานของการแจก = ตัวที่ลบเอง (ยอดเดียวกันทั้งกลุ่ม · linkDetail ของตัวนี้มีตัวเองอยู่ ⇒ removeId ทำงาน)
           live = [{ id: input.productId, doc: product }, ...live];
         }
-        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.productId }) });
         const members = live.length ? unlinkWrites(tx, live, { now, trail, removeId: input.productId, journal, kind: "delete" }) : [];
         if (linkExists) tx.delete(db.collection("stockLink").doc(String(product.linkId)));
         tx.update(db.collection("stock").doc(input.productId), {

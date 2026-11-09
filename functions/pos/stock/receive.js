@@ -30,7 +30,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { thaiYmd } = require("../_shared/billClock");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 
 // issue ของ logic.mergeReceiveLines ที่แปลว่ายอดจะลงไม่ครบกลุ่ม ⇒ 409 receive_unsafe
@@ -90,7 +90,7 @@ function receive(deps) {
         await S.readStockDocs(db, tx, merged.rows.map((r) => r.id), ref, { into: docs });
 
         const stocks = [];
-        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.receiveUUID }) });
         for (const row of merged.rows) {
           const d = docs.get(row.id);
           const next = logic.applyReceive(d, row);

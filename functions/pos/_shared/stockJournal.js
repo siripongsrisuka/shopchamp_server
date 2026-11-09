@@ -21,13 +21,23 @@
 //     tx ที่ Firestore retry = รันฟังก์ชันใหม่ทั้งก้อน · เขียนจริงครั้งเดียวตอน commit
 //   · แยก doc ตามชนิด (และ part สำหรับชนิดที่ทำทีละมากได้) กันเพดาน 1 MiB: ราว 29-45 ไบต์ต่อสินค้า (id 20-36 ตัว)
 //     ⇒ ~23,000 สินค้าต่อ doc · ร้าน p90 5,119 สินค้าเต็มชนิดละ ~230 KB · receive adjust create แบ่ง 4 part (~93,000 ต่อวัน ≥ เพดานร้าน 50,000)
+// ③ moveContext() + makeJournal({moves}) — รายการทีละครั้ง `stockMove/{shopDocId}_{stockId}_{kind}_{ms}` (DEV-0008 · premium)
+//   · เขียนเฉพาะร้านที่ premium ยังไม่หมด ณ เวลา server (moveContext คืน null = ไม่เขียน · ร้านไม่ premium ไม่มี write เพิ่ม)
+//   · 1 doc ต่อ (ชนิด, สินค้า) ต่อ transaction · before = ค่าก่อนเขียนครั้งแรก · after = ค่าหลังเขียนครั้งสุดท้าย · delta = after − before
+//     ชนิด delete (ช่อง stock ไม่ได้เขียน) = before ยอดที่ออก · after 0
+//   · id ใช้เวลา server ms ⇒ tx ที่ retry ได้ id เดิม (เขียนทับตัวเอง) · ต่างชนิดในคำขอเดียว (amend) ได้คนละ doc
+//   · expireAt = now + 90 วัน ⇒ Firestore TTL ลบเอง (policy ที่ field expireAt ต้องตั้งตอน deploy)
 // ❌ ไม่ require SDK ตัวจริง · FieldValue มาจาก ../../firebase (harness/เทสแทนของปลอม)
 "use strict";
 
 const logic = require("@shopchamp/logic");
 const { billDateOf } = require("./billClock");
 
+const { isPremiumActive } = require("./premium");
+
 const COLLECTION = "stockJournal";
+const MOVE_COLLECTION = "stockMove";
+const MOVE_KEEP_DAYS = 90;
 const KINDS = Object.freeze(["sale", "void", "receive", "receiveEdit", "adjust", "requisition", "create", "delete", "link"]);
 // ชนิดที่ 1 วันแตะสินค้าทั้งร้านได้ (นับสต๊อกทั้งร้าน · รับเข้าล็อตใหญ่ · เปิดร้านเพิ่มสินค้าทีละมาก) = แบ่ง part ตาม hash ของ id
 const PARTS = Object.freeze({ receive: 4, adjust: 4, create: 4 });
@@ -74,10 +84,38 @@ const journalDocId = (shopDocId, day, kind, part) => `${shopDocId}_${day}_${kind
  *     trail = adminTrail(access) · ทีมงานทำ = {byAdmin:true, adminUid:<คนล่าสุด>} + adminEvents increment(1)
  *     (doc รวมยอด ⇒ byAdmin แปลว่า "ทีมงานเคยแตะสมุดนี้" · นับครั้งที่ adminEvents)
  */
-function makeJournal({ shopDocId, now, cutOff }) {
+const str = (v, max) => (typeof v === "string" ? v.slice(0, max) : "");
+const moveDocId = (shopDocId, stockId, kind, ms) => `${shopDocId}_${stockId}_${kind}_${ms}`;
+
+/**
+ * moveContext({shop, access, now, staffName, refId, refNo, note}) → null | ctx
+ *   null = ร้านไม่ premium (ไม่เขียนรายการทีละครั้ง) · ชื่อผู้ทำ = staffName ที่แอปส่ง ไม่มีใช้ชื่อใน shop.humanResource ของ uid
+ */
+function moveContext({ shop, access, now, staffName, refId, refNo, note }) {
+  if (!(now instanceof Date) || !isPremiumActive(shop, now)) return null;
+  const uid = access && typeof access.uid === "string" ? access.uid : "";
+  let byName = str(staffName, 200).trim();
+  if (!byName && uid && shop && Array.isArray(shop.humanResource)) {
+    const h = shop.humanResource.find((x) => x && x.id === uid);
+    byName = h ? str(h.name, 200) : "";
+  }
+  const ctx = { byUid: uid, byName, refId: str(refId, 128), refNo: str(refNo, 64), note: str(note, 500) };
+  if (access && access.byAdmin === true) ctx.byAdmin = true;
+  return ctx;
+}
+
+function makeJournal({ shopDocId, now, cutOff, moves }) {
   if (typeof shopDocId !== "string" || !shopDocId) throw new Error("stockJournal: ไม่มี shopDocId");
   const day = journalDayOf(now, cutOff);
   const rows = new Map(); // `${kind}\u0000${part}` → {kind, part, qty: Map(id → delta)}
+  const track = new Map(); // `${kind}\u0000${id}` → {kind, id, before, after} (เฉพาะเมื่อมี moves)
+  const trackMove = (kind, id, before, after) => {
+    if (!moves) return;
+    const key = `${kind}\u0000${id}`;
+    const t = track.get(key);
+    if (t) t.after = after;
+    else track.set(key, { kind, id, before, after });
+  };
   const add = (kind, id, delta) => {
     if (!KINDS.includes(kind)) throw new Error(`stockJournal: ไม่รู้จักชนิด ${kind}`);
     if (typeof id !== "string" || !id) return false;
@@ -92,7 +130,18 @@ function makeJournal({ shopDocId, now, cutOff }) {
     else q.set(id, next);
     return true;
   };
-  const move = (kind, id, before, after) => add(kind, id, logic.toNumber(after) - logic.toNumber(before));
+  const move = (kind, id, before, after) => {
+    const b = logic.roundStock(logic.toNumber(before));
+    const a = logic.roundStock(logic.toNumber(after));
+    const did = add(kind, id, a - b);
+    if (did) trackMove(kind, id, b, a);
+    return did;
+  };
+  const addOut = (kind, id, delta) => {
+    const did = add(kind, id, delta);
+    if (did) trackMove(kind, id, logic.roundStock(-delta), 0);
+    return did;
+  };
   const entries = () => [...rows.values()].filter((r) => r.qty.size).map((r) => ({ kind: r.kind, part: r.part, qty: Object.fromEntries(r.qty) }));
   const write = (tx, db, trail) => {
     const list = entries();
@@ -113,9 +162,21 @@ function makeJournal({ shopDocId, now, cutOff }) {
       if (trail && trail.byAdmin === true) Object.assign(doc, trail, { adminEvents: fv.increment(1) });
       tx.set(db.collection(COLLECTION).doc(journalDocId(shopDocId, day, r.kind, r.part)), doc, { merge: true });
     }
+    if (moves) {
+      const ms = now.getTime();
+      const expireAt = new Date(ms + MOVE_KEEP_DAYS * 86400000);
+      for (const t of track.values()) {
+        const delta = logic.roundStock(t.after - t.before);
+        if (!Number.isFinite(delta) || delta === 0) continue;
+        tx.set(db.collection(MOVE_COLLECTION).doc(moveDocId(shopDocId, t.id, t.kind, ms)), {
+          shopId: shopDocId, stockId: t.id, kind: t.kind, day, delta, before: t.before, after: t.after,
+          time: fv.serverTimestamp(), ...moves, expireAt,
+        });
+      }
+    }
     return list.length;
   };
-  return { day, move, add, entries, write, has: () => entries().length > 0 };
+  return { day, move, add: addOut, entries, write, has: () => entries().length > 0 };
 }
 
-module.exports = { COLLECTION, KINDS, PARTS, serverTime, journalDayOf, journalDocId, partOf, hash32, makeJournal };
+module.exports = { COLLECTION, MOVE_COLLECTION, MOVE_KEEP_DAYS, KINDS, PARTS, serverTime, journalDayOf, journalDocId, moveDocId, partOf, hash32, makeJournal, moveContext };

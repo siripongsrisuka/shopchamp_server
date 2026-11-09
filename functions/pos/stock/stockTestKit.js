@@ -72,6 +72,7 @@ function makeDb() {
     c,
     where: (f, op, v) => query(c, [...filters, [f, op, v]], lim),
     select: () => query(c, filters, lim),
+    orderBy: () => query(c, filters, lim), // DEV-0008: handler ที่อ่านเรียงเองหลังได้ผล ⇒ kit ไม่ต้องเรียง (limit ตัดก่อนเรียงได้ เทสต้องให้ limit ไม่ตัดจริง)
     limit: (n) => query(c, filters, n),
     count: () => ({ get: async () => ({ data: () => ({ count: run(c, filters, lim).length }) }) }),
     get: async () => {
@@ -86,6 +87,8 @@ function makeDb() {
         const x = DATA[c][id][f];
         if (op === "==") return x === v;
         if (op === "in") return Array.isArray(v) && v.includes(x);
+        if (op === ">=") return x >= v;
+        if (op === "<=") return x <= v;
         if (op === "array-contains") return Array.isArray(x) && x.includes(v);
         throw new Error(`stockTestKit: where ${op} ยังไม่รองรับ`);
       });

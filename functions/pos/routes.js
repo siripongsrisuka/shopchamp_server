@@ -45,6 +45,9 @@ const ROUTES = Object.freeze([
   { contract: "stock.uploadOpen", path: "/stock/upload-open", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/uploadOpen").uploadOpen },
   { contract: "stock.orderCreate", path: "/stock/order-create", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/orderCreate").orderCreate },
   { contract: "stock.reorder", path: "/stock/reorder", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/reorder").reorder, bodyLimit: "1mb" },
+  // DEV-0008 จอความเคลื่อนไหวสต๊อก (premium · อ่านอย่างเดียว)
+  { contract: "stock.journalDays", path: "/stock/journal-days", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/moveRead").journalDays },
+  { contract: "stock.moveList", path: "/stock/move-list", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/moveRead").moveList },
   { contract: "stock.cloneRepair", path: "/stock-repair/clone", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./stock/cloneRepair").cloneRepair },
 
   // ก้อน 9b สมาชิกและสินค้า

@@ -28,7 +28,7 @@ const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsTo
 const { isPremiumActive } = require("../_shared/premium");
 const { billDateOf } = require("../_shared/billClock");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 const { notify, idsOf } = require("../_shared/push/notify");
 
 const NOTI_HEADING = "เบิกสินค้า";
@@ -77,7 +77,7 @@ function requisition(deps) {
         const plan = logic.planStockDeduction(lines, { requirePositiveQty: true });
         await S.readStockDocs(db, tx, plan.moves.map((m) => m.id), ref, { into: docs });
 
-        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.requisitionUUID, note: input.reason }) });
         for (const mv of plan.moves) {
           const d = docs.get(mv.id);
           const next = logic.stockAfterMove(d.stock, -mv.qty);

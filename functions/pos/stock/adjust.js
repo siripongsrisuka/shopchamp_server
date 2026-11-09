@@ -31,7 +31,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 const { notify } = require("../_shared/push/notify");
 
 const RIGHT_OF = Object.freeze({ price: S.RIGHTS.EDIT_PRICE, stock: S.RIGHTS.EDIT_STOCK, cost: S.RIGHTS.EDIT_COST, expRemove: S.RIGHTS.EXP });
@@ -89,7 +89,7 @@ function adjust(deps) {
           if (current === S.round(input.newStock) && typeof p.stock === "number") return { unchanged: true };
           if (current !== S.round(input.seenStock)) S.refuse(409, "stock_changed", "คงเหลือเปลี่ยนไปแล้วระหว่างแก้ กรุณายืนยันอีกครั้ง", { currentStock: current });
           const base = S.round(input.newStock * mult);
-          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName }) });
           for (const id of group) {
             tx.update(db.collection("stock").doc(id), { stock: base, updateTime: serverTime(), ...trail });
             journal.move("adjust", id, docs.get(id).stock, base);

@@ -26,7 +26,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { vipActive } = require("../_shared/premium");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 
 const BASE_LIMIT = 5000;
 const MAX_LIMIT = 50000;
@@ -184,7 +184,7 @@ function productSave(deps) {
           };
           if (input.product.promotion) doc.promotion = promotionOf(input.product.promotion);
           tx.set(pRef, doc);
-          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+          const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.productUUID }) });
           journal.move("create", input.productUUID, 0, input.stock);
           journal.write(tx, db, trail);
           return { productId: input.productUUID, duplicate: false };

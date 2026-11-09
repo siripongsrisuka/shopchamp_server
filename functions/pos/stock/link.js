@@ -36,7 +36,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsToShop, checkOwnedDoc } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const S = require("./_shared");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 
 const str = (v) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
 
@@ -106,7 +106,7 @@ function linkCreate(deps) {
         id: input.linkUUID,
         ...trail,
       });
-      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.linkUUID || input.linkId }) });
       for (const m of g.members) {
         journal.move("link", m.id, docs.get(m.id).stock, m.stock);
         tx.update(db.collection("stock").doc(m.id), {
@@ -185,7 +185,7 @@ function linkDelete(deps) {
       const { link, live, skipped } = await readGroup(tx, input.linkId, ref);
       if (!link) return { linkId: input.linkId, alreadyDeleted: true };
       if (!premium) S.refuse(403, "premium_required");
-      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+      const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.linkUUID || input.linkId }) });
       const members = unlinkWrites(tx, live, { now, trail, journal, kind: "link" });
       journal.write(tx, db, trail);
       tx.delete(db.collection("stockLink").doc(input.linkId));

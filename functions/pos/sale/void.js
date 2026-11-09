@@ -41,7 +41,7 @@ const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, belongsTo
 const { AMEND_PENDING_TTL_MS } = require("../_shared/idempotency");
 const { amendLocks } = require("./amendRules");
 const { notify, idsOf } = require("../_shared/push/notify");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 
 const VOID_RIGHT = "116"; // สิทธิ์ยกเลิกบิลเดิมของแอป (`BillHistoryScreen.js:89`)
 const NOTI_HEADING = "ยกเลิกใบเสร็จ";
@@ -234,7 +234,7 @@ function makeVoid(deps) {
 
         // ── เขียน (หลังอ่านครบ)
         const skipped = [];
-        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId: access.shopId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.staffName, refId: input.billId, refNo: bill.receiptNumber, note: input.reason }) });
         for (const move of plan.moves) {
           const d = stockDocs.get(move.id);
           if (!d) { skipped.push(move.id); continue; }

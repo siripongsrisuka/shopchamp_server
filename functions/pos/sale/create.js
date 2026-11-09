@@ -42,7 +42,7 @@ const { nextBillNumber, billDateOf, billReceiptTypeOf, receiptTypeOf } = require
 const { resolveOfflineSync, stampOfflineFields } = require("../_shared/offlineSync");
 const { readReceiptUUID, classifyGuard, legacyDuplicateFromBill, guardDoc } = require("../_shared/idempotency");
 const { notify, idsOf } = require("../_shared/push/notify");
-const { serverTime, makeJournal } = require("../_shared/stockJournal");
+const { serverTime, makeJournal, moveContext } = require("../_shared/stockJournal");
 
 // ผลตรวจที่ปัดใน transaction ⇒ โยนออกมาตอบนอก transaction (ยังไม่เขียนอะไร)
 class Refusal extends Error {
@@ -304,7 +304,7 @@ function create(deps) {
         tx.set(guardRef, guardDoc({ now, receiptNumber, billId: billRef.id, shopDocId, trail }));
         tx.set(counterRef, { ...num.write, ...trail }, { merge: true });
         const lowStock = [];
-        const journal = makeJournal({ shopDocId, now, cutOff: shop.cutOff });
+        const journal = makeJournal({ shopDocId, now, cutOff: shop.cutOff, moves: moveContext({ shop, access, now, staffName: input.cashierName, refId: billRef.id, refNo: receiptNumber }) });
         for (const mv of stock.plan.moves) {
           const d = stock.docs.get(mv.id);
           if (!d) continue;
