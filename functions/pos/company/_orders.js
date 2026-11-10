@@ -16,6 +16,7 @@
 //   เขียน: ตัวนับ · ใบ (doc id = orderUUID) · notification/<collection>-<orderUUID> 1 ใบ categoryId 99 (รูปเดิม)
 // ทีมงาน (byAdmin) = ใบและ notification มี {byAdmin:true, adminUid} · คำตอบ 2xx มี byAdmin:true
 // push (DEV-0001 push · แอปใหม่ไม่มี OneSignal): หลัง commit ครั้งที่ไม่ใช่ duplicate · orderPushes() ประกอบ 2 ข้อความ
+//   ใบ QR (payMethod 'qr') = ไม่ส่งตอนสร้าง · notification ใช้ QR_PENDING_NOTI_TEXT · แนบสลิปเข้าใบ QR = ส่งรูปใบสลิป (sendsPendingPush · pendingNotiText)
 //   ① ผู้กดซื้อ (access.uid · ทุกร้าน = pushByIdFilter เดิม) ② ทีมงานในรายชื่อ admin/<doc>.admin (ทุกร้าน)
 //   รายชื่อทีมงานอ่านหลัง commit นอก transaction (doc เดียวกับที่แอปเก่าอ่าน: admin/package · admin/hardware) · อ่านไม่ได้ = ส่งแค่ผู้ซื้อ
 //   แทนจุดส่งในแอป PayScreen.js:172-174 · HardwareSummaryScreen.js:146-148 · ImageLimitScreen.js:135-137 · ImportStockPayScreen.js:135-137
@@ -175,7 +176,26 @@ async function orderPushes({ access, adminDoc, buyer, staff }) {
 
 const PENDING_PUSH_TEXT = "รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง";
 
+// ── ใบ QR ตอนสร้าง (DEV-0003 · เห็นจริงบน Tablet 2026-11-10: ใบ QR ได้ push "รอตรวจสอบ… 24 ชั่วโมง" ทั้งที่ยังไม่จ่าย และจะได้ของเอง) ──
+//   ใบ QR = ไม่ส่ง push ตอนสร้าง (ผู้ซื้อและทีมงาน · ยังไม่มีเงิน = ยังไม่มีอะไรให้ทีมงานทำ) · push ตอนจ่ายสำเร็จ = _fulfill.js คืน → _payCheck.js ส่ง
+//   แนบสลิปเข้าใบ QR (slipAttached) = ตอนนี้มีสลิปให้ตรวจแล้ว ⇒ ส่ง push รูปใบสลิป (ทีมงานรู้ว่ามีงาน)
+//   notification doc ของใบ QR = ท้ายข้อความ "รอตรวจ 24 ชม." เปลี่ยนเป็น QR_PENDING_NOTI_TEXT (หัวข้อเดิม) · ใบสลิป = เดิมทุกตัวอักษร
+const QR_PENDING_NOTI_TEXT = "สถานะ : รอชำระเงินด้วย QR";
+
+/** ข้อความ notification ตามวิธีจ่าย · สลิป (ไม่ส่ง payMethod) = slipText เดิมทุกตัวอักษร · QR = แทนท้าย COMPANY_ORDER_PENDING_TEXT */
+function pendingNotiText(payMethod, slipText) {
+  if (!isQr(payMethod)) return slipText;
+  const tail = logic.COMPANY_ORDER_PENDING_TEXT;
+  // logic ถูก pin ใน vendor · ท้ายข้อความไม่ตรง = logic เปลี่ยนรูป ⇒ ให้เทสแดง ไม่ปล่อยข้อความรอตรวจ 24 ชม. ไปถึงร้านเงียบ ๆ
+  if (typeof slipText !== "string" || !slipText.endsWith(tail)) throw new Error("pendingNotiText: ข้อความใบสลิปไม่ได้ลงท้ายด้วย COMPANY_ORDER_PENDING_TEXT");
+  return slipText.slice(0, slipText.length - tail.length) + QR_PENDING_NOTI_TEXT;
+}
+
+/** ส่ง push รูปใบสลิปไหม: ใบใหม่ที่ไม่ใช่ QR · หรือแนบสลิปเข้าใบ QR เดิม · ส่งซ้ำธรรมดา/ใบ QR ใหม่ = ไม่ส่ง */
+const sendsPendingPush = (out, payMethod) => (out.slipAttached === true) || (!out.duplicate && !isQr(payMethod));
+
 module.exports = {
   runOrder, Refusal, refuse, notiShopIdOf, buyerOf, orderPushes, PENDING_PUSH_TEXT, COMPANY_ORDER_CATEGORY, sat, str,
   payFieldsOf, slipAttachPatch, companyPayDocId, PAY_RECEIVED,
+  isQr, QR_PENDING_NOTI_TEXT, pendingNotiText, sendsPendingPush,
 };

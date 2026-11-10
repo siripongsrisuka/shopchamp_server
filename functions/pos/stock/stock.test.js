@@ -191,6 +191,32 @@ test("stockOrder qr (U2b): ใบ QR imageId '' payMethod qr · ส่งซ้�
   assert.equal(K.data().stockOrder[U].imageId, "");
 });
 
+test("stockOrder qr: 🔒 สร้างใบ QR ไม่ส่ง push · notification 'สถานะ : รอชำระเงินด้วย QR' · แนบสลิปเข้าใบ QR = push รูปใบสลิป · ใบสลิป = push + notification เดิมทุกตัวอักษร", async () => {
+  const sent = [];
+  const f = K.loadHandler("orderCreate.js", "orderCreate");
+  const h = f({ now: () => new Date("2026-11-10T03:00:00.000Z"), push: async (m) => { sent.push(m); return { sent: 1 }; } });
+  const go = async (body) => { const res = K.makeRes(); await h({ body, ...K.OWNER }, res); return res; };
+  const notis = () => Object.values(K.data().notification || {});
+  const qr = { shopId: "shopA", orderUUID: U, packId: 3, price: 150, qty: 1500, payMethod: "qr", ...ST };
+  const slip = { shopId: "shopA", orderUUID: U, packId: 3, price: 150, qty: 1500, imageId: "https://x/slip", ...ST };
+  const withStaff = () => ({ ...base(), admin: { stockNumber: { value: 7 }, package: { admin: ["u-staff"] } } });
+
+  K.reset(withStaff());
+  assert.equal((await go(qr)).code, 200);
+  assert.equal(sent.length, 0, "ใบ QR ตอนสร้าง = ไม่มี push");
+  assert.deepEqual(notis().map((n) => [n.heading, n.notificationContent]), [["ซื้อรายการสินค้า 1500 รายการ", "สถานะ : รอชำระเงินด้วย QR"]]);
+  const b = await go(slip);
+  assert.equal(b.body.slipAttached, true);
+  assert.deepEqual(sent.map((m) => m.to.ids), [["u-owner"], ["u-staff"]], "แนบสลิป = มีสลิปให้ตรวจ ⇒ push รูปใบสลิป");
+  assert.equal(sent[1].content, "ร้าน ร้านเอ", "ชื่อร้านในข้อความทีมงาน (ทางแนบสลิปคืน shopName)");
+
+  K.reset(withStaff()); sent.length = 0;
+  assert.equal((await go(slip)).code, 200);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].content, "รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง");
+  assert.deepEqual(notis().map((n) => n.notificationContent), ["สถานะ : รอตรวจสอบ\n*รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง"]);
+});
+
 // ── cloneRepair ──
 const cloneData = () => {
   const D = [{ id: "sx", linkMultiply: 6, unit: "ลัง" }, { id: "sy", linkMultiply: 1, unit: "ขวด" }];

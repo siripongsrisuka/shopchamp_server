@@ -104,7 +104,7 @@ function payRequest(deps) {
       const r = await px.createQR({ config: { serial: cfg.serial, token: cfg.token }, amount, referenceId: docId, ref1: `${kind}:${orderUUID}`, ref2: PC.REF2 });
       if (!r || r.ok !== true) {
         const code = (r && r.error && r.error.code) || "provider_error";
-        return fail(res, 502, "provider_error", "ขอ QR จากผู้ให้บริการไม่สำเร็จ กรุณาลองใหม่หรือชำระด้วยสลิป", { code, detail: str(r && r.error && r.error.message).slice(0, 300) });
+        return fail(res, 502, "provider_error", "ขอ QR จากผู้ให้บริการไม่สำเร็จ กรุณาลองใหม่อีกครั้ง", { code, detail: str(r && r.error && r.error.message).slice(0, 300) });
       }
       const expireAt = new Date(now.getTime() + PC.EXPIRE_MS);
       const prev = decided.prev;

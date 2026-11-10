@@ -16,6 +16,7 @@
 //   admin/hardwareNumber · notification {heading:'สั่งซื้ออุปกรณ์สำเร็จ', categoryId:99}
 //   ⚠️ เดิม admin/hardwareNumber ไม่มี = transaction ล้ม (admin B9) · ทางใหม่สร้าง {value:1}
 // วิธีจ่าย (DEV-0003 U2b · schema 0.1.23): payMethod 'qr' = ใบ {imageId:'', payMethod:'qr'} รอจ่าย QR (company.payRequest) · ไม่ส่ง = สลิป รูปเดิม
+//   ใบ QR ไม่ส่ง push ตอนสร้าง (ผู้ซื้อ/ทีมงาน) · notification ท้ายข้อความ "สถานะ : รอชำระเงินด้วย QR" · แนบสลิปเข้าใบ QR = push รูปใบสลิป (_orders.js › sendsPendingPush · pendingNotiText)
 //   ส่ง orderUUID เดิมแบบสลิปขณะใบเป็น QR ไม่มีสลิป = แนบสลิปเข้าใบเดิม 200 duplicate slipAttached · เงินเข้าแล้ว 409 pay_received (_orders.js › slipAttachPatch)
 "use strict";
 
@@ -25,7 +26,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
 const { notify } = require("../_shared/push/notify");
-const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, pendingNotiText, sendsPendingPush, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
 
 function quoteOf(lines, vat) {
   return (doc) => {
@@ -90,11 +91,11 @@ function hardwareOrder(deps) {
         buildNoti: ({ ref, shopDocId, q }) => ({
           heading: "สั่งซื้ออุปกรณ์สำเร็จ",
           shopId: notiShopIdOf(ref, shopDocId),
-          notificationContent: logic.companyHardwareNotiText(q.product),
+          notificationContent: pendingNotiText(input.payMethod, logic.companyHardwareNotiText(q.product)),
         }),
       });
       const { shopName, ...result } = out;
-      if (!out.duplicate) {
+      if (sendsPendingPush(out, input.payMethod)) {
         await notify(deps, await orderPushes({
           access, adminDoc: "hardware",
           buyer: { heading: "สั่งซื้ออุปกรณ์สำเร็จ", content: PENDING_PUSH_TEXT, data: { sound: "สั่งซื้ออุปกรณ์สำเร็จค่ะ" } },

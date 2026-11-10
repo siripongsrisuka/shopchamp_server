@@ -12,6 +12,7 @@
 //     shopId = field shop.shopId ที่พิสูจน์แล้ว (care หาร้านด้วย where shopId == · imageOrder.md §1 แถว 1) · พิสูจน์ไม่ได้ = doc id
 //   admin/imageNumber · notification {heading:'ซื้อพิ้นที่เก็บรูปภาพ <qty> รายการ' (คำผิดคงเดิม), categoryId:99}
 // วิธีจ่าย (DEV-0003 U2b · schema 0.1.23): payMethod 'qr' = ใบ {imageId:'', payMethod:'qr'} รอจ่าย QR (company.payRequest) · ไม่ส่ง = สลิป รูปเดิม
+//   ใบ QR ไม่ส่ง push ตอนสร้าง (ผู้ซื้อ/ทีมงาน) · notification ท้ายข้อความ "สถานะ : รอชำระเงินด้วย QR" · แนบสลิปเข้าใบ QR = push รูปใบสลิป (_orders.js › sendsPendingPush · pendingNotiText)
 //   ส่ง orderUUID เดิมแบบสลิปขณะใบเป็น QR ไม่มีสลิป = แนบสลิปเข้าใบเดิม 200 duplicate slipAttached · เงินเข้าแล้ว 409 pay_received (_orders.js › slipAttachPatch)
 "use strict";
 
@@ -21,7 +22,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
 const { notify } = require("../_shared/push/notify");
-const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, pendingNotiText, sendsPendingPush, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
 
 function imageOrder(deps) {
   return async function handler(req, res) {
@@ -59,11 +60,11 @@ function imageOrder(deps) {
         buildNoti: ({ ref, shopDocId, q }) => ({
           heading: logic.companyImageNotiHeading(q.qty),
           shopId: notiShopIdOf(ref, shopDocId),
-          notificationContent: logic.COMPANY_ORDER_PENDING_TEXT,
+          notificationContent: pendingNotiText(input.payMethod, logic.COMPANY_ORDER_PENDING_TEXT),
         }),
       });
       const { shopName, ...result } = out;
-      if (!out.duplicate) {
+      if (sendsPendingPush(out, input.payMethod)) {
         // ทีมงาน: แอปเก่าส่งแบบ id AND shopId ของร้านลูกค้า (ImageLimitScreen.js:137) = เครื่องทีมงานแทบไม่เคยได้ ⇒ ทางใหม่ส่งหาคนทุกร้านแบบใบแพ็กเกจ
         await notify(deps, await orderPushes({
           access, adminDoc: "package",

@@ -220,6 +220,7 @@ test("payRequest: ไม่มี secret = 503 ไม่ยิง ไม่เ�
   assert.deepEqual([noSecret.code, noSecret.body.error, noSecret.body.missing, CALLS.createQR.length, WRITES.length], [503, "company_pay_unconfigured", ["COMPANY_POSXPAY_TOKEN", "COMPANY_POSXPAY_SERIAL"], 0, 0]);
   const down = await call(payRequest(fakeProvider({ create: "down" })), OWNER, reqBody("package", UP));
   assert.deepEqual([down.code, down.body.error, down.body.code, CALLS.createQR.length, WRITES.length, payDoc("package", UP)], [502, "provider_error", "posxpay_http_500", 1, 0, undefined]);
+  assert.equal(down.body.message, "ขอ QR จากผู้ให้บริการไม่สำเร็จ กรุณาลองใหม่อีกครั้ง", "แอปใหม่ไม่มีทางสลิป ⇒ ไม่ชวนไปชำระด้วยสลิป");
   const h = payRequest(fakeProvider());
   const other = await call(h, { shopAccess: { shopId: "shopB", uid: "u-b", role: "owner", rights: [] } }, reqBody("package", UP, "shopB"));
   assert.deepEqual([other.code, other.body.error], [409, "order_other_shop"]);

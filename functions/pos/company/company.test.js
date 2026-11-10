@@ -338,6 +338,63 @@ test("packageOrder qr: qr แต่ส่งสลิปมา 400 · ไม่�
   assert.equal(DATA.packageOrder[QR_UUID].imageId, QR_SLIP);
 });
 
+// ── ③a'' push/notification ของใบ QR (DEV-0003 · Tablet 2026-11-10: ใบ QR ได้ push "รอตรวจสอบ… 24 ชั่วโมง" ทั้งที่ยังไม่จ่าย) ──
+test("packageOrder qr: 🔒 สร้างใบ QR ไม่ส่ง push (ผู้ซื้อ/ทีมงาน) · notification ท้าย 'สถานะ : รอชำระเงินด้วย QR' · แนบสลิปเข้าใบ QR = push รูปใบสลิป · ใบสลิป = push 2 ข้อความ ข้อความเดิม", async () => {
+  const { PENDING_PUSH_TEXT, QR_PENDING_NOTI_TEXT } = require("./_orders");
+  const logic = require("@shopchamp/logic");
+  const sent = [];
+  const h = packageOrder({ now: () => NOW, push: async (m) => { sent.push(m); return { sent: 1 }; } });
+  const withStaff = () => { const d = QR_DATA(); d.admin.package.admin = ["u-staff"]; return d; };
+
+  DATA = withStaff(); WRITES = [];
+  const a = await call(h, qrReq({ payMethod: "qr" }));
+  assert.equal(a.code, 200, JSON.stringify(a.body));
+  assert.equal(sent.length, 0, "ใบ QR ตอนสร้าง = ไม่มี push");
+  const n1 = DATA.notification[`packageOrder-${QR_UUID}`];
+  assert.equal(n1.heading, "สั่งซื้อแพ็กเกจสำเร็จ", "หัวข้อเดิม");
+  assert.equal(n1.notificationContent, `แพ็กเกจ\n   พรีเมี่ยม (299.00 บาท)\n${QR_PENDING_NOTI_TEXT}`);
+  assert.equal(n1.notificationContent.includes("24 ชั่วโมง"), false);
+
+  // แนบสลิปเข้าใบ QR = มีสลิปให้ตรวจแล้ว ⇒ push รูปใบสลิป
+  const b = await call(h, qrReq({ slipUrl: QR_SLIP }));
+  assert.equal(b.body.slipAttached, true);
+  assert.deepEqual(sent.map((m) => m.to.ids), [["u1"], ["u-staff"]]);
+  assert.equal(sent[0].content, PENDING_PUSH_TEXT);
+  // ส่งซ้ำหลังแนบ = ไม่ส่งอีก
+  await call(h, qrReq({ payMethod: "qr" }));
+  assert.equal(sent.length, 2);
+
+  // ชุดควบคุม: ใบสลิป (ไม่ส่ง payMethod) = push 2 ข้อความ + notification เดิมทุกตัวอักษร
+  DATA = withStaff(); WRITES = []; sent.length = 0;
+  const c = await call(h, qrReq({ slipUrl: QR_SLIP }));
+  assert.equal(c.code, 200);
+  assert.equal(sent.length, 2);
+  assert.equal(sent[0].heading, "สั่งซื้อแพ็กเกจสำเร็จ");
+  assert.equal(sent[0].content, "รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง");
+  assert.equal(DATA.notification[`packageOrder-${QR_UUID}`].notificationContent, logic.companyPackageNotiText([{ name: "พรีเมี่ยม", price: 299 }]));
+  assert.equal(DATA.notification[`packageOrder-${QR_UUID}`].notificationContent, "แพ็กเกจ\n   พรีเมี่ยม (299.00 บาท)\nสถานะ : รอตรวจสอบ\n*รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง");
+});
+
+test("pendingNotiText: สลิป = เดิมทุกตัวอักษร · QR = แทนท้ายข้อความรอตรวจ 24 ชม. ทั้ง 4 ชนิดใบ · ท้ายไม่ตรง = throw (logic เปลี่ยนรูปต้องแดง)", () => {
+  const { pendingNotiText, sendsPendingPush, QR_PENDING_NOTI_TEXT } = require("./_orders");
+  const logic = require("@shopchamp/logic");
+  const STOCK = "สถานะ : รอตรวจสอบ\n*รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง"; // stock/orderCreate.js เขียนตรง
+  const texts = [logic.companyPackageNotiText([{ name: "ก", price: 1 }]), logic.companyHardwareNotiText([{ name: "ข", qty: 1, totalPrice: 2 }]), logic.COMPANY_ORDER_PENDING_TEXT, STOCK];
+  for (const t of texts) {
+    assert.equal(pendingNotiText(undefined, t), t);
+    assert.equal(pendingNotiText("slip", t), t);
+    const q = pendingNotiText("qr", t);
+    assert.ok(q.endsWith(QR_PENDING_NOTI_TEXT), q);
+    assert.equal(q.includes("24 ชั่วโมง"), false, q);
+  }
+  assert.equal(pendingNotiText("qr", STOCK), "สถานะ : รอชำระเงินด้วย QR");
+  assert.throws(() => pendingNotiText("qr", "อย่างอื่น"));
+  assert.deepEqual([
+    sendsPendingPush({ duplicate: false }, undefined), sendsPendingPush({ duplicate: false }, "qr"),
+    sendsPendingPush({ duplicate: true }, undefined), sendsPendingPush({ duplicate: true, slipAttached: true }, undefined),
+  ], [true, false, false, true]);
+});
+
 test("companyPayDocId ของ _orders.js = payDocId ของ _payCheck.js (นิยามซ้ำเพราะ require วนกัน)", () => {
   const { companyPayDocId, PAY_RECEIVED } = require("./_orders");
   const PC = require("./_payCheck");

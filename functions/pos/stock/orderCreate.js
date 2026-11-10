@@ -14,6 +14,7 @@
 // เขียน: stockOrder/{orderUUID} รูปเดิม {status:'order', imageId, shopId, shopName, profileId, profileName, timestamp, orderNumber, id, price, qty} + {orderUUID}
 //   admin/stockNumber {value, timestamp} · notification รูปเดิม {heading:'ซื้อรายการสินค้า <qty> รายการ', shopId, notificationContent, categoryId:99, timestamp}
 //   push (DEV-0001 push): หลัง commit (ไม่ใช่ duplicate) ผู้กดซื้อ (access.uid) + ทีมงานใน admin/package.admin · 2 ท่อ (FCM + OneSignal)
+//     ใบ QR = ไม่ส่งตอนสร้าง · notification "สถานะ : รอชำระเงินด้วย QR" · แนบสลิปเข้าใบ QR = ส่งรูปใบสลิป (company/_orders.js › sendsPendingPush · pendingNotiText)
 //     แทน `APP/src/screens/ImportStockPayScreen.js:135-137` (ทีมงานเดิมส่งแบบ id AND shopId ร้านลูกค้า = แทบไม่ถึง ⇒ ส่งหาคนทุกร้าน)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
@@ -24,7 +25,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, adminTrail, adminFlag, resolveShopRef, belongsToShop } = require("../_shared/auth");
 const S = require("./_shared");
 const { notify } = require("../_shared/push/notify");
-const { orderPushes, PENDING_PUSH_TEXT, payFieldsOf, slipAttachPatch, Refusal: CompanyRefusal } = require("../company/_orders");
+const { orderPushes, PENDING_PUSH_TEXT, payFieldsOf, slipAttachPatch, pendingNotiText, sendsPendingPush, Refusal: CompanyRefusal } = require("../company/_orders");
 
 // ตารางชุดที่ขายจริง (ชุด 0 1 ฟรี ไม่ผ่านทางนี้)
 const PACKS = Object.freeze({ 2: { qty: 1000, price: 100 }, 3: { qty: 1500, price: 150 }, 4: { qty: 2000, price: 200 }, 5: { qty: 3000, price: 300 }, 6: { qty: 4000, price: 400 } });
@@ -64,7 +65,7 @@ function orderCreate(deps) {
           const patch = same ? await slipAttachPatch({ tx, kind: "stock", orderUUID: input.orderUUID, prev, payMethod: input.payMethod, slipUrl: input.imageId, now }) : null;
           if (patch) {
             tx.update(orderRef, patch);
-            return { duplicate: true, slipAttached: true, orderNumber: prev.orderNumber };
+            return { duplicate: true, slipAttached: true, orderNumber: prev.orderNumber, shopName: typeof shop.name === "string" ? shop.name : "" };
           }
           return { duplicate: true, orderNumber: prev.orderNumber };
         }
@@ -97,7 +98,7 @@ function orderCreate(deps) {
         tx.set(notiRef, {
           heading: `ซื้อรายการสินค้า ${pack.qty} รายการ`,
           shopId: shopField,
-          notificationContent: "สถานะ : รอตรวจสอบ\n*รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง",
+          notificationContent: pendingNotiText(input.payMethod, "สถานะ : รอตรวจสอบ\n*รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง"),
           categoryId: 99,
           timestamp: now,
           ...trail,
@@ -105,7 +106,7 @@ function orderCreate(deps) {
         return { duplicate: false, orderNumber, shopName: typeof shop.name === "string" ? shop.name : "" };
       });
       const { shopName, ...result } = out;
-      if (!out.duplicate) {
+      if (sendsPendingPush(out, input.payMethod)) {
         await notify(deps, await orderPushes({
           access, adminDoc: "package",
           buyer: { heading: "สั่งซื้อรายการสินค้าสำเร็จ!", content: PENDING_PUSH_TEXT },
