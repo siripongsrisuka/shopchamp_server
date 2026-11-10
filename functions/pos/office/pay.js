@@ -18,8 +18,11 @@
 //   ใบจ่ายที่ใบสั่งซื้อไม่อยู่ในกองรอตรวจ = อ่านใบทีละ doc เพื่อรู้ว่าได้ของแล้วหรือยัง
 //
 // แถว: {key, kind, orderUUID, orderNumber, shopId, shopName, buyer, amount, amountSatang, slipUrl, channel 'slip'|'posxpay',
+//        payMethod 'qr'|'slip' (ช่อง payMethod ของใบ · U2b schema 0.1.23 · ใบเดิมไม่มีช่อง = slip),
 //        payState 'slip'|'waiting'|'paid'|'problem'|อื่นตามที่ U2 เขียน, goodsState 'waiting'|'delivered'|'cancelled'|'missing'|'unknown',
 //        orderStatus, payStatus, problem, at, detail}
+//   ใบ QR ที่ยังไม่มีสลิปและยังไม่มี companyPay (ร้านกด QR แล้วยังไม่ขอ/ปิดแอปก่อน) = payState 'waiting' channel 'posxpay' slipUrl null
+//     ⇒ ไม่นับเป็น "สลิปรออนุมัติ" · root ยังอนุมัติมือได้ (จอต้องมีป้ายว่าไม่มีสลิป · _payView.js › noSlipText)
 //   problem = companyPay 'problem' หรือ เงินเข้าแล้ว (paid) แต่ใบยังไม่เปิดของ ⇒ จอดันขึ้นบนสุด
 //
 // ตัวต่อของจออื่น (ผ่าน deps ได้ทุกตัว · เทส/harness ฉีดตัวปลอม):
@@ -176,7 +179,10 @@ function rowOf({ kind, orderUUID, order, pay }) {
   const amountSatang = o ? sat(o[spec.amountField]) : pay ? pay.amountSatang : null;
   const goodsState = goodsStateOf(kind, orderStatus);
   const payStatus = pay ? pay.status : null;
-  const payState = !pay ? "slip" : payStatus === "request" ? "waiting" : payStatus || "unknown";
+  const slipUrl = o && str(o.imageId) ? o.imageId : null;
+  // ใบที่ร้านเลือกจ่าย QR (U2b) · แนบสลิปทีหลัง server เขียน payMethod 'slip' ให้ ⇒ กลับมาเป็นแถวสลิป
+  const qrNoSlip = !!o && str(o.payMethod) === "qr" && !slipUrl;
+  const payState = pay ? (payStatus === "request" ? "waiting" : payStatus || "unknown") : qrNoSlip ? "waiting" : "slip";
   const problem = payStatus === "problem" || (payStatus === "paid" && goodsState !== "delivered");
   return {
     key: `${kind}:${orderUUID}`,
@@ -188,8 +194,9 @@ function rowOf({ kind, orderUUID, order, pay }) {
     buyer: o ? { name: str(o.profileName), tel: str(o.tel) } : null,
     amountSatang: Number.isSafeInteger(amountSatang) ? amountSatang : null,
     amount: Number.isSafeInteger(amountSatang) ? amountSatang / 100 : null,
-    slipUrl: o && str(o.imageId) ? o.imageId : null,
-    channel: pay ? pay.provider : "slip",
+    slipUrl,
+    channel: pay ? pay.provider : qrNoSlip ? "posxpay" : "slip",
+    payMethod: o ? (str(o.payMethod) === "qr" ? "qr" : "slip") : null,
     payState,
     goodsState,
     orderStatus,

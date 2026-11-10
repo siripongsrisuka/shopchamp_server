@@ -16,6 +16,8 @@
 //     imageId: slipUrl, net, status:'order', vat, email:'', tel, packageId[], orderNumber} + {orderUUID, source:'pos', byAdmin?, adminUid?}
 //     vat:true เพิ่ม {totalPrice (ก่อน VAT), vatAmount, vatDetail} ชื่อเดียวกับใบอุปกรณ์ (care ApproveSoftwareScreen/Modal_SoftwareHistory destructure ไว้แล้ว)
 //   admin/packageNumber {value, timestamp} · notification {heading:'สั่งซื้อแพ็กเกจสำเร็จ', ..., categoryId:99}
+// วิธีจ่าย (DEV-0003 U2b · schema 0.1.23): payMethod 'qr' = ใบ {imageId:'', payMethod:'qr'} รอจ่าย QR (company.payRequest) · ไม่ส่ง = สลิป รูปเดิม
+//   ส่ง orderUUID เดิมแบบสลิปขณะใบเป็น QR ไม่มีสลิป = แนบสลิปเข้าใบเดิม 200 duplicate slipAttached · เงินเข้าแล้ว 409 pay_received (_orders.js › slipAttachPatch)
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น (ผ่าน _orders.js)
 "use strict";
 
@@ -25,7 +27,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
 const { notify } = require("../_shared/push/notify");
-const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
 
 function quoteOf(ids, vat) {
   return (doc) => {
@@ -60,7 +62,7 @@ function packageOrder(deps) {
 
       const out = await runOrder({
         access, input, now,
-        collection: "packageOrder", counterDoc: "packageNumber", priceDoc: "package",
+        kind: "package", collection: "packageOrder", counterDoc: "packageNumber", priceDoc: "package",
         quote: quoteOf(input.packageIds, input.vat === true),
         sameOrder: samePackages,
         buildOrder: ({ shop, shopDocId, profile, q }) => ({
@@ -68,7 +70,7 @@ function packageOrder(deps) {
           shopName: str(shop.name),
           ...buyerOf(access, profile),
           timestamp: now,
-          imageId: input.slipUrl,
+          ...payFieldsOf(input.payMethod, input.slipUrl),
           net: q.net,
           status: "order",
           vat: q.vat,

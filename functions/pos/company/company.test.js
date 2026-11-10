@@ -240,6 +240,111 @@ test("packageOrder: กดครั้งแรกสำเร็จ แล้�
   assert.equal(Object.keys(DATA.notification).length, 1, "notification ใบเดียว");
 });
 
+// ── ③a' ใบ QR (DEV-0003 U2b · schema 0.1.23 payMethod): สร้างไม่มีสลิป → แนบสลิปเข้าใบเดิม → เงินเข้าแล้วแนบไม่ได้ ──
+const QR_DATA = () => ({
+  shop: { A: { shopId: "A", name: "ร้าน" } },
+  profile: { u1: { name: "ก", tel: "0" } },
+  admin: { package: { value: [{ name: "พรีเมี่ยม", status: true, price: [{ id: "1", price: 299, save: 0 }] }] }, packageNumber: { value: 5 } },
+});
+const QR_UUID = "7d9f1c2e-5a6b-4c7d-8e9f-0a1b2c3d4e5f";
+const QR_SLIP = "https://firebasestorage.googleapis.com/v0/b/shopcham-24b0b.appspot.com/o/packageOrder%2Fqr-later.jpg?alt=media";
+const qrReq = (body) => ({ shopAccess: { shopId: "A", uid: "u1", role: "owner", rights: [] }, body: { shopId: "A", packageIds: ["1"], expectedNet: 299, orderUUID: QR_UUID, ...body } });
+
+test("packageOrder qr: ใบ QR เขียน imageId '' payMethod qr · ส่งซ้ำแบบสลิป = แนบสลิปเข้าใบเดิม (duplicate slipAttached · ไม่ออกเลข ไม่มี noti ใบ 2) · ส่งซ้ำแบบ qr หลังแนบ = duplicate ธรรมดา", async () => {
+  DATA = QR_DATA(); WRITES = [];
+  const h = packageOrder({ now: () => NOW });
+  const a = await call(h, qrReq({ payMethod: "qr" }));
+  assert.equal(a.code, 200, JSON.stringify(a.body));
+  assert.equal(a.body.duplicate, false);
+  const o1 = DATA.packageOrder[QR_UUID];
+  assert.equal(o1.imageId, "");
+  assert.equal(o1.payMethod, "qr");
+  assert.equal(o1.status, "order");
+  assert.equal(DATA.admin.packageNumber.value, 6);
+
+  // ร้านเปลี่ยนใจ: อัปสลิปแล้วส่ง orderUUID เดิม (ไม่ส่ง payMethod = รูปเดิมของแอป)
+  const b = await call(h, qrReq({ slipUrl: QR_SLIP }));
+  assert.equal(b.code, 200, JSON.stringify(b.body));
+  assert.equal(b.body.duplicate, true);
+  assert.equal(b.body.slipAttached, true);
+  assert.equal(b.body.orderNumber, a.body.orderNumber);
+  const o2 = DATA.packageOrder[QR_UUID];
+  assert.equal(o2.imageId, QR_SLIP);
+  assert.equal(o2.payMethod, "slip");
+  assert.equal(o2.slipAttachedAt.getTime(), NOW.getTime());
+  assert.equal(o2.orderNumber, o1.orderNumber, "เลขใบเดิม");
+  assert.equal(DATA.admin.packageNumber.value, 6, "ตัวนับไม่ขยับ");
+  assert.equal(Object.keys(DATA.notification).length, 1, "notification ใบเดียว");
+  assert.deepEqual(WRITES.filter((w) => w.path === `packageOrder/${QR_UUID}`).map((w) => w.op), ["set", "update"]);
+
+  // แนบแล้ว ส่งซ้ำอีกรอบ (สลิปใหม่ หรือ qr) = duplicate ธรรมดา ไม่เขียนทับ
+  const n = WRITES.length;
+  const c = await call(h, qrReq({ slipUrl: QR_SLIP.replace("qr-later", "another") }));
+  assert.equal(c.code, 200);
+  assert.equal(c.body.duplicate, true);
+  assert.equal(c.body.slipAttached, undefined);
+  const d = await call(h, qrReq({ payMethod: "qr" }));
+  assert.equal(d.code, 200);
+  assert.equal(d.body.duplicate, true);
+  assert.equal(WRITES.length, n, "ไม่เขียนอะไรเพิ่ม");
+  assert.equal(DATA.packageOrder[QR_UUID].imageId, QR_SLIP, "สลิปแรกที่แนบคงอยู่");
+});
+
+test("packageOrder qr: 🔒 ใบ QR ที่ companyPay paid/problem → แนบสลิป 409 pay_received ไม่เขียน · request/expired ยังแนบได้ · ใบไม่ใช่ order แล้ว = duplicate ธรรมดา", async () => {
+  const h = packageOrder({ now: () => NOW });
+  for (const payStatus of ["paid", "problem"]) {
+    DATA = QR_DATA(); WRITES = [];
+    assert.equal((await call(h, qrReq({ payMethod: "qr" }))).code, 200);
+    DATA.companyPay = { [`package-${QR_UUID}`]: { kind: "package", orderUUID: QR_UUID, status: payStatus, amountSatang: 29900 } };
+    const n = WRITES.length;
+    const r = await call(h, qrReq({ slipUrl: QR_SLIP }));
+    assert.equal(r.code, 409, payStatus);
+    assert.equal(r.body.error, "pay_received");
+    assert.equal(r.body.payStatus, payStatus);
+    assert.equal(WRITES.length, n, "ไม่เขียน");
+    assert.equal(DATA.packageOrder[QR_UUID].imageId, "", "ใบยังไม่มีสลิป");
+  }
+  for (const payStatus of ["request", "expired", "closed"]) {
+    DATA = QR_DATA(); WRITES = [];
+    assert.equal((await call(h, qrReq({ payMethod: "qr" }))).code, 200);
+    DATA.companyPay = { [`package-${QR_UUID}`]: { kind: "package", orderUUID: QR_UUID, status: payStatus, amountSatang: 29900 } };
+    const r = await call(h, qrReq({ slipUrl: QR_SLIP }));
+    assert.equal(r.code, 200, payStatus);
+    assert.equal(r.body.slipAttached, true, payStatus);
+  }
+  // ใบ QR ที่เปิดของแล้ว (status success) โดยไม่มี doc จ่าย (เช่น office อนุมัติมือ) = duplicate ธรรมดา ไม่แนบ
+  DATA = QR_DATA(); WRITES = [];
+  assert.equal((await call(h, qrReq({ payMethod: "qr" }))).code, 200);
+  DATA.packageOrder[QR_UUID].status = "success";
+  const n = WRITES.length;
+  const r = await call(h, qrReq({ slipUrl: QR_SLIP }));
+  assert.equal(r.code, 200);
+  assert.equal(r.body.duplicate, true);
+  assert.equal(r.body.slipAttached, undefined);
+  assert.equal(WRITES.length, n);
+});
+
+test("packageOrder qr: qr แต่ส่งสลิปมา 400 · ไม่ส่ง payMethod ไม่มีสลิป 400 (รูปเดิม) · ใบสลิปเดิมไม่มีช่อง payMethod", async () => {
+  DATA = QR_DATA(); WRITES = [];
+  const h = packageOrder({ now: () => NOW });
+  const a = await call(h, qrReq({ payMethod: "qr", slipUrl: QR_SLIP }));
+  assert.equal(a.code, 400);
+  const b = await call(h, qrReq({}));
+  assert.equal(b.code, 400);
+  assert.equal(WRITES.length, 0);
+  const c = await call(h, qrReq({ slipUrl: QR_SLIP }));
+  assert.equal(c.code, 200);
+  assert.equal("payMethod" in DATA.packageOrder[QR_UUID], false, "ใบสลิปรูปเดิม 13 field ไม่เพิ่มช่อง");
+  assert.equal(DATA.packageOrder[QR_UUID].imageId, QR_SLIP);
+});
+
+test("companyPayDocId ของ _orders.js = payDocId ของ _payCheck.js (นิยามซ้ำเพราะ require วนกัน)", () => {
+  const { companyPayDocId, PAY_RECEIVED } = require("./_orders");
+  const PC = require("./_payCheck");
+  for (const k of ["package", "hardware", "image", "stock"]) assert.equal(companyPayDocId(k, "u-1"), PC.payDocId(k, "u-1"));
+  assert.deepEqual([...PAY_RECEIVED].sort(), PC.FINAL_STATES.filter((s) => s !== "closed").sort(), "เงินเข้าแล้ว = สถานะจบที่ไม่ใช่ closed");
+});
+
 // ── ③b ใบแพ็กเกจขอใบกำกับ (DEV-0002 · Pack เคาะ 2026-11-07): รายปีเท่านั้น · VAT คิดที่ server ──
 const PKG_DATA = () => ({
   shop: { A: { shopId: "A", name: "ร้าน" } },

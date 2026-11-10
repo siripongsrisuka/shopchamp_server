@@ -7,6 +7,10 @@
 //   transaction อ่านครบก่อนเขียน: shop · ใบ {orderUUID} · ตัวนับ admin/<x>Number · เอกสารราคา (ถ้ามี) · profile ผู้กด
 //     ร้านไม่มี 404 shop_not_found
 //     ใบ {orderUUID} มีแล้ว: ร้านอื่น 409 order_uuid_other_shop · ร้านนี้แต่ยอดหรือรายการต่าง 409 order_uuid_mismatch · ตรง = 200 duplicate (ไม่ออกเลขใหม่)
+//       ↳ แนบสลิปเข้าใบ QR (DEV-0003 U2b · slipAttachPatch): ใบเดิม payMethod 'qr' ยังไม่มีสลิป status 'order' และ companyPay/<kind>-<orderUUID> ไม่ใช่ paid/problem
+//         + คำขอรอบนี้เป็นแบบสลิป (ไม่ส่ง payMethod หรือ 'slip') ⇒ update ใบ {imageId, payMethod:'slip', slipAttachedAt} ตอบ 200 duplicate:true slipAttached:true
+//         เงินเข้าแล้ว (companyPay paid/problem) = 409 pay_received ไม่แนบ · กรณีอื่นของ duplicate = เดิม (ไม่เขียน)
+//   วิธีจ่าย (payFieldsOf): payMethod 'qr' = ใบเขียน imageId '' + payMethod 'qr' · ไม่ส่ง/'slip' = imageId สลิป รูปเดิม ไม่เพิ่มช่อง (แอปเก่าไม่เปลี่ยน)
 //     ราคา (quote) ไม่ได้ = 409/503 ตามชนิด · expectedNet ≠ ยอดที่ server คิด (ระดับสตางค์) = 409 price_changed {net}
 //     ตัวนับ: ไม่มี doc = สร้าง {value:1} (AC-38) · value เสีย = 500 counter_broken (ไม่เขียน NaN · admin B9)
 //   เขียน: ตัวนับ · ใบ (doc id = orderUUID) · notification/<collection>-<orderUUID> 1 ใบ categoryId 99 (รูปเดิม)
@@ -33,8 +37,38 @@ const sat = (v) => logic.toSatang(v);
 const isObj = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
 const str = (v) => (typeof v === "string" ? v : "");
 
+// ── วิธีจ่ายของใบ (DEV-0003 U2b · schema 0.1.23 payMethod qr|slip) ──
+const isQr = (payMethod) => payMethod === "qr";
+/** ช่องจ่ายตอนสร้างใบ: QR = imageId '' + payMethod 'qr' · สลิป (ไม่ส่ง payMethod) = imageId สลิป รูปเดิม ไม่เพิ่มช่อง */
+const payFieldsOf = (payMethod, slipUrl) => (isQr(payMethod) ? { imageId: "", payMethod: "qr" } : { imageId: slipUrl });
+/** doc id ใบจ่าย = `<kind>-<orderUUID>` · ต้องตรง _payCheck.js › payDocId (ไฟล์นั้น require ไฟล์นี้ จึงนิยามซ้ำที่นี่ · เทส company.test.js ล็อกให้เท่ากัน) */
+const companyPayDocId = (kind, orderUUID) => `${kind}-${orderUUID}`;
+/** สถานะใบจ่ายที่แปลว่าเงินเข้าแล้ว (ตรง _payCheck.js FINAL_STATES ยกเว้น closed · และ office/pay.js › orderCancel) */
+const PAY_RECEIVED = Object.freeze(["paid", "problem"]);
+
+/**
+ * slipAttachPatch({tx, kind, orderUUID, prev, payMethod, slipUrl, now}) → patch ของใบ | null
+ *   ใบเดิม (prev) เป็น QR ที่ยังไม่มีสลิป + คำขอรอบนี้แนบสลิป (payMethod ไม่ใช่ qr และมี slipUrl):
+ *     อ่าน companyPay/<kind>-<orderUUID> ใน tx · paid/problem = throw 409 pay_received (เงินเข้าแล้ว ไม่แนบ)
+ *     ใบไม่ใช่ status 'order' แล้ว = null (ส่งซ้ำธรรมดา) · ไม่งั้นคืน {imageId, payMethod:'slip', slipAttachedAt}
+ *   ไม่เข้าเงื่อนไข = null · ผู้เรียกต้องเทียบว่าใบเดิมตรงกับคำขอ (ร้าน · รายการ · ยอด) มาก่อนแล้ว
+ *   ❗ ต้องเรียกก่อน tx เขียนอะไร (Firestore: อ่านครบก่อนเขียน)
+ */
+async function slipAttachPatch({ tx, kind, orderUUID, prev, payMethod, slipUrl, now }) {
+  if (isQr(payMethod) || !str(slipUrl)) return null;
+  if (!isObj(prev) || str(prev.payMethod) !== "qr" || str(prev.imageId) !== "") return null;
+  const paySnap = await tx.get(db.collection("companyPay").doc(companyPayDocId(kind, orderUUID)));
+  const pay = paySnap && paySnap.exists ? paySnap.data() || {} : null;
+  if (pay && PAY_RECEIVED.includes(str(pay.status))) {
+    refuse(deny(409, "pay_received", "ใบนี้ชำระด้วย QR แล้ว ไม่ต้องแนบสลิป", { kind, orderUUID, payStatus: str(pay.status) }));
+  }
+  if (str(prev.status) !== "order") return null;
+  return { imageId: slipUrl, payMethod: "slip", slipAttachedAt: now };
+}
+
 /**
  * runOrder({kind, access, input, now, collection, counterDoc, priceDoc, quote, buildOrder, buildNoti})
+ *   kind        'package' | 'hardware' | 'image' (ชื่อตาม _fulfill.js KINDS · ใช้หา companyPay/<kind>-<orderUUID> ตอนแนบสลิป)
  *   collection  'packageOrder' | 'hardwareOrder' | 'imageOrder'
  *   counterDoc  'packageNumber' | 'hardwareNumber' | 'imageNumber'
  *   priceDoc    'package' | 'hardware' | null (พื้นที่รูปใช้ตารางในโค้ด)
@@ -42,10 +76,10 @@ const str = (v) => (typeof v === "string" ? v : "");
  *   sameOrder(prev, input) → true เมื่อรายการของใบเดิมตรงกับคำขอ (ยอดเทียบให้แล้วระดับสตางค์)
  *   buildOrder({shop, ref, shopDocId, profile, q, orderNumber}) → field ของใบ (ไม่รวม orderUUID/source/trail · ใส่ให้ที่นี่)
  *   buildNoti({shop, ref, shopDocId, q}) → {heading, notificationContent, shopId}
- * @returns {Promise<{duplicate:boolean, orderId, orderNumber, net, shopName}>} · ปัด = throw Refusal · shopName ใช้ประกอบ push (handler ตัดออกก่อนตอบ)
+ * @returns {Promise<{duplicate:boolean, slipAttached?:true, orderId, orderNumber, net, shopName}>} · ปัด = throw Refusal · shopName ใช้ประกอบ push (handler ตัดออกก่อนตอบ)
  */
 async function runOrder(p) {
-  const { access, input, now, collection, counterDoc, priceDoc, quote, sameOrder, buildOrder, buildNoti } = p;
+  const { kind, access, input, now, collection, counterDoc, priceDoc, quote, sameOrder, buildOrder, buildNoti } = p;
   const shopDocId = access.shopId;
   const trail = adminTrail(access);
   const shopRef = db.collection("shop").doc(shopDocId);
@@ -71,7 +105,14 @@ async function runOrder(p) {
       if (sat(prev.net) !== sat(input.expectedNet) || !sameOrder(prev, input)) {
         refuse(deny(409, "order_uuid_mismatch", "รหัสใบสั่งซื้อนี้ใช้กับรายการอื่นไปแล้ว"));
       }
-      return { duplicate: true, orderId: input.orderUUID, orderNumber: str(prev.orderNumber), net: logic.roundMoney(prev.net), shopName: str(shop.name) };
+      const dup = { duplicate: true, orderId: input.orderUUID, orderNumber: str(prev.orderNumber), net: logic.roundMoney(prev.net), shopName: str(shop.name) };
+      // ใบ QR ที่ร้านเปลี่ยนใจมาแนบสลิป (U2b) · เขียนใบเดิมอย่างเดียว ไม่ออกเลข ไม่มี notification/push ใบที่ 2
+      const patch = await slipAttachPatch({ tx, kind, orderUUID: input.orderUUID, prev, payMethod: input.payMethod, slipUrl: input.slipUrl, now });
+      if (patch) {
+        tx.update(orderRef, patch);
+        return { ...dup, slipAttached: true };
+      }
+      return dup;
     }
     const priceData = priceSnap && priceSnap.exists ? priceSnap.data() : null;
     const q = quote(priceData);
@@ -134,4 +175,7 @@ async function orderPushes({ access, adminDoc, buyer, staff }) {
 
 const PENDING_PUSH_TEXT = "รอตรวจสอบยืนยันการชำระเงิน ภายใน 24 ชั่วโมง";
 
-module.exports = { runOrder, Refusal, refuse, notiShopIdOf, buyerOf, orderPushes, PENDING_PUSH_TEXT, COMPANY_ORDER_CATEGORY, sat, str };
+module.exports = {
+  runOrder, Refusal, refuse, notiShopIdOf, buyerOf, orderPushes, PENDING_PUSH_TEXT, COMPANY_ORDER_CATEGORY, sat, str,
+  payFieldsOf, slipAttachPatch, companyPayDocId, PAY_RECEIVED,
+};

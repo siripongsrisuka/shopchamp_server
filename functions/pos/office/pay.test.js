@@ -219,6 +219,42 @@ test("payList: ใบที่ยอดหาย = amountSatang null (ไม่�
   assert.equal(r.body.rows[0].amount, null);
 });
 
+test("payList: ใบ QR ที่ยังไม่มีสลิป (U2b payMethod qr · imageId '') = QR รอจ่าย ไม่ใช่สลิปรออนุมัติ · แนบสลิปแล้ว (payMethod slip) = แถวสลิป · ใบเดิมไม่มีช่อง = slip", async () => {
+  fresh({
+    ...baseSeed(),
+    "packageOrder/q1": pkgOrder({ imageId: "", payMethod: "qr" }),                               // ร้านกด QR แล้วยังไม่ขอ QR (ไม่มี companyPay)
+    "packageOrder/q2": pkgOrder({ imageId: "", payMethod: "qr", timestamp: ago(3) }),            // ขอ QR แล้ว รอจ่าย
+    "stockOrder/q3": { shopId: "57325", shopName: "ร้าน B", timestamp: ago(4), imageId: "https://slip/q3.jpg", payMethod: "slip", slipAttachedAt: ago(1), price: 150, qty: 1500, id: 3, status: "order" },
+    "packageOrder/p1": pkgOrder({ timestamp: ago(5) }),
+    "companyPay/package-q2": { kind: "package", orderUUID: "q2", status: "request", amountSatang: 35000, updatedAt: ago(2) },
+  });
+  const r = await call("payList", {}, ROOT);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  const row = (k) => r.body.rows.find((x) => x.key === k);
+  const q1 = row("package:q1");
+  assert.equal(q1.payState, "waiting");
+  assert.equal(q1.channel, "posxpay");
+  assert.equal(q1.payMethod, "qr");
+  assert.equal(q1.slipUrl, null);
+  assert.equal(q1.payStatus, null, "ยังไม่มีใบจ่าย · จอไม่โชว์ปุ่มตรวจผู้ให้บริการ");
+  assert.equal(q1.problem, false);
+  assert.equal(q1.orderStatus, "order", "root ยังอนุมัติมือได้");
+  const q2 = row("package:q2");
+  assert.equal(q2.payState, "waiting");
+  assert.equal(q2.payStatus, "request");
+  assert.equal(q2.payMethod, "qr");
+  const q3 = row("stock:q3");
+  assert.equal(q3.payState, "slip");
+  assert.equal(q3.channel, "slip");
+  assert.equal(q3.payMethod, "slip");
+  assert.equal(q3.slipUrl, "https://slip/q3.jpg");
+  const p1 = row("package:p1");
+  assert.equal(p1.payState, "slip");
+  assert.equal(p1.payMethod, "slip", "ใบเดิมไม่มีช่อง payMethod = สลิป");
+  assert.equal(r.body.counts.slip, 2);
+  assert.equal(r.body.counts.waiting, 2);
+});
+
 // ── ② payRecheck ────────────────────────────────────────────────────────────
 test("payRecheck: เรียก checkCompanyPay({kind, orderUUID, now, env}) ตรงเป๊ะ · ได้ของ = ส่ง push ที่คืนมา · audit ok · ไม่กินนิ้ว", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });

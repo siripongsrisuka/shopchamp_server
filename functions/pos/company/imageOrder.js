@@ -11,6 +11,8 @@
 //     + {orderUUID, source, byAdmin?, adminUid?}
 //     shopId = field shop.shopId ที่พิสูจน์แล้ว (care หาร้านด้วย where shopId == · imageOrder.md §1 แถว 1) · พิสูจน์ไม่ได้ = doc id
 //   admin/imageNumber · notification {heading:'ซื้อพิ้นที่เก็บรูปภาพ <qty> รายการ' (คำผิดคงเดิม), categoryId:99}
+// วิธีจ่าย (DEV-0003 U2b · schema 0.1.23): payMethod 'qr' = ใบ {imageId:'', payMethod:'qr'} รอจ่าย QR (company.payRequest) · ไม่ส่ง = สลิป รูปเดิม
+//   ส่ง orderUUID เดิมแบบสลิปขณะใบเป็น QR ไม่มีสลิป = แนบสลิปเข้าใบเดิม 200 duplicate slipAttached · เงินเข้าแล้ว 409 pay_received (_orders.js › slipAttachPatch)
 "use strict";
 
 const { CompanyImageOrderRequest } = require("@shopchamp/schema");
@@ -19,7 +21,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, adminFlag } = require("../_shared/auth");
 const { notify } = require("../_shared/push/notify");
-const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str } = require("./_orders");
+const { runOrder, orderPushes, PENDING_PUSH_TEXT, Refusal, notiShopIdOf, buyerOf, str, payFieldsOf } = require("./_orders");
 
 function imageOrder(deps) {
   return async function handler(req, res) {
@@ -34,7 +36,7 @@ function imageOrder(deps) {
 
       const out = await runOrder({
         access, input, now,
-        collection: "imageOrder", counterDoc: "imageNumber", priceDoc: null,
+        kind: "image", collection: "imageOrder", counterDoc: "imageNumber", priceDoc: null,
         quote: () => {
           const q = logic.companyImageQuote(input.optionId);
           return q.ok ? q : deny(400, "invalid_request");
@@ -48,7 +50,7 @@ function imageOrder(deps) {
             profileId: buyer.profileId,
             profileName: buyer.profileName,
             timestamp: now,
-            imageId: input.slipUrl,
+            ...payFieldsOf(input.payMethod, input.slipUrl),
             net: q.net,
             qty: q.qty,
             status: "order",

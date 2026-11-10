@@ -159,6 +159,38 @@ test("เลขใบ stockOrder เดินต่อกันจาก server 
   assert.equal(c.body.orderNumber, "202611000009");
 });
 
+test("stockOrder qr (U2b): ใบ QR imageId '' payMethod qr · ส่งซ้ำแบบสลิป = แนบสลิปเข้าใบเดิม slipAttached · เงินเข้าแล้ว 409 pay_received · ชุดต่าง = duplicate ธรรมดา", async () => {
+  K.reset({ ...base(), admin: { stockNumber: { value: 7 } } });
+  const qr = { shopId: "shopA", orderUUID: U, packId: 3, price: 150, qty: 1500, payMethod: "qr", ...ST };
+  const a = await run("orderCreate.js", "orderCreate", qr);
+  assert.equal(a.code, 200, JSON.stringify(a.body));
+  assert.equal(K.data().stockOrder[U].imageId, "");
+  assert.equal(K.data().stockOrder[U].payMethod, "qr");
+  assert.equal((await run("orderCreate.js", "orderCreate", { ...qr, imageId: "https://x/y" })).code, 400, "qr แต่ส่งสลิป");
+  // ชุดต่างจากใบเดิม = ส่งซ้ำธรรมดา (พฤติกรรมเดิมของ stock ไม่ปัด mismatch) ไม่แนบ
+  const other = await run("orderCreate.js", "orderCreate", { shopId: "shopA", orderUUID: U, packId: 2, price: 100, qty: 1000, imageId: "https://x/other", ...ST });
+  assert.equal(other.body.duplicate, true);
+  assert.equal(other.body.slipAttached, undefined);
+  assert.equal(K.data().stockOrder[U].imageId, "");
+  // แนบสลิปด้วยรหัสเดิม ชุดเดิม
+  const b = await run("orderCreate.js", "orderCreate", { shopId: "shopA", orderUUID: U, packId: 3, price: 150, qty: 1500, imageId: "https://x/slip", ...ST });
+  assert.equal(b.code, 200, JSON.stringify(b.body));
+  assert.equal(b.body.duplicate, true);
+  assert.equal(b.body.slipAttached, true);
+  assert.equal(b.body.orderNumber, a.body.orderNumber);
+  assert.equal(K.data().stockOrder[U].imageId, "https://x/slip");
+  assert.equal(K.data().stockOrder[U].payMethod, "slip");
+  assert.equal(K.data().admin.stockNumber.value, 8, "ไม่เผาเลข");
+  // เงินเข้าแล้ว
+  K.reset({ ...base(), admin: { stockNumber: { value: 7 } } });
+  assert.equal((await run("orderCreate.js", "orderCreate", qr)).code, 200);
+  K.data().companyPay = { [`stock-${U}`]: { kind: "stock", orderUUID: U, status: "paid", amountSatang: 15000 } };
+  const c = await run("orderCreate.js", "orderCreate", { ...qr, payMethod: undefined, imageId: "https://x/slip" });
+  assert.equal(c.code, 409);
+  assert.equal(c.body.error, "pay_received");
+  assert.equal(K.data().stockOrder[U].imageId, "");
+});
+
 // ── cloneRepair ──
 const cloneData = () => {
   const D = [{ id: "sx", linkMultiply: 6, unit: "ลัง" }, { id: "sy", linkMultiply: 1, unit: "ขวด" }];

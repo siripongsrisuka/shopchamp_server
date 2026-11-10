@@ -6,6 +6,9 @@
 // ด่าน: callerAccess → schema → ไม่ต้องมีสิทธิ์พิเศษ (เดิมใครในร้านก็ซื้อได้) · คนกดต้อง active (B-11)
 //   ชุด/ราคา/จำนวนต้องตรงตารางของ server (ตารางเดียวกับแอป `Modal_FastProduct.js:29-37`) ไม่ตรง = 409 pack_mismatch
 // transaction: shop · stockOrder/{orderUUID} (มีแล้วของร้านนี้ = 200 duplicate ไม่เผาเลข · ร้านอื่น 409) · admin/stockNumber
+//   วิธีจ่าย (DEV-0003 U2b · schema 0.1.23): payMethod 'qr' = ใบ {imageId:'', payMethod:'qr'} รอจ่าย QR (company.payRequest kind stock) · ไม่ส่ง = สลิป รูปเดิม
+//   ส่งซ้ำ UUID เดิม ชุดเดิม ราคาเดิม แบบสลิป ขณะใบเป็น QR ไม่มีสลิป = แนบสลิปเข้าใบเดิม 200 duplicate slipAttached (company/_orders.js › slipAttachPatch)
+//     เงินเข้าแล้ว (companyPay/stock-<orderUUID> paid/problem) = 409 pay_received · กรณีอื่นของ duplicate = เดิม
 //   เลขใบ = `yyyyMM` เวลาไทยของ server + ลำดับ 6 หลักจาก admin/stockNumber.value + 1 (สูตรเดิม `Utility/dateTime.js:245`)
 //     doc ตัวนับไม่มี = เลข 1 และสร้าง doc (เดิมไม่สร้าง ⇒ ทุกใบได้ 000001 · stockOrder.md SB7)
 // เขียน: stockOrder/{orderUUID} รูปเดิม {status:'order', imageId, shopId, shopName, profileId, profileName, timestamp, orderNumber, id, price, qty} + {orderUUID}
@@ -21,7 +24,7 @@ const { readNow } = require("../_shared/deps");
 const { callerAccess, adminTrail, adminFlag, resolveShopRef, belongsToShop } = require("../_shared/auth");
 const S = require("./_shared");
 const { notify } = require("../_shared/push/notify");
-const { orderPushes, PENDING_PUSH_TEXT } = require("../company/_orders");
+const { orderPushes, PENDING_PUSH_TEXT, payFieldsOf, slipAttachPatch, Refusal: CompanyRefusal } = require("../company/_orders");
 
 // ตารางชุดที่ขายจริง (ชุด 0 1 ฟรี ไม่ผ่านทางนี้)
 const PACKS = Object.freeze({ 2: { qty: 1000, price: 100 }, 3: { qty: 1500, price: 150 }, 4: { qty: 2000, price: 200 }, 5: { qty: 3000, price: 300 }, 6: { qty: 4000, price: 400 } });
@@ -56,6 +59,13 @@ function orderCreate(deps) {
         if (orderSnap.exists) {
           const prev = orderSnap.data() || {};
           if (!belongsToShop(prev.shopId, ref)) S.refuse(409, "order_uuid_other_shop", "รหัสใบสั่งซื้อนี้เป็นของร้านอื่น");
+          // แนบสลิปเข้าใบ QR เดิม (U2b) เฉพาะเมื่อชุดและราคาตรงใบเดิม · ไม่ตรง = ส่งซ้ำธรรมดาเหมือนเดิม
+          const same = prev.id === input.packId && Number(prev.price) === input.price;
+          const patch = same ? await slipAttachPatch({ tx, kind: "stock", orderUUID: input.orderUUID, prev, payMethod: input.payMethod, slipUrl: input.imageId, now }) : null;
+          if (patch) {
+            tx.update(orderRef, patch);
+            return { duplicate: true, slipAttached: true, orderNumber: prev.orderNumber };
+          }
           return { duplicate: true, orderNumber: prev.orderNumber };
         }
         const pack = PACKS[input.packId];
@@ -71,7 +81,7 @@ function orderCreate(deps) {
         tx.set(counterRef, { value: seq, timestamp: now }, { merge: true });
         tx.set(orderRef, {
           status: "order",
-          imageId: input.imageId,
+          ...payFieldsOf(input.payMethod, input.imageId),
           shopId: shopField,
           shopName: typeof shop.name === "string" ? shop.name : "",
           profileId: input.staffId,
@@ -104,7 +114,7 @@ function orderCreate(deps) {
       }
       return ok(res, { orderId: input.orderUUID, ...result, ...adminFlag(access) });
     } catch (e) {
-      if (e instanceof S.Refusal) return sendDeny(res, e.deny);
+      if (e instanceof S.Refusal || e instanceof CompanyRefusal) return sendDeny(res, e.deny); // CompanyRefusal = 409 pay_received จาก slipAttachPatch
       return internalError(res, e);
     }
   };
