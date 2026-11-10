@@ -85,6 +85,9 @@ const ROUTES = Object.freeze([
   { contract: "company.scanLoginApprove", path: "/company/scan-login-approve", fn: "pos", auth: "user", factory: true, load: () => require("./company/scanLoginApprove").scanLoginApprove },
   { contract: "company.deleteAccount", path: "/company/delete-account", fn: "pos", auth: "user", factory: true, load: () => require("./company/deleteAccount").deleteAccount },
   { contract: "company.shopCreate", path: "/company/shop-create", fn: "pos", auth: "user", factory: true, load: () => require("./company/shopCreate").shopCreate },
+  // DEV-0003 U2 ชำระเงินอัตโนมัติ (posxpay) ของใบสั่งซื้อบริษัท 4 ชนิด · ยอดจากใบ · server ถามสถานะเองแล้วเปิดของ (_fulfill) · secret COMPANY_POSXPAY_* ผูกที่ workloads.js
+  { contract: "company.payRequest", path: "/company/pay-request", fn: "pos", auth: "shop", factory: true, load: () => require("./company/payRequest").payRequest },
+  { contract: "company.payStatus", path: "/company/pay-status", fn: "pos", auth: "shop", factory: true, load: () => require("./company/payStatus").payStatus },
 
   // DEV-0001 push: แอปรุ่นใหม่ไม่มี OneSignal (Pack เคาะ 2026-11-07) · ลงทะเบียน FCM token ต่อเครื่อง · ออกร้าน/ออกระบบ = เลิกรับ
   { contract: "device.registerPushToken", path: "/device/register-push-token", fn: "pos", auth: "shop", factory: true, load: () => require("./device/registerPushToken").registerPushToken },
@@ -136,6 +139,11 @@ const ROUTES = Object.freeze([
   { contract: "office.passkeyRegisterVerify", path: "/office/passkey-register-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").registerVerify },
   { contract: "office.passkeyAssertOptions", path: "/office/passkey-assert-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertOptions },
   { contract: "office.passkeyAssertVerify", path: "/office/passkey-assert-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertVerify },
+  // DEV-0003 ชำระเงิน/อนุมัติใบสั่งซื้อบริษัท (U4) · root ทำได้ · อนุมัติ/ยกเลิก = passkey ทุกครั้ง · watcher ดูอย่างเดียว
+  { contract: "office.payList", path: "/office/pay-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").payList },
+  { contract: "office.payRecheck", path: "/office/pay-recheck", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").payRecheck },
+  { contract: "office.orderApprove", path: "/office/order-approve", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").orderApprove },
+  { contract: "office.orderCancel", path: "/office/order-cancel", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").orderCancel },
 ]);
 
 module.exports = { ROUTES };

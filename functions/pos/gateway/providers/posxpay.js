@@ -21,6 +21,8 @@ const MAX_AMOUNT_BAHT = 50000;
 const DEFAULT_TEST_THROTTLE_MS = 60000;
 /** ข้อความในรายการของ POSxPay */
 const DESCRIPTION = "Shopchamp";
+/** เพดานความยาว ref1/ref2 ของผู้ให้บริการ (เอกสาร v1.2 หัวข้อ 2: ref2 ≤ 50 · ใช้เพดานเดียวกันกับ ref1) */
+const REF_MAX = 50;
 
 // env/http ฉีดได้ — ตั้งที่ client ตัวเดียว (provider กับ client เห็นค่าเดียวกัน)
 const _setEnv = client._setEnv;
@@ -133,11 +135,13 @@ function makeNumericRef() {
 
 // ── createQR — `/requestpay` = สร้างรายการเงินจริง + ดันขึ้นกล่องเสียง ─────────────────
 /**
- * @param {{channel, config:{serial,token}, amount:number(บาท), referenceId:string, shopId?:string, env?:object}} input
+ * @param {{channel, config:{serial,token}, amount:number(บาท), referenceId:string, shopId?:string, ref1?:string, ref2?:string, env?:object}} input
+ *   ref1/ref2 (DEV-0003 U2 · ใบสั่งซื้อบริษัท): ใส่ใน body **เฉพาะเมื่อส่งมา** · ไม่ส่ง = body เท่าเดิมของร้าน (ref1 = shopId · ไม่มี ref2)
+ *   ref1 ที่ส่งมาชนะ shopId · ทั้งคู่ตัดที่ REF_MAX · ❌ ห้ามส่ง ref2 = 'auto' (เป็นป้ายเปิดของของบ้านพี่น้อง · separate-home ข้อยกเว้น 2026-11-10)
  * @returns {Promise<{ok:true,data:{providerRef,chargeId,qrPayload,qrKind:'text'}}|{ok:false,error:{code,message}}>}
  */
 async function createQR(input) {
-  const { channel, config, amount, referenceId, shopId, env } = input || {};
+  const { channel, config, amount, referenceId, shopId, ref1, ref2, env } = input || {};
 
   const ch = readChannel(channel);
   if (ch.error) return ch.error;
@@ -162,8 +166,13 @@ async function createQR(input) {
     sourceType: ch.sourceType,
     amount: n,
   };
-  // ref1 ไม่บังคับ — ไม่ยัดค่ามั่วเมื่อไม่ได้ส่งมา
-  if (str(shopId)) body.ref1 = str(shopId);
+  // ref1 ไม่บังคับ — ไม่ยัดค่ามั่วเมื่อไม่ได้ส่งมา · ref1 ที่ส่งตรงชนะ shopId (ใบบริษัทใช้ `<kind>:<orderUUID>`)
+  const r1 = str(ref1) || str(shopId);
+  if (r1) body.ref1 = r1.slice(0, REF_MAX);
+  // ref2 ใส่เฉพาะเมื่อส่งมา (ร้านเดิมไม่ส่ง = body ไม่มีช่องนี้ เหมือนก่อน) · 'auto' = ป้ายของบ้านพี่น้อง ปัดก่อนยิง
+  const r2 = str(ref2);
+  if (r2.toLowerCase() === "auto") return fail("bad_input", "ref2 'auto' ใช้ไม่ได้ (เป็นป้ายเปิดของของระบบอื่นที่ใช้ merchant ร่วมกัน)");
+  if (r2) body.ref2 = r2.slice(0, REF_MAX);
 
   const r = await client.request({ method: "POST", path: REQUEST_PATH, token: cfg.token, body, env });
   if (!r.ok) return r;
@@ -367,6 +376,7 @@ module.exports = {
   classifyTestResponse,
   __resetConnectionTestCache,
   MAX_AMOUNT_BAHT,
+  REF_MAX,
   REQUEST_PATH,
   INQUIRE_PATH,
   _setHttp,

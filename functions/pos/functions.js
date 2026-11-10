@@ -8,7 +8,8 @@
 "use strict";
 
 const { onRequest } = require("firebase-functions/v2/https");
-const { REGION, FN, FUNCTION_CONFIG, GATEWAY_CONFIG } = require("./workloads");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { REGION, FN, FUNCTION_CONFIG, GATEWAY_CONFIG, SWEEP_SCHEDULE, SWEEP_CONFIG } = require("./workloads");
 
 function lazyApp(fnName) {
   let app = null;
@@ -34,6 +35,8 @@ module.exports = {
   pos_heavy: mk(FN.HEAVY),
   // URL: …/pos_gateway/<path> · webhook ของผู้ให้บริการต้องยิงได้โดยไม่มี token ⇒ invoker public (ด่านอยู่ในโค้ด)
   pos_gateway: onRequest({ region: REGION, invoker: "public", ...GATEWAY_CONFIG }, lazyGatewayApp()),
+  // DEV-0003 U3: กวาดใบจ่าย posxpay ที่ยังรอ ทุก 5 นาที (ไม่มี webhook) · โค้ดโหลดตอนรอบแรก · deploy: --only functions:companyPaySweep
+  companyPaySweep: onSchedule({ region: REGION, ...SWEEP_SCHEDULE, ...SWEEP_CONFIG }, () => require("./company/paySweep").runScheduled()),
   lazyApp,
   lazyGatewayApp,
 };

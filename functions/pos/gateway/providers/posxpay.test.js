@@ -166,6 +166,26 @@ test("createQR: ทางสำเร็จ — POST /requestpay ด้วย Be
   assert.deepEqual(rest, { description: "Shopchamp", serial: SERIAL, sourceType: "promptpay", amount: 150.5, ref1: "SHOP-9" });
 });
 
+test("createQR ref1/ref2 (DEV-0003 U2 ใบบริษัท): ส่งมา = เข้า body ตัดที่ 50 · ref1 ชนะ shopId · ไม่ส่ง = body ไม่มีช่อง (ร้านเดิมไม่เปลี่ยน) · 'auto' ปัดก่อนยิง", async () => {
+  reset(() => ({ status: 200, data: OK_REQUEST_BODY }));
+  const uuid = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
+  const r = await PXP.createQR({ channel: CH, config: CFG, amount: 350, referenceId: "cp1", shopId: "SHOP-9", ref1: `package:${uuid}`, ref2: "shopchamp" });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(CALLS[0].data.ref1, `package:${uuid}`, "ref1 ที่ส่งตรงชนะ shopId");
+  assert.equal(CALLS[0].data.ref2, "shopchamp");
+  // ตัดที่เพดาน 50
+  await PXP.createQR({ channel: CH, config: CFG, amount: 1, referenceId: "B", ref1: "x".repeat(80), ref2: "y".repeat(80) });
+  assert.equal(CALLS[1].data.ref1.length, PXP.REF_MAX);
+  assert.equal(CALLS[1].data.ref2.length, PXP.REF_MAX);
+  // ร้านเดิม (ไม่ส่ง ref1/ref2) = body เท่าก่อนแก้: ref1 = shopId · ไม่มี ref2
+  await PXP.createQR({ channel: CH, config: CFG, amount: 1, referenceId: "B", shopId: "SHOP-9" });
+  assert.equal(CALLS[2].data.ref1, "SHOP-9");
+  assert.equal(Object.prototype.hasOwnProperty.call(CALLS[2].data, "ref2"), false, "ร้านเดิมไม่ส่ง ref2 = ไม่มีช่อง");
+  // ref2 'auto' = ป้ายเปิดของของบ้านพี่น้อง (merchant ร่วม) ⇒ ปัดโดยไม่ยิง
+  const bad = await PXP.createQR({ channel: CH, config: CFG, amount: 1, referenceId: "B", ref2: "AUTO" });
+  assert.deepEqual([bad.ok, bad.error.code, CALLS.length], [false, "bad_input", 3]);
+});
+
 test("createQR: ส่ง checkoutType มาก็ไม่ไปถึง POSxPay (ตัดของร้านอาหารออกแล้ว)", async () => {
   reset(() => ({ status: 200, data: OK_REQUEST_BODY }));
   await PXP.createQR({ channel: CH, config: CFG, amount: 1, referenceId: "B", checkoutType: "table" });

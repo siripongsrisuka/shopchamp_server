@@ -18,11 +18,15 @@ const { fail } = require("./_shared/respond");
 const REGION = "asia-southeast2";
 const FN = Object.freeze({ POS: "pos", HEAVY: "pos_heavy" });
 const ALL = "*";
+/** secret ของ posxpay บริษัท (DEV-0003 U2/U3) · ชื่อเดียวกับที่ company/_payCheck.js อ่าน · ผูกทั้ง pos (payRequest/payStatus) และ companyPaySweep */
+const COMPANY_PAY_SECRETS = Object.freeze(["COMPANY_POSXPAY_TOKEN", "COMPANY_POSXPAY_SERIAL"]);
 
 const FUNCTION_CONFIG = Object.freeze({
   // pos ผูก GATEWAY_CRED_ENC_KEY (Pack สร้าง secret 2026-11-07 · ใช้กับที่ลับ token LINE `shop.lineSettings`)
   //   + ONESIGNAL_REST_API_KEY (Pack สร้าง 2026-11-07 · ท่อ OneSignal ช่วงเปลี่ยนผ่าน `_shared/push/onesignalPipe.js` · ลบพร้อมท่อ)
-  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "ONESIGNAL_REST_API_KEY"]) }),
+  //   + COMPANY_POSXPAY_TOKEN / COMPANY_POSXPAY_SERIAL (DEV-0003 U2 · token/serial บริษัทของ posxpay · ⚠️ Pack ยังไม่สร้าง (2026-11-10) ⇒ ต้อง
+  //     `firebase functions:secrets:set` ทั้ง 2 ตัวก่อน deploy pos ไม่งั้น deploy ล้ม · ย้าย merchant = เปลี่ยนค่า secret อย่างเดียว)
+  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS]) }),
   [FN.HEAVY]: Object.freeze({ memory: "2GiB", concurrency: 1, maxInstances: 30, timeoutSeconds: 300 }),
 });
 
@@ -62,4 +66,11 @@ function gateFor(fnName, routes = ROUTES) {
 const GATEWAY_FN = "pos_gateway";
 const GATEWAY_CONFIG = Object.freeze({ memory: "512MiB", concurrency: 40, maxInstances: 20, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "KBANK_PROXY_URL", "KBANK_PROXY_KEY", "KBANK_PROXY_KEY_HEADER", "BEAM_PARTNER_ID", "BEAM_ENV"]) });
 
-module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, gateFor, segmentOf, segmentMap };
+// companyPaySweep = งานตั้งเวลา (DEV-0003 U3 · pos/company/paySweep.js) ไม่ใช่ HTTP · ไม่ผ่าน gateFor
+//   ทุก 5 นาที Asia/Bangkok · 256MiB · timeout 120 วิ (ใบละ 1 inquire ≤15 วิ · เพดาน 500 ใบ/รอบ แต่จริงไม่กี่ใบ) · maxInstances 1 (กันรอบซ้อน ชั้นแรก · lease ใน tx เป็นชั้นสอง)
+//   retryCount 0: รอบถัดไปอีก 5 นาทีเก็บตกเอง · ผูก COMPANY_POSXPAY_* ชุดเดียวกับ pos
+const SWEEP_FN = "companyPaySweep";
+const SWEEP_SCHEDULE = Object.freeze({ schedule: "every 5 minutes", timeZone: "Asia/Bangkok", retryCount: 0 });
+const SWEEP_CONFIG = Object.freeze({ memory: "256MiB", timeoutSeconds: 120, maxInstances: 1, secrets: COMPANY_PAY_SECRETS });
+
+module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, COMPANY_PAY_SECRETS, SWEEP_FN, SWEEP_SCHEDULE, SWEEP_CONFIG, gateFor, segmentOf, segmentMap };

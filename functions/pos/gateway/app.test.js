@@ -150,7 +150,17 @@ test("④ export: index.js ต่อท้าย exports.pos_gateway · function
   KBANK_SECRETS.push("BEAM_PARTNER_ID", "BEAM_ENV");
   const bound = (ep.secretEnvironmentVariables || []).map((s) => s.key).sort();
   assert.deepEqual(bound, [...SECRETS_CREATED, ...KBANK_SECRETS].sort(), "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
-  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY"].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07)");
+  // DEV-0003 U2: COMPANY_POSXPAY_TOKEN/SERIAL ⚠️ Pack ยังไม่สร้าง (2026-11-10) · ต้องสร้างก่อน deploy pos / companyPaySweep ไม่งั้น deploy ล้ม (ดู workloads.js)
+  const COMPANY_PAY_SECRETS = ["COMPANY_POSXPAY_TOKEN", "COMPANY_POSXPAY_SERIAL"];
+  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07) + posxpay บริษัท (DEV-0003)");
+  // companyPaySweep (DEV-0003 U3): งานตั้งเวลา gen2 · region เดียวกัน · ผูกเฉพาะ posxpay บริษัท · maxInstances 1
+  const sweep = F.companyPaySweep.__endpoint;
+  assert.equal(sweep.platform, "gcfv2");
+  assert.deepEqual(sweep.region, ["asia-southeast2"]);
+  assert.equal(sweep.scheduleTrigger.schedule, "every 5 minutes");
+  assert.equal(sweep.scheduleTrigger.timeZone, "Asia/Bangkok");
+  assert.equal(sweep.maxInstances, 1);
+  assert.deepEqual((sweep.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...COMPANY_PAY_SECRETS].sort());
   assert.deepEqual(ep.httpsTrigger && ep.httpsTrigger.invoker, ["public"]);
   for (const k of ["pos", "pos_heavy"]) assert.equal(F[k].__endpoint.platform, "gcfv2", `${k} ไม่ถูกแตะ`);
 });
