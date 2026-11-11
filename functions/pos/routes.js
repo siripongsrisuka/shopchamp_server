@@ -153,6 +153,18 @@ const ROUTES = Object.freeze([
   { contract: "office.hwCategoryArrange", path: "/office/hw-category-arrange", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCategoryArrange },
   { contract: "office.hwCategoryDelete", path: "/office/hw-category-delete", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCategoryDelete },
   { contract: "office.hwShippingSave", path: "/office/hw-shipping-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwShippingSave },
+  // DEV-0003 0e ประกาศถึงร้าน (Marketing) · อ่าน = ทีมงาน · เขียน = root (ตัดสินที่ handler) · ไม่ใช้ passkey
+  { contract: "office.annList", path: "/office/ann-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annList },
+  { contract: "office.annSave", path: "/office/ann-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annSave },
+  { contract: "office.annCancel", path: "/office/ann-cancel", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annCancel },
+  { contract: "office.annCategoryList", path: "/office/ann-category-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annCategoryList },
+  { contract: "office.annCategorySave", path: "/office/ann-category-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annCategorySave },
+  { contract: "office.annCategoryDelete", path: "/office/ann-category-delete", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annCategoryDelete },
+  { contract: "office.annShopFind", path: "/office/ann-shop-find", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annShopFind },
+  { contract: "office.annShopTagSet", path: "/office/ann-shop-tag-set", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annShopTagSet },
+  // แอปใหม่ 5.00 อ่าน/บันทึกประกาศ · segment announcement = pos · แอปเก่า 3.12 ไม่เรียก
+  { contract: "announcement.feed", path: "/announcement/feed", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/feed").feed },
+  { contract: "announcement.seen", path: "/announcement/seen", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/seen").seen },
 ]);
 
 module.exports = { ROUTES };

@@ -15,7 +15,8 @@ const POS = path.resolve(__dirname, "..");
 // เส้นอ่านล้วนที่อ่าน req.shopAccess เอง ไม่เรียก callerAccess
 const READ_WITHOUT_CALLER = new Set(["system.ping", "shift.openList"]);
 // ไฟล์ที่ได้ส่ง { read: true } (เส้นอ่าน หรือ op อ่านของเส้นผสม)
-const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/connections.js", "shopStaff/staffManage.js"]);
+// announcement/feed.js (DEV-0003 0e) อ่านอย่างเดียว · watcher ไม่มีแถวในร้าน = ได้รายการว่าง
+const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/connections.js", "shopStaff/staffManage.js", "announcement/feed.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());
