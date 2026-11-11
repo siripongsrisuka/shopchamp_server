@@ -1,11 +1,11 @@
 // เทส pos/office/pay.js — หน้า "ชำระเงิน" ของ shopchampoffice (DEV-0003 U4)
 //   ① payList: ใบรอตรวจ 4 ชนิด + companyPay · problem บนสุด · ใบจ่ายที่ใบเปิดของแล้วอ่านทีละ doc · watcher ดูได้ · คนนอก 403
 //   ② payRecheck: เรียก checkCompanyPay ด้วย signature ตรงเป๊ะ ({kind, orderUUID, now, env}) · ส่ง push ที่ได้ · watcher 403
-//   ③ orderApprove: passkey ก่อน fulfill (via manual · actor = ผู้กด) · push หลังสำเร็จ · duplicate ไม่ส่ง · ใบยกเลิกแล้วปัดก่อนแตะนิ้ว
+//   ③ orderApprove: fulfill via manual · actor = ผู้กด · push หลังสำเร็จ · duplicate ไม่ส่ง · ใบยกเลิก/เปิดแล้วปัดก่อนเรียก fulfill
 //      + ตัวจริงของ _fulfill.js (ชนิดพื้นที่รูป) บนฐานปลอมที่เขียนลงจริง
 //   ④ orderCancel: เฉพาะ status order · เงินเข้าแล้วปัด · เขียนใบ + audit ใน transaction เดียว · push ตาม care / silent ไม่ส่ง
 //   รัน: node --test functions/pos/office/pay.test.js (จาก shopchamp_server) · ❌ ไม่แตะ Firestore/Auth จริง (แทน functions/firebase ใน require.cache)
-//   ลายนิ้ว: ฉีด verifyAuthenticationResponse ผ่าน deps (พิธีจริงพิสูจน์แล้วที่ office.test.js) · challenge/กุญแจอยู่ในฐานปลอมจริง ⇒ ด่านใช้ครั้งเดียวทำงานจริง
+//   ไม่มี passkey แล้ว (Pack ถอด 2026-11-11): ส่งช่อง passkey มา = 400 invalid_request ไม่เรียก fulfill ไม่เขียนอะไร
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -97,11 +97,9 @@ function fresh(seed) {
   M = require("./pay");
 }
 
-const ORIGIN = "http://localhost:5173";
 const ROOT = "rootUid000000000000000001";
 const WATCH = "watchUid00000000000000001";
 const OUT = "outUid0000000000000000001";
-const CRED = "credRoot1";
 const NOW = new Date("2026-11-10T03:00:00.000Z");
 const ago = (min) => new Date(NOW.getTime() - min * 60000);
 
@@ -111,18 +109,16 @@ const baseSeed = () => ({
     people: [{ uid: ROOT, email: "root@shopchamp.test", name: "พี่ Root", level: "root" }, { uid: WATCH, email: "watch@shopchamp.test", name: "Watch", level: "watcher" }],
     count: 2, rootCount: 1, rosterSha: "a".repeat(64), via: "center-script",
   },
-  [`officePasskeys/${CRED}`]: { uid: ROOT, publicKey: "AQID", counter: 1, transports: ["internal"], rpID: "localhost" },
-  [`officePasskeyChallenges/${ROOT}`]: { challenge: "chal-auth", type: "auth", origin: ORIGIN, createdAt: ago(1) },
 });
-const authResp = { id: CRED, rawId: CRED, type: "public-key", response: { clientDataJSON: "eyJ0", authenticatorData: "SZYN", signature: "MEUC" }, clientExtensionResults: {} };
-const passkey = { origin: ORIGIN, authResp };
+// รูปเดิมที่จอรุ่นก่อนส่ง ไว้พิสูจน์ว่าตอนนี้ถูกปัด
+const oldPasskey = { origin: "http://localhost:5173", authResp: { id: "credRoot1", rawId: "credRoot1", type: "public-key", response: { clientDataJSON: "eyJ0", authenticatorData: "SZYN", signature: "MEUC" }, clientExtensionResults: {} } };
+const snapshot = () => new Map([...mem.store.entries()].map(([k, v]) => [k, structuredClone(v)]));
 
 let calls;
 function deps(extra) {
-  calls = { push: [], fulfill: [], check: [], verify: 0 };
+  calls = { push: [], fulfill: [], check: [] };
   return {
     now: () => new Date(NOW.getTime()),
-    verifyAuthenticationResponse: async () => { calls.verify += 1; return { verified: true, authenticationInfo: { newCounter: 2 } }; },
     push: async (m) => { calls.push.push(m); return { sent: 1 }; },
     ...(extra || {}),
   };
@@ -256,7 +252,7 @@ test("payList: ใบ QR ที่ยังไม่มีสลิป (U2b payM
 });
 
 // ── ② payRecheck ────────────────────────────────────────────────────────────
-test("payRecheck: เรียก checkCompanyPay({kind, orderUUID, now, env}) ตรงเป๊ะ · ได้ของ = ส่ง push ที่คืนมา · audit ok · ไม่กินนิ้ว", async () => {
+test("payRecheck: เรียก checkCompanyPay({kind, orderUUID, now, env}) ตรงเป๊ะ · ได้ของ = ส่ง push ที่คืนมา · audit ok", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
   const push = { to: { kind: "people", ids: ["buyer1"] }, heading: "อนุมัติ แพ็กเกจ เรียบร้อยค่ะ!", content: "x" };
   let arg;
@@ -274,7 +270,6 @@ test("payRecheck: เรียก checkCompanyPay({kind, orderUUID, now, env}) �
   assert.equal(r.body.state, "paid");
   assert.equal(r.body.opened, true);
   assert.deepEqual(calls.push, [push]);
-  assert.ok(mem.store.has(`officePasskeyChallenges/${ROOT}`), "ไม่กิน challenge");
   assert.equal(audits().find((a) => a.action === "pay.recheck").result, "ok");
 });
 
@@ -310,48 +305,43 @@ test("payRecheck: ตัวตรวจคืนค่าผิดรูป = 50
 });
 
 // ── ③ orderApprove ──────────────────────────────────────────────────────────
-test("orderApprove: แตะนิ้ว → fulfill via manual actor = ชื่อในทะเบียน · ส่ง push · audit ok · ใช้ลายนิ้วเดิมซ้ำ = no_challenge", async () => {
+test("orderApprove: fulfill via manual actor = ชื่อในทะเบียน · ส่ง push · audit ok ไม่มีรหัสกุญแจ", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
   const push = { to: { kind: "people", ids: ["buyer1"] }, heading: "อนุมัติ แพ็กเกจ เรียบร้อยค่ะ!", content: "กรุณากดอัปเดต ข้อมูล 1 ครั้งค่ะ" };
   let arg;
   const fulfill = async (a) => { arg = a; return { ok: true, duplicate: false, kind: a.kind, orderUUID: a.orderUUID, status: "success", effects: { vip: 1 }, push }; };
-  const r = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, ROOT, { fulfill });
+  const r = await call("orderApprove", { kind: "package", orderUUID: "p1" }, ROOT, { fulfill });
   assert.equal(r.code, 200, JSON.stringify(r.body));
   assert.deepEqual(arg, { kind: "package", orderUUID: "p1", via: "manual", actor: { uid: ROOT, name: "พี่ Root" }, now: NOW });
-  assert.equal(calls.verify, 1);
   assert.deepEqual(calls.push, [push]);
   assert.equal(r.body.status, "success");
-  assert.ok(!mem.store.has(`officePasskeyChallenges/${ROOT}`), "กิน challenge");
+  assert.equal(r.body.approveName, "พี่ Root");
   const a = audits().find((x) => x.action === "order.approve");
   assert.equal(a.result, "ok");
-  assert.equal(a.passkeyCredentialId, CRED);
-  const again = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, ROOT, { fulfill });
-  assert.equal(again.code, 409);
-  assert.equal(again.body.error, "no_challenge");
+  assert.equal(a.passkeyCredentialId, null);
 });
 
-test("orderApprove: ใบยกเลิก/เปิดแล้ว/ไม่มี = ปัดก่อนแตะนิ้ว (ไม่กิน challenge · ไม่เรียก fulfill)", async () => {
+test("orderApprove: ใบยกเลิก/เปิดแล้ว/ไม่มี = ปัดก่อนเรียก fulfill · ใบไม่เปลี่ยน", async () => {
   fresh({ ...baseSeed(), "packageOrder/c1": pkgOrder({ status: "cancel" }), "packageOrder/s1": pkgOrder({ status: "success" }) });
   let called = 0;
   const fulfill = async () => { called += 1; return {}; };
-  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "c1", passkey }, ROOT, { fulfill })).body.error, "order_cancelled");
-  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "s1", passkey }, ROOT, { fulfill })).body.error, "order_already_opened");
-  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "nope", passkey }, ROOT, { fulfill })).code, 404);
+  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "c1" }, ROOT, { fulfill })).body.error, "order_cancelled");
+  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "s1" }, ROOT, { fulfill })).body.error, "order_already_opened");
+  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "nope" }, ROOT, { fulfill })).code, 404);
   assert.equal(called, 0);
-  assert.equal(calls.verify, 0);
-  assert.ok(mem.store.has(`officePasskeyChallenges/${ROOT}`));
+  assert.equal(mem.store.get("packageOrder/c1").status, "cancel");
+  assert.equal(mem.store.get("packageOrder/s1").status, "success");
 });
 
 test("orderApprove: fulfill ปัด (Refusal ของ pos/company) = ส่งต่อรหัส + audit rejected · ไม่ส่ง push · duplicate ไม่ส่ง push", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
   const err = Object.assign(new Error("shop_not_found"), { deny: { ok: false, status: 404, error: "shop_not_found", message: "ไม่พบร้าน" } });
-  const r = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, ROOT, { fulfill: async () => { throw err; } });
+  const r = await call("orderApprove", { kind: "package", orderUUID: "p1" }, ROOT, { fulfill: async () => { throw err; } });
   assert.equal(r.code, 404);
   assert.equal(r.body.error, "shop_not_found");
   assert.equal(calls.push.length, 0);
-  assert.ok(audits().some((a) => a.action === "order.approve" && a.result === "rejected" && a.rejectCode === "shop_not_found" && a.passkeyCredentialId === CRED));
-  mem.store.set(`officePasskeyChallenges/${ROOT}`, { challenge: "chal-auth", type: "auth", origin: ORIGIN, createdAt: ago(1) });
-  const d = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, ROOT, {
+  assert.ok(audits().some((a) => a.action === "order.approve" && a.result === "rejected" && a.rejectCode === "shop_not_found" && a.passkeyCredentialId === null));
+  const d = await call("orderApprove", { kind: "package", orderUUID: "p1" }, ROOT, {
     fulfill: async () => ({ ok: true, duplicate: true, status: "success", push: { to: { kind: "people", ids: ["x"] }, heading: "h", content: "c" } }),
   });
   assert.equal(d.code, 200);
@@ -359,16 +349,20 @@ test("orderApprove: fulfill ปัด (Refusal ของ pos/company) = ส่�
   assert.equal(calls.push.length, 0);
 });
 
-test("orderApprove: watcher 403 · ไม่มี passkey 400 · ลายนิ้วไม่ผ่าน 403 ไม่เรียก fulfill", async () => {
+test("orderApprove: watcher 403 · ส่งช่อง passkey (จอรุ่นก่อน) = 400 invalid_request · ไม่เรียก fulfill · ไม่เขียนอะไร", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
   let called = 0;
   const fulfill = async () => { called += 1; return { duplicate: false }; };
-  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, WATCH, { fulfill })).body.error, "root_required");
-  assert.equal((await call("orderApprove", { kind: "package", orderUUID: "p1" }, ROOT, { fulfill })).code, 400);
-  const bad = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey }, ROOT, { fulfill, verifyAuthenticationResponse: async () => ({ verified: false }) });
-  assert.equal(bad.code, 403);
-  assert.equal(bad.body.error, "assertion_failed");
+  const before = snapshot();
+  const w = await call("orderApprove", { kind: "package", orderUUID: "p1" }, WATCH, { fulfill });
+  assert.equal(w.code, 403);
+  assert.equal(w.body.error, "root_required");
+  const pk = await call("orderApprove", { kind: "package", orderUUID: "p1", passkey: oldPasskey }, ROOT, { fulfill });
+  assert.equal(pk.code, 400);
+  assert.equal(pk.body.error, "invalid_request");
   assert.equal(called, 0);
+  assert.equal(calls.push.length, 0);
+  assert.deepEqual(new Map(mem.store), before, "ใบ · audit ไม่เปลี่ยน");
 });
 
 test("orderApprove + _fulfill.js ตัวจริง (พื้นที่รูป): shop.imageMore เพิ่ม · ใบ success + approveName · push ข้อความ care", async () => {
@@ -377,7 +371,7 @@ test("orderApprove + _fulfill.js ตัวจริง (พื้นที่ร
     "shop/docB": { shopId: "57325", name: "ร้าน B", imageMore: 500 },
     "imageOrder/i1": { shopId: "57325", shopName: "ร้าน B", profileId: "b2", timestamp: ago(10), imageId: "https://slip/i.jpg", net: 100, qty: 1000, status: "order" },
   });
-  const r = await call("orderApprove", { kind: "image", orderUUID: "i1", passkey }, ROOT);
+  const r = await call("orderApprove", { kind: "image", orderUUID: "i1" }, ROOT);
   assert.equal(r.code, 200, JSON.stringify(r.body));
   assert.equal(mem.store.get("shop/docB").imageMore, 1500);
   const o = mem.store.get("imageOrder/i1");
@@ -392,7 +386,7 @@ test("orderApprove + _fulfill.js ตัวจริง (พื้นที่ร
 // ── ④ orderCancel ───────────────────────────────────────────────────────────
 test("orderCancel: status cancel + ผู้ยกเลิก + audit ใน transaction · push ตาม care · silent ไม่ส่ง", async () => {
   fresh({ ...baseSeed(), "imageOrder/i1": { shopId: "x", profileId: "b2", net: 100, qty: 1000, status: "order" } });
-  const r = await call("orderCancel", { kind: "image", orderUUID: "i1", passkey }, ROOT);
+  const r = await call("orderCancel", { kind: "image", orderUUID: "i1" }, ROOT);
   assert.equal(r.code, 200, JSON.stringify(r.body));
   const o = mem.store.get("imageOrder/i1");
   assert.equal(o.status, "cancel");
@@ -402,41 +396,51 @@ test("orderCancel: status cancel + ผู้ยกเลิก + audit ใน tr
   assert.equal(audits().find((a) => a.action === "order.cancel").result, "ok");
 
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
-  const s = await call("orderCancel", { kind: "package", orderUUID: "p1", passkey, silent: true }, ROOT);
+  const s = await call("orderCancel", { kind: "package", orderUUID: "p1", silent: true }, ROOT);
   assert.equal(s.code, 200);
   assert.equal(s.body.notified, false);
   assert.equal(calls.push.length, 0);
   assert.equal(mem.store.get("packageOrder/p1").status, "cancel");
 });
 
-test("orderCancel: เงินเข้าแล้ว (companyPay paid/problem) = 409 pay_received ก่อนแตะนิ้ว · ใบไม่ใช่ order = 409 · watcher 403", async () => {
+test("orderCancel: เงินเข้าแล้ว (companyPay paid/problem) = 409 pay_received ก่อนเข้า transaction · ใบไม่ใช่ order = 409 · watcher 403", async () => {
   fresh({
     ...baseSeed(),
     "packageOrder/p1": pkgOrder(),
     "companyPay/package-p1": { kind: "package", orderUUID: "p1", status: "paid", updatedAt: ago(1) },
     "packageOrder/s1": pkgOrder({ status: "success" }),
   });
-  const r = await call("orderCancel", { kind: "package", orderUUID: "p1", passkey }, ROOT);
+  const r = await call("orderCancel", { kind: "package", orderUUID: "p1" }, ROOT);
   assert.equal(r.code, 409);
   assert.equal(r.body.error, "pay_received");
   assert.equal(mem.store.get("packageOrder/p1").status, "order");
-  assert.equal(calls.verify, 0);
-  assert.equal((await call("orderCancel", { kind: "package", orderUUID: "s1", passkey }, ROOT)).body.error, "order_not_cancellable");
-  assert.equal((await call("orderCancel", { kind: "package", orderUUID: "s1", passkey }, WATCH)).body.error, "root_required");
+  assert.equal((await call("orderCancel", { kind: "package", orderUUID: "s1" }, ROOT)).body.error, "order_not_cancellable");
+  assert.equal((await call("orderCancel", { kind: "package", orderUUID: "s1" }, WATCH)).body.error, "root_required");
 });
 
-test("orderCancel: เงินเข้าระหว่างแตะนิ้ว (เห็นใน transaction) = 409 pay_received ไม่เขียนใบ · audit rejected", async () => {
+test("orderCancel: เงินเข้าหลังตรวจรอบแรก ก่อน transaction (เห็นใน transaction) = 409 pay_received ไม่เขียนใบ · audit rejected", async () => {
   fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
-  const r = await call("orderCancel", { kind: "package", orderUUID: "p1", passkey }, ROOT, {
-    verifyAuthenticationResponse: async () => {
-      mem.store.set("companyPay/package-p1", { kind: "package", orderUUID: "p1", status: "paid", updatedAt: NOW });
-      return { verified: true, authenticationInfo: { newCounter: 2 } };
-    },
-  });
+  // เงินเข้าตรงช่องระหว่างตรวจรอบแรกกับ transaction ⇒ ต้องเห็นจากการอ่านใน transaction เท่านั้น
+  const realTx = mem.db.runTransaction;
+  mem.db.runTransaction = async (fn) => {
+    mem.store.set("companyPay/package-p1", { kind: "package", orderUUID: "p1", status: "paid", updatedAt: NOW });
+    return realTx(fn);
+  };
+  const r = await call("orderCancel", { kind: "package", orderUUID: "p1" }, ROOT);
   assert.equal(r.code, 409);
   assert.equal(r.body.error, "pay_received");
   assert.equal(mem.store.get("packageOrder/p1").status, "order");
   assert.ok(audits().some((a) => a.action === "order.cancel" && a.result === "rejected" && a.rejectCode === "pay_received"));
+});
+
+test("orderCancel: ส่งช่อง passkey (จอรุ่นก่อน) = 400 invalid_request · ใบยังเป็น order · ไม่ส่ง push · ไม่เขียน audit", async () => {
+  fresh({ ...baseSeed(), "packageOrder/p1": pkgOrder() });
+  const before = snapshot();
+  const r = await call("orderCancel", { kind: "package", orderUUID: "p1", passkey: oldPasskey }, ROOT);
+  assert.equal(r.code, 400);
+  assert.equal(r.body.error, "invalid_request");
+  assert.equal(calls.push.length, 0);
+  assert.deepEqual(new Map(mem.store), before);
 });
 
 // ── ของร่วม ─────────────────────────────────────────────────────────────────

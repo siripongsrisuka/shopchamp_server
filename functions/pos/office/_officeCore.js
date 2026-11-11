@@ -1,73 +1,12 @@
 // pos/office/_officeCore.js — ตรรกะล้วนของ shopchampoffice (DEV-0003 · Watcher Console) · ไม่แตะฐาน ไม่แตะเครือข่าย
 //
-// 2 ส่วน
-//   ① passkey (WebAuthn) — ยกแบบจากบ้านพี่น้อง (adminharness/_harnessCore.js) แล้วแก้ชื่อ
-//      origin allowlist (fail-closed) · challenge หมดอายุ 5 นาที · เพดานกุญแจ 3 ใบต่อคน
-//      เพิ่มกุญแจ: 0 ใบ = ผ่าน (คนใหม่ต้องเริ่มได้) · มีแล้ว = ต้องแตะกุญแจเดิมก่อน
-//   ② ทะเบียน watcher/roster — ด่านเดียวกับ shopchamp-center/gate/watcher-publish.js › parseRosterFile
+// ส่วน passkey (WebAuthn) ถอดออกแล้ว (Pack 2026-11-11 "ถอดเรื่องระบบกุญแจยืนยันออก")
+//   ทะเบียน watcher/roster — ด่านเดียวกับ shopchamp-center/gate/watcher-publish.js › parseRosterFile
 //      (uid รูป [A-Za-z0-9]{20,128} · ไม่ซ้ำ · level watcher|root · root ≤ 10 · รายชื่อว่างต้องยืนยัน)
 //      รูป doc ปลายทาง + rosterSha = สูตรเดียวกับ gate/ledger-sign.js › rosterManifest (เทส rosterCore.test.js เทียบกับตัวจริงใน center)
 "use strict";
 
 const crypto = require("crypto");
-
-// ── ① passkey ────────────────────────────────────────────────────────────────
-
-// ที่อยู่เว็บที่ทำพิธีได้ · rpID = hostname (กุญแจผูกกับโดเมน · ย้ายโดเมน = ลงกุญแจใหม่)
-//   5173 = vite dev · 4173 = vite preview · site จริง shopchampoffice (Pack สร้าง site เอง)
-const ALLOWED_ORIGINS = Object.freeze([
-  "http://localhost:5173",
-  "http://localhost:4173",
-  "https://shopchampoffice.web.app",
-  "https://shopchampoffice.firebaseapp.com",
-]);
-
-/** origin → {origin, rpID} · ไม่อยู่ในลิสต์ = null */
-function resolveRp(origin) {
-  if (typeof origin !== "string" || !ALLOWED_ORIGINS.includes(origin)) return null;
-  return { origin, rpID: new URL(origin).hostname };
-}
-
-const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-const MAX_PASSKEYS_PER_USER = 3;
-const RP_NAME = "shopchampoffice";
-
-/** challenge หมดอายุไหม · อ่านเวลาไม่ได้ = หมด (fail-closed) */
-function challengeExpired(createdAtMs, nowMs) {
-  if (typeof createdAtMs !== "number" || !Number.isFinite(createdAtMs)) return true;
-  return nowMs - createdAtMs > CHALLENGE_TTL_MS || createdAtMs - nowMs > 60 * 1000;
-}
-
-const isCountable = (n) => typeof n === "number" && Number.isInteger(n) && n >= 0;
-
-/** เพิ่มกุญแจใบใหม่ได้ไหม · {allow, code} */
-function decideEnroll({ count, max, hasAssertion } = {}) {
-  if (!isCountable(count) || !isCountable(max) || max < 1) return { allow: false, code: "bad_credential_count" };
-  if (count >= max) return { allow: false, code: "passkey_cap_reached" };
-  if (count >= 1 && !hasAssertion) return { allow: false, code: "enroll_needs_existing" };
-  if (count === 0 && hasAssertion) return { allow: false, code: "enroll_no_existing" };
-  return { allow: true, code: null };
-}
-
-const PASSKEY_MESSAGES = Object.freeze({
-  bad_origin: "ที่อยู่เว็บนี้ไม่อยู่ในรายการที่ยืนยันตัวได้ · เปิดจากที่อยู่หลักของ shopchampoffice",
-  passkey_cap_reached: `กุญแจครบ ${MAX_PASSKEYS_PER_USER} ใบแล้ว`,
-  enroll_needs_existing: "บัญชีนี้มีกุญแจแล้ว · ต้องแตะกุญแจเดิมก่อนเพิ่มใบใหม่",
-  enroll_no_existing: "บัญชีนี้ยังไม่มีกุญแจ · ไม่ต้องแนบผลแตะกุญแจเดิม",
-  bad_credential_count: "นับกุญแจของบัญชีนี้ไม่ได้ · ปฏิเสธไว้ก่อน",
-  no_credentials: "ยังไม่มี passkey · ลงทะเบียนเครื่องนี้ก่อน",
-  no_challenge: "ไม่มีพิธียืนยันตัวที่ค้างอยู่ · กดใหม่อีกครั้ง",
-  wrong_challenge_type: "พิธียืนยันตัวไม่ตรงกับคำสั่ง · กดใหม่อีกครั้ง",
-  challenge_expired: "ยืนยันตัวช้าเกิน 5 นาที · กดใหม่อีกครั้ง",
-  unknown_credential: "เครื่องนี้ยังไม่ได้ลงทะเบียนกับบัญชีนี้",
-  credential_wrong_user: "กุญแจนี้ไม่ใช่ของบัญชีนี้",
-  assertion_failed: "ยืนยันตัวไม่ผ่าน",
-  enroll_failed: "ลงทะเบียนกุญแจไม่ผ่าน",
-  credential_exists: "กุญแจนี้ลงทะเบียนไว้แล้ว",
-});
-
-const b64url = (buf) => Buffer.from(buf).toString("base64url");
-const fromB64url = (s) => Buffer.from(String(s || ""), "base64url");
 
 // ── ② ทะเบียน ────────────────────────────────────────────────────────────────
 
@@ -147,7 +86,5 @@ function msOf(t) {
 const isoOf = (t) => { const ms = msOf(t); return ms === null ? null : new Date(ms).toISOString(); };
 
 module.exports = {
-  ALLOWED_ORIGINS, resolveRp, CHALLENGE_TTL_MS, MAX_PASSKEYS_PER_USER, RP_NAME, challengeExpired, decideEnroll, PASSKEY_MESSAGES,
-  b64url, fromB64url,
   ROOT_MAX, ROSTER_MAX, UID_RE, checkPeople, rosterManifest, rosterDoc, diffRoster, msOf, isoOf,
 };

@@ -1,16 +1,13 @@
 // เทส shopchampoffice (DEV-0003 · Watcher Console) · ของที่ชุด case ของสัญญา office.*.yaml คุมไม่ได้
-//   ① พิธี WebAuthn ของจริง (@simplewebauthn/server ตัวจริง) กับกุญแจซอฟต์แวร์ในเทส: ลงทะเบียน → ยืนยัน → บันทึกทะเบียน
-//      challenge ใช้ครั้งเดียว (ยิงซ้ำ = no_challenge) · ไม่แตะนิ้ว (UV=0) = ไม่ผ่าน · หมดอายุ 5 นาที · กุญแจของคนอื่นใช้ไม่ได้
+//   ① ไม่มี passkey แล้ว (Pack ถอด 2026-11-11): whoami ไม่คืนกุญแจ · ส่งช่อง passkey มา = 400 invalid_request ไม่เขียนอะไร
 //   ② ฐานปลอมที่ "เขียนลงจริง" (ต่างจากของ harness ที่บันทึกแต่ไม่ลง) ⇒ เดินต่อหลายขั้นได้ · ตัวตัดสินทีมงานอ่านผลที่เขียนจริง
 //   ③ ด่านทะเบียนตรงกับ shopchamp-center/gate/watcher-publish.js ตัวจริง (ถ้ามี center ข้าง ๆ) · rosterSha สูตรเดียวกับ ledger-sign
 //   รัน: node --test pos/office/office.test.js · ❌ ไม่แตะ Firestore/Auth จริง (แทน functions/firebase ใน require.cache)
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
-const { isoCBOR } = require("@simplewebauthn/server/helpers");
 
 // ── ฐานปลอมที่เขียนลงจริง ─────────────────────────────────────────────────
 function memDb() {
@@ -71,12 +68,10 @@ function fresh(seed) {
   for (const [p, d] of Object.entries(seed || {})) mem.store.set(p, structuredClone(d));
   const fbAbs = require.resolve("../../firebase");
   require.cache[fbAbs] = { id: fbAbs, filename: fbAbs, loaded: true, exports: { db: mem.db, admin: {}, bucket: {} } };
-  for (const f of ["./_officeStore", "./whoami", "./roster", "./passkey"]) delete require.cache[require.resolve(f)];
-  M = { ...require("./whoami"), ...require("./roster"), ...require("./passkey") };
+  for (const f of ["./_officeStore", "./whoami", "./roster"]) delete require.cache[require.resolve(f)];
+  M = { ...require("./whoami"), ...require("./roster") };
 }
 
-const ORIGIN = "http://localhost:5173";
-const RPID = "localhost";
 const ROOT = "rootUid000000000000000001";
 const WATCH = "watchUid00000000000000001";
 const NEWBIE = "newUid0000000000000000001";
@@ -94,7 +89,7 @@ const rosterSeed = () => ({
   },
 });
 
-let clock = new Date("2026-11-10T03:00:00.000Z");
+const clock = new Date("2026-11-10T03:00:00.000Z");
 const deps = () => ({
   now: () => new Date(clock.getTime()),
   lookupUserByEmail: async (e) => Object.values(USERS).find((u) => u.email === e) || null,
@@ -107,156 +102,13 @@ async function call(name, body, uid, extraDeps) {
   return { code, body: out };
 }
 
-// ── กุญแจซอฟต์แวร์ (P-256 · attestation none) ────────────────────────────────
-function softKey() {
-  const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
-  const jwk = publicKey.export({ format: "jwk" });
-  const cose = isoCBOR.encode(new Map([[1, 2], [3, -7], [-1, 1], [-2, Buffer.from(jwk.x, "base64url")], [-3, Buffer.from(jwk.y, "base64url")]]));
-  const credId = crypto.randomBytes(16);
-  let counter = 0;
-  const rpHash = crypto.createHash("sha256").update(RPID).digest();
-  const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
-  const clientData = (type, challenge, origin) => Buffer.from(JSON.stringify({ type, challenge, origin: origin || ORIGIN, crossOrigin: false }));
-  return {
-    id: credId.toString("base64url"),
-    create(options, { uv = true } = {}) {
-      const flags = 0x41 | (uv ? 0x04 : 0);
-      const len = Buffer.alloc(2); len.writeUInt16BE(credId.length);
-      const authData = Buffer.concat([rpHash, Buffer.from([flags]), u32(counter), Buffer.alloc(16), len, credId, Buffer.from(cose)]);
-      const att = isoCBOR.encode(new Map([["fmt", "none"], ["attStmt", new Map()], ["authData", authData]]));
-      return {
-        id: credId.toString("base64url"), rawId: credId.toString("base64url"), type: "public-key", clientExtensionResults: {},
-        response: { clientDataJSON: clientData("webauthn.create", options.challenge).toString("base64url"), attestationObject: Buffer.from(att).toString("base64url"), transports: ["internal"] },
-      };
-    },
-    get(options, { uv = true, origin } = {}) {
-      counter += 1;
-      const authData = Buffer.concat([rpHash, Buffer.from([0x01 | (uv ? 0x04 : 0)]), u32(counter)]);
-      const cd = clientData("webauthn.get", options.challenge, origin);
-      const sig = crypto.sign("sha256", Buffer.concat([authData, crypto.createHash("sha256").update(cd).digest()]), privateKey);
-      return {
-        id: credId.toString("base64url"), rawId: credId.toString("base64url"), type: "public-key", clientExtensionResults: {},
-        response: { clientDataJSON: cd.toString("base64url"), authenticatorData: authData.toString("base64url"), signature: sig.toString("base64url") },
-      };
-    },
-  };
-}
-
-async function enroll(uid, key, opts) {
-  const o = await call("registerOptions", { origin: ORIGIN }, uid);
-  assert.equal(o.code, 200, JSON.stringify(o.body));
-  const v = await call("registerVerify", { origin: ORIGIN, attResp: key.create(o.body.options, opts), label: "MacBook" }, uid);
-  return v;
-}
-async function assertion(uid, key, opts) {
-  const o = await call("assertOptions", { origin: ORIGIN }, uid);
-  assert.equal(o.code, 200, JSON.stringify(o.body));
-  return { origin: ORIGIN, authResp: key.get(o.body.options, opts) };
-}
 const people = () => [{ uid: ROOT, name: "Root", level: "root" }, { uid: WATCH, name: "Watch", level: "watcher" }];
 
-// ── ① พิธีของจริง ─────────────────────────────────────────────────────────
-test("root ลงทะเบียนกุญแจใบแรก (แตะนิ้วครั้งเดียว) → เก็บ officePasskeys + audit · whoami เห็นกุญแจ", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  const v = await enroll(ROOT, key);
-  assert.equal(v.code, 200, JSON.stringify(v.body));
-  assert.equal(v.body.credentialId, key.id);
-  const cred = mem.store.get(`officePasskeys/${key.id}`);
-  assert.equal(cred.uid, ROOT);
-  assert.equal(cred.rpID, RPID);
-  assert.ok(!mem.store.has(`officePasskeyChallenges/${ROOT}`), "challenge ต้องถูกลบหลังใช้");
-  assert.ok([...mem.store.keys()].some((k) => k.startsWith("officeAudit/") && mem.store.get(k).action === "passkey.register"));
-  const w = await call("whoami", {}, ROOT);
-  assert.equal(w.body.staffRole, "root");
-  assert.equal(w.body.passkeys.length, 1);
-  assert.equal(w.body.passkeyMax, 3);
-});
-
-test("ลงทะเบียนโดยไม่แตะนิ้ว (UV=0) → 403 enroll_failed ไม่เก็บกุญแจ", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  const v = await enroll(ROOT, key, { uv: false });
-  assert.equal(v.code, 403);
-  assert.equal(v.body.error, "enroll_failed");
-  assert.ok(!mem.store.has(`officePasskeys/${key.id}`));
-});
-
-test("ยืนยันตัวผ่าน · ยิงลายเซ็นเดิมซ้ำ = 409 no_challenge (ใช้ครั้งเดียว) · counter เดินหน้า", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
-  const a = await assertion(ROOT, key);
-  const ok1 = await call("assertVerify", a, ROOT);
-  assert.equal(ok1.code, 200, JSON.stringify(ok1.body));
-  assert.equal(mem.store.get(`officePasskeys/${key.id}`).counter, 1);
-  const again = await call("assertVerify", a, ROOT);
-  assert.equal(again.code, 409);
-  assert.equal(again.body.error, "no_challenge");
-});
-
-test("ยืนยันตัวโดยไม่แตะนิ้ว (UV=0) → 403 assertion_failed (requireUserVerification)", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
-  const a = await assertion(ROOT, key, { uv: false });
-  const r = await call("assertVerify", a, ROOT);
-  assert.equal(r.code, 403);
-  assert.equal(r.body.error, "assertion_failed");
-});
-
-test("challenge เก่ากว่า 5 นาที → 409 challenge_expired · origin นอกลิสต์ → 400 bad_origin", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
-  const a = await assertion(ROOT, key);
-  clock = new Date(clock.getTime() + 5 * 60 * 1000 + 1000);
-  try {
-    const r = await call("assertVerify", a, ROOT);
-    assert.equal(r.code, 409);
-    assert.equal(r.body.error, "challenge_expired");
-  } finally { clock = new Date("2026-11-10T03:00:00.000Z"); }
-  const bad = await call("assertOptions", { origin: "https://evil.example" }, ROOT);
-  assert.equal(bad.code, 400);
-  assert.equal(bad.body.error, "bad_origin");
-});
-
-test("มีกุญแจแล้ว: เพิ่มใบที่ 2 โดยไม่แตะกุญแจเดิม = 409 enroll_needs_existing · แตะกุญแจเดิมแล้ว = ผ่าน", async () => {
-  fresh(rosterSeed());
-  const k1 = softKey();
-  await enroll(ROOT, k1);
-  const no = await call("registerOptions", { origin: ORIGIN }, ROOT);
-  assert.equal(no.code, 409);
-  assert.equal(no.body.error, "enroll_needs_existing");
-  const a = await assertion(ROOT, k1);
-  const k2 = softKey();
-  const o = await call("registerOptions", { origin: ORIGIN, authResp: a.authResp }, ROOT);
-  assert.equal(o.code, 200, JSON.stringify(o.body));
-  const v = await call("registerVerify", { origin: ORIGIN, attResp: k2.create(o.body.options), label: "iPhone" }, ROOT);
-  assert.equal(v.code, 200, JSON.stringify(v.body));
-});
-
-test("กุญแจของ root คนหนึ่ง ใช้ยืนยันตัวแทน root อีกคนไม่ได้ (credential_wrong_user)", async () => {
-  const seed = rosterSeed();
-  seed["watcher/roster"].rootUids = [ROOT, WATCH].sort();
-  fresh(seed);
-  const kRoot = softKey();
-  await enroll(ROOT, kRoot);
-  const kOther = softKey();
-  await enroll(WATCH, kOther);
-  const o = await call("assertOptions", { origin: ORIGIN }, WATCH);
-  const r = await call("assertVerify", { origin: ORIGIN, authResp: kRoot.get(o.body.options) }, WATCH);
-  assert.equal(r.code, 403);
-  assert.equal(r.body.error, "credential_wrong_user");
-});
-
 // ── ② ทะเบียน ──────────────────────────────────────────────────────────────
-test("root เพิ่ม watcher 1 คน + passkey → doc ทั้งชุด · log · audit · ตัวตัดสินทีมงานเห็นคนใหม่ทันที", async () => {
+test("root เพิ่ม watcher 1 คน → doc ทั้งชุด · log · audit · ตัวตัดสินทีมงานเห็นคนใหม่ทันที", async () => {
   fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
   const before = mem.store.get("watcher/roster").rosterSha;
-  const r = await call("rosterSave", { people: [...people(), { uid: NEWBIE, name: "New", level: "watcher" }], expectCount: 3, baseRosterSha: before, passkey: await assertion(ROOT, key) }, ROOT);
+  const r = await call("rosterSave", { people: [...people(), { uid: NEWBIE, name: "New", level: "watcher" }], expectCount: 3, baseRosterSha: before }, ROOT);
   assert.equal(r.code, 200, JSON.stringify(r.body));
   assert.deepEqual(r.body.added, [{ uid: NEWBIE, level: "watcher" }]);
   const doc = mem.store.get("watcher/roster");
@@ -269,7 +121,9 @@ test("root เพิ่ม watcher 1 คน + passkey → doc ทั้งชุ
   assert.ok([...mem.store.keys()].some((k) => k.startsWith("watcherRosterLog/")));
   const audit = [...mem.store.entries()].find(([k, v]) => k.startsWith("officeAudit/") && v.action === "watcher.roster.save");
   assert.equal(audit[1].result, "ok");
-  assert.equal(audit[1].passkeyCredentialId, key.id);
+  assert.equal(audit[1].passkeyCredentialId, null, "ไม่มีกุญแจแล้ว · ช่องเดิมเป็น null");
+  const log = [...mem.store.entries()].find(([k]) => k.startsWith("watcherRosterLog/"))[1];
+  assert.equal(log.passkeyCredentialId, undefined);
   // ดูผ่าน rosterGet ด้วย watcher (อ่านอย่างเดียว)
   const g = await call("rosterGet", {}, WATCH);
   assert.equal(g.code, 200);
@@ -279,9 +133,7 @@ test("root เพิ่ม watcher 1 คน + passkey → doc ทั้งชุ
 
 test("ทะเบียนถูกแก้ระหว่างทาง (baseRosterSha ไม่ตรง) → 409 roster_changed ไม่เขียน · audit rejected", async () => {
   fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
-  const r = await call("rosterSave", { people: people(), expectCount: 2, baseRosterSha: "b".repeat(64), passkey: await assertion(ROOT, key) }, ROOT);
+  const r = await call("rosterSave", { people: people(), expectCount: 2, baseRosterSha: "b".repeat(64) }, ROOT);
   assert.equal(r.code, 409);
   assert.equal(r.body.error, "roster_changed");
   assert.equal(mem.store.get("watcher/roster").via, "center-script");
@@ -290,13 +142,11 @@ test("ทะเบียนถูกแก้ระหว่างทาง (bas
 
 test("ถอดตัวเอง (รายชื่อว่าง + ติ๊กยืนยัน) → 200 · ไม่ติ๊ก → 400 empty_needs_confirm", async () => {
   fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
   const sha = mem.store.get("watcher/roster").rosterSha;
-  const no = await call("rosterSave", { people: [], expectCount: 0, baseRosterSha: sha, passkey: await assertion(ROOT, key) }, ROOT);
+  const no = await call("rosterSave", { people: [], expectCount: 0, baseRosterSha: sha }, ROOT);
   assert.equal(no.code, 400);
   assert.equal(no.body.error, "empty_needs_confirm");
-  const r = await call("rosterSave", { people: [], expectCount: 0, allowEmpty: true, baseRosterSha: sha, passkey: await assertion(ROOT, key) }, ROOT);
+  const r = await call("rosterSave", { people: [], expectCount: 0, allowEmpty: true, baseRosterSha: sha }, ROOT);
   assert.equal(r.code, 200, JSON.stringify(r.body));
   assert.equal(mem.store.get("watcher/roster").count, 0);
   assert.equal((await call("rosterGet", {}, ROOT)).body.error, "office_no_access");
@@ -304,29 +154,14 @@ test("ถอดตัวเอง (รายชื่อว่าง + ติ๊
 
 test("uid ที่ไม่มีใน Firebase Auth → 422 uid_not_found ไม่เขียน", async () => {
   fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
   const sha = mem.store.get("watcher/roster").rosterSha;
-  const r = await call("rosterSave", { people: [...people(), { uid: OUT, name: "?", level: "watcher" }], expectCount: 3, baseRosterSha: sha, passkey: await assertion(ROOT, key) }, ROOT);
+  const r = await call("rosterSave", { people: [...people(), { uid: OUT, name: "?", level: "watcher" }], expectCount: 3, baseRosterSha: sha }, ROOT);
   assert.equal(r.code, 422);
   assert.equal(r.body.error, "uid_not_found");
   assert.equal(mem.store.get("watcher/roster").count, 2);
 });
 
-test("บันทึกโดยลายเซ็นที่ใช้ไปแล้ว → 409 no_challenge (passkey ใบใหม่ทุกครั้ง)", async () => {
-  fresh(rosterSeed());
-  const key = softKey();
-  await enroll(ROOT, key);
-  const a = await assertion(ROOT, key);
-  const sha = mem.store.get("watcher/roster").rosterSha;
-  const first = await call("rosterSave", { people: people(), expectCount: 2, baseRosterSha: sha, passkey: a }, ROOT);
-  assert.equal(first.code, 200, JSON.stringify(first.body));
-  const again = await call("rosterSave", { people: people(), expectCount: 2, baseRosterSha: first.body.rosterSha, passkey: a }, ROOT);
-  assert.equal(again.code, 409);
-  assert.equal(again.body.error, "no_challenge");
-});
-
-test("ด่านคน: คนนอก whoami 200 none · rosterGet 403 office_no_access · watcher บันทึก 403 root_required · ทะเบียนไม่มี = ไม่มีใครเข้า", async () => {
+test("ด่านคน: คนนอก whoami 200 none · rosterGet 403 office_no_access · watcher หาอีเมล/บันทึก 403 root_required · ทะเบียนไม่มี = ไม่มีใครเข้า", async () => {
   fresh(rosterSeed());
   const w = await call("whoami", {}, OUT);
   assert.equal(w.code, 200);
@@ -335,7 +170,10 @@ test("ด่านคน: คนนอก whoami 200 none · rosterGet 403 offic
   assert.equal(w.body.passkeys, undefined);
   assert.equal((await call("rosterGet", {}, OUT)).body.error, "office_no_access");
   assert.equal((await call("resolveEmail", { email: "new@shopchamp.test" }, WATCH)).body.error, "root_required");
-  assert.equal((await call("assertOptions", { origin: ORIGIN }, WATCH)).body.error, "root_required");
+  const wsave = await call("rosterSave", { people: people(), expectCount: 2, baseRosterSha: "a".repeat(64) }, WATCH);
+  assert.equal(wsave.code, 403);
+  assert.equal(wsave.body.error, "root_required");
+  assert.equal(mem.store.get("watcher/roster").via, "center-script");
   fresh({});
   assert.equal((await call("whoami", {}, ROOT)).body.staffRole, "none");
   assert.equal((await call("rosterGet", {}, ROOT)).body.error, "office_no_access");
@@ -353,6 +191,26 @@ test("resolveEmail: เจอ = uid/ชื่อ/อยู่ในทะเบ�
   assert.equal(w.body.level, "watcher");
   const n = await call("resolveEmail", { email: "nobody@shopchamp.test" }, ROOT);
   assert.equal(n.code, 404);
+});
+
+// ── ① ไม่มี passkey แล้ว ───────────────────────────────────────────────────
+test("ไม่มี passkey: whoami ของ root ไม่มี passkeys/passkeyMax · rosterSave ที่ส่งช่อง passkey = 400 invalid_request ไม่เขียนอะไร", async () => {
+  fresh(rosterSeed());
+  const w = await call("whoami", {}, ROOT);
+  assert.equal(w.code, 200, JSON.stringify(w.body));
+  assert.equal(w.body.staffRole, "root");
+  assert.equal(w.body.canEdit, true);
+  assert.ok(!("passkeys" in w.body), "ไม่มีช่อง passkeys");
+  assert.ok(!("passkeyMax" in w.body), "ไม่มีช่อง passkeyMax");
+  const before = new Map([...mem.store.entries()].map(([k, v]) => [k, structuredClone(v)]));
+  const sha = mem.store.get("watcher/roster").rosterSha;
+  const r = await call("rosterSave", {
+    people: [...people(), { uid: NEWBIE, name: "New", level: "watcher" }], expectCount: 3, baseRosterSha: sha,
+    passkey: { origin: "http://localhost:5173", authResp: { id: "x", rawId: "x", type: "public-key", response: {}, clientExtensionResults: {} } },
+  }, ROOT);
+  assert.equal(r.code, 400);
+  assert.equal(r.body.error, "invalid_request");
+  assert.deepEqual(new Map(mem.store), before, "ไม่เขียนทะเบียน · log · audit");
 });
 
 // ── ③ ด่านเดียวกับ center ──────────────────────────────────────────────────
@@ -381,14 +239,4 @@ test("ด่านทะเบียน = watcher-publish.js › parseRosterFile
       assert.deepEqual(C.rosterDoc(mine.people, { [ROOT]: "r@x" }), WP.rosterDoc(theirs.people, { [ROOT]: "r@x" }));
     }
   }
-});
-
-test("เพิ่มกุญแจ: ตรรกะ decideEnroll (ศูนย์ใบ · เพดาน · นับไม่ได้)", () => {
-  const C = require("./_officeCore");
-  assert.deepEqual(C.decideEnroll({ count: 0, max: 3, hasAssertion: false }), { allow: true, code: null });
-  assert.equal(C.decideEnroll({ count: 0, max: 3, hasAssertion: true }).code, "enroll_no_existing");
-  assert.equal(C.decideEnroll({ count: 1, max: 3, hasAssertion: false }).code, "enroll_needs_existing");
-  assert.equal(C.decideEnroll({ count: 3, max: 3, hasAssertion: true }).code, "passkey_cap_reached");
-  assert.equal(C.decideEnroll({ count: undefined, max: 3 }).code, "bad_credential_count");
-  assert.equal(C.challengeExpired(undefined, Date.now()), true);
 });

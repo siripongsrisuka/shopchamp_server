@@ -130,17 +130,13 @@ const ROUTES = Object.freeze([
   { contract: "webLogin.approve", path: "/web-login/approve", fn: "pos", auth: "user", factory: true, load: () => require("./webLogin/webLogin").approve },
   { contract: "webLogin.consume", path: "/web-login/consume", fn: "pos", auth: "public", factory: true, load: () => require("./webLogin/webLogin").consume },
 
-  // DEV-0003 shopchampoffice · Watcher Console · auth user (คนในทะเบียน watcher/roster ตัดสินที่ handler · root เขียนได้ + passkey)
+  // DEV-0003 shopchampoffice · Watcher Console · auth user (คนในทะเบียน watcher/roster ตัดสินที่ handler · root เขียนได้ · passkey ถอดแล้ว 2026-11-11)
   { contract: "office.whoami", path: "/office/whoami", fn: "pos", auth: "user", factory: true, load: () => require("./office/whoami").whoami },
   { contract: "office.rosterGet", path: "/office/roster-get", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").rosterGet },
   { contract: "office.resolveEmail", path: "/office/resolve-email", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").resolveEmail },
   { contract: "office.rosterSave", path: "/office/roster-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/roster").rosterSave },
-  { contract: "office.passkeyRegisterOptions", path: "/office/passkey-register-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").registerOptions },
-  { contract: "office.passkeyRegisterVerify", path: "/office/passkey-register-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").registerVerify },
-  { contract: "office.passkeyAssertOptions", path: "/office/passkey-assert-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertOptions },
-  { contract: "office.passkeyAssertVerify", path: "/office/passkey-assert-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertVerify },
-  // DEV-0003 ชำระเงิน/อนุมัติใบสั่งซื้อบริษัท (U4) · root ทำได้ · อนุมัติ/ยกเลิก = passkey ทุกครั้ง · watcher ดูอย่างเดียว
-  // DEV-0003 หน้าผู้ใช้งาน (Pack สั่ง 2026-11-11 · ยังไม่มีการกำหนดสิทธิ์) · ขอเข้าใช้ = คนนอก · ดูรายชื่อ = ทีมงาน · เพิ่ม/เปลี่ยนสถานะ = root + passkey
+  // DEV-0003 ชำระเงิน/อนุมัติใบสั่งซื้อบริษัท (U4) · root ทำได้ (passkey ถอดแล้ว 2026-11-11) · watcher ดูอย่างเดียว
+  // DEV-0003 หน้าผู้ใช้งาน (Pack สั่ง 2026-11-11 · ยังไม่มีการกำหนดสิทธิ์) · ขอเข้าใช้ = คนนอก · ดูรายชื่อ = ทีมงาน · เพิ่ม/เปลี่ยนสถานะ = root
   { contract: "office.accessRequest", path: "/office/access-request", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").accessRequest },
   { contract: "office.userList", path: "/office/user-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").userList },
   { contract: "office.userAdd", path: "/office/user-add", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").userAdd },

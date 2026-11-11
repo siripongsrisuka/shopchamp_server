@@ -7,8 +7,8 @@
 // สิทธิ์ (ตัดสินที่ server จาก watcher/roster ทุกคำขอ · S.gate):
 //   payList      watcher + root (ดูอย่างเดียว) · คืน canAct = root
 //   payRecheck   root · ไม่ต้อง passkey — ทำสิ่งเดียวกับที่ตัวกวาดอัตโนมัติ (U3) ทำเองโดยไม่มีคน: ถามผู้ให้บริการ แล้วเปิดของเมื่อเงินเข้าครบเท่านั้น
-//   orderApprove root + passkey ใบใหม่ (แบบ rosterSave) · เปิดของจากสลิปด้วยตา = fulfill via 'manual'
-//   orderCancel  root + passkey ใบใหม่ · เฉพาะใบ status 'order' · เงินเข้าแล้ว (companyPay paid/problem) = ปัด
+//   orderApprove root · เปิดของจากสลิปด้วยตา = fulfill via 'manual' (ไม่ใช้ passkey แล้ว · Pack ถอด 2026-11-11)
+//   orderCancel  root · เฉพาะใบ status 'order' · เงินเข้าแล้ว (companyPay paid/problem) = ปัด
 //
 // ของที่อ่าน:
 //   ใบ 4 ชนิด packageOrder hardwareOrder imageOrder stockOrder ที่ status 'order' (แบบ care · where status == 'order' · ไม่ orderBy = ไม่ต้องมี index ผสม)
@@ -35,7 +35,6 @@
 "use strict";
 
 const { db } = require("../../firebase");
-const { PasskeyAssertion } = require("@shopchamp/schema");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, internalError } = require("../_shared/respond");
 const { readNow, depOr } = require("../_shared/deps");
@@ -101,11 +100,6 @@ function kindOf(v) {
 function uuidOf(v) {
   if (!validDocId(v)) bad("orderUUID ต้องเป็นรหัสใบที่ใช้เป็น doc id ได้");
   return v;
-}
-function passkeyOf(v) {
-  const r = PasskeyAssertion.safeParse(v);
-  if (!r.success) bad("passkey ต้องเป็นผลแตะนิ้ว {origin, authResp}");
-  return r.data;
 }
 
 function parseList(b) {
@@ -305,8 +299,8 @@ async function precheckOrder(kind, orderUUID) {
 
 const pushesOf = (p) => (Array.isArray(p) ? p : p ? [p] : []).filter(isObj);
 
-async function audit(now, actor, action, result, extra, credentialId) {
-  await S.auditOutside({ action, result, actor, passkeyCredentialId: credentialId || null, now, extra });
+async function audit(now, actor, action, result, extra) {
+  await S.auditOutside({ action, result, actor, now, extra });
 }
 
 // ── handler ────────────────────────────────────────────────────────────────
@@ -362,31 +356,28 @@ function orderApprove(deps) {
   return wrap(async (req, res) => {
     const caller = S.callerOf(req);
     const b = bodyOf(req);
-    const t = parseTarget(b, ["kind", "orderUUID", "passkey"]);
-    const pk = passkeyOf(b.passkey);
+    const t = parseTarget(b, ["kind", "orderUUID"]);
     const now = await readNow(deps);
     const g = await S.gate(req, "root");
     const actor = actorOf(g);
-    const tools = S.toolsOf(deps);
 
     const pre = await precheckOrder(t.kind, t.orderUUID);
     if (pre.status === "cancel") S.refuse(409, "order_cancelled", "ใบนี้ถูกยกเลิกแล้ว", t);
     if (KIND_SPEC[t.kind].opened.includes(pre.status)) S.refuse(409, "order_already_opened", "ใบนี้เปิดของไปแล้ว", { ...t, status: pre.status });
     if (pre.status !== "order") S.refuse(409, "order_status_unexpected", "สถานะใบนี้ไม่ใช่รอตรวจสอบ", { ...t, status: pre.status });
 
-    const { credentialId } = await S.verifyAssertion({ uid: caller.uid, origin: pk.origin, authResp: pk.authResp, now, tools });
     const run = depOr(deps, "fulfill", (a) => require("../company/_fulfill").fulfill(a));
     let r;
     try {
       r = await run({ kind: t.kind, orderUUID: t.orderUUID, via: "manual", actor: { uid: actor.uid, name: actor.name }, now });
     } catch (e) {
       const d = e && isObj(e.deny) ? e.deny : null;
-      await audit(now, actor, "order.approve", "rejected", { ...t, rejectCode: d ? d.error : "internal_error" }, credentialId);
+      await audit(now, actor, "order.approve", "rejected", { ...t, rejectCode: d ? d.error : "internal_error" });
       throw e;
     }
     if (!isObj(r)) throw new Error("fulfill คืนค่าผิดรูป");
     if (!r.duplicate) await notify(deps, pushesOf(r.push));
-    await audit(now, actor, "order.approve", "ok", { ...t, duplicate: r.duplicate === true, status: str(r.status) }, credentialId);
+    await audit(now, actor, "order.approve", "ok", { ...t, duplicate: r.duplicate === true, status: str(r.status) });
     return ok(res, {
       kind: t.kind,
       orderUUID: t.orderUUID,
@@ -402,14 +393,12 @@ function orderCancel(deps) {
   return wrap(async (req, res) => {
     const caller = S.callerOf(req);
     const b = bodyOf(req);
-    const t = parseTarget(b, ["kind", "orderUUID", "passkey", "silent"]);
-    const pk = passkeyOf(b.passkey);
+    const t = parseTarget(b, ["kind", "orderUUID", "silent"]);
     if (b.silent !== undefined && typeof b.silent !== "boolean") bad("silent ต้องเป็น true/false");
     const silent = b.silent === true;
     const now = await readNow(deps);
     const g = await S.gate(req, "root");
     const actor = actorOf(g);
-    const tools = S.toolsOf(deps);
     const spec = KIND_SPEC[t.kind];
 
     const pre = await precheckOrder(t.kind, t.orderUUID);
@@ -420,7 +409,6 @@ function orderCancel(deps) {
       S.refuse(409, "pay_received", "ใบนี้มีเงินเข้าแล้ว ยกเลิกไม่ได้ · กดตรวจกับผู้ให้บริการแทน", t);
     }
 
-    const { credentialId } = await S.verifyAssertion({ uid: caller.uid, origin: pk.origin, authResp: pk.authResp, now, tools });
     const orderRef = db.collection(spec.collection).doc(t.orderUUID);
     const out = await db.runTransaction(async (tx) => {
       const [snap, paySnap] = await Promise.all([tx.get(orderRef), tx.get(payRef)]);
@@ -430,12 +418,12 @@ function orderCancel(deps) {
       if (paySnap && paySnap.exists && ["paid", "problem"].includes(payView(payRef.id, paySnap.data()).status)) return { code: "pay_received", status: 409 };
       tx.update(orderRef, { status: "cancel", cancelId: actor.uid, cancelName: actor.name, cancelledAt: now, cancelVia: "office" });
       tx.create(S.auditRef(now, caller.uid, "order.cancel", t.orderUUID), S.auditEntry({
-        action: "order.cancel", result: "ok", actor, passkeyCredentialId: credentialId, now, extra: { ...t, silent },
+        action: "order.cancel", result: "ok", actor, now, extra: { ...t, silent },
       }));
       return { code: null, profileId: str(order.profileId) };
     });
     if (out.code) {
-      await audit(now, actor, "order.cancel", "rejected", { ...t, rejectCode: out.code }, credentialId);
+      await audit(now, actor, "order.cancel", "rejected", { ...t, rejectCode: out.code });
       S.refuse(out.status, out.code, CANCEL_REFUSE_TEXT[out.code], { ...t, ...(out.orderStatus !== undefined ? { status: out.orderStatus } : {}) });
     }
     if (!silent && out.profileId) await notify(deps, [{ to: { kind: "people", ids: [out.profileId] }, ...CANCEL_PUSH[t.kind] }]);

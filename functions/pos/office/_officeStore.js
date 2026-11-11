@@ -1,17 +1,14 @@
-// pos/office/_officeStore.js — ด่านคนเข้า office + ที่เก็บ passkey ของ shopchampoffice (DEV-0003)
+// pos/office/_officeStore.js — ด่านคนเข้า office + รอยการกระทำของ shopchampoffice (DEV-0003) · passkey ถอดออกแล้ว (Pack 2026-11-11)
 //
 // ด่านคน (openOffice): ตัดสินจาก watcher/roster ที่ server อ่านเองทุกคำขอ (pos/_shared/watcherRoster.js · ไม่มี cache)
 //   root = แก้ทะเบียนได้ · watcher = ดูอย่างเดียว · คนอื่น = 403 office_no_access · อ่านทะเบียนล้ม = 500 (ไม่เดา)
 //   client ไม่อ่าน doc ทะเบียนเอง (rules ปัด client ทุกคน)
 //
 // collections (Admin SDK เท่านั้น · rules ปัด client ทุกคน):
-//   officePasskeys/{credentialId}        {uid, publicKey(base64url), counter, transports, deviceType, backedUp, label, rpID, createdAt, lastUsedAt}
-//   officePasskeyChallenges/{uid}        {challenge, type:'register'|'auth', origin, createdAt} · 1 ใบต่อคน · ใช้ครั้งเดียว (อ่าน+ลบใน transaction)
-//   officeAudit/{id}                     รอยการกระทำ (สำเร็จ และถูกปัดหลังยืนยันตัวแล้ว)
+//   officeAudit/{id}                     รอยการกระทำ (สำเร็จ และถูกปัดระหว่างทาง)
+//   (officePasskeys · officePasskeyChallenges = ของเก่าก่อนถอด passkey · ไม่มีโค้ดอ่าน/เขียนแล้ว)
 //
-// ของจากข้างนอกผ่าน deps ได้ทุกตัว (harness/เทสส่งตัวปลอม · ไม่ส่ง = ตัวจริง โหลดตอนเรียกครั้งแรก):
-//   now · lookupUserByEmail · lookupUsers · generateRegistrationOptions · verifyRegistrationResponse
-//   generateAuthenticationOptions · verifyAuthenticationResponse (ของ @simplewebauthn/server)
+// ของจากข้างนอกผ่าน deps ได้ (harness/เทสส่งตัวปลอม · ไม่ส่ง = ตัวจริง): now · lookupUserByEmail · lookupUsers
 "use strict";
 
 const { db } = require("../../firebase");
@@ -20,18 +17,15 @@ const { depOr } = require("../_shared/deps");
 const WR = require("../_shared/watcherRoster");
 const C = require("./_officeCore");
 
-const PASSKEYS = "officePasskeys";
-const CHALLENGES = "officePasskeyChallenges";
 const AUDIT = "officeAudit";
 
 class Refusal extends Error {
   constructor(d) { super(d.error); this.deny = d; }
 }
-const refuse = (status, code, message, extra) => { throw new Refusal(deny(status, code, message || C.PASSKEY_MESSAGES[code], extra)); };
+const refuse = (status, code, message, extra) => { throw new Refusal(deny(status, code, message, extra)); };
 
 // ── ของจริง (โหลดช้า · harness ไม่แตะ) ─────────────────────────────────────
 const realAdmin = () => require("../../firebase").admin;
-const webauthn = () => require("@simplewebauthn/server");
 
 async function realLookupUserByEmail(email) {
   try {
@@ -57,10 +51,6 @@ function toolsOf(deps) {
   return {
     lookupUserByEmail: depOr(deps, "lookupUserByEmail", realLookupUserByEmail),
     lookupUsers: depOr(deps, "lookupUsers", realLookupUsers),
-    generateRegistrationOptions: depOr(deps, "generateRegistrationOptions", (o) => webauthn().generateRegistrationOptions(o)),
-    verifyRegistrationResponse: depOr(deps, "verifyRegistrationResponse", (o) => webauthn().verifyRegistrationResponse(o)),
-    generateAuthenticationOptions: depOr(deps, "generateAuthenticationOptions", (o) => webauthn().generateAuthenticationOptions(o)),
-    verifyAuthenticationResponse: depOr(deps, "verifyAuthenticationResponse", (o) => webauthn().verifyAuthenticationResponse(o)),
   };
 }
 
@@ -93,80 +83,6 @@ async function gate(req, need) {
   return { ...caller, role, roster: data };
 }
 
-// ── passkey ────────────────────────────────────────────────────────────────
-
-function rpOr400(origin) {
-  const rp = C.resolveRp(origin);
-  if (!rp) refuse(400, "bad_origin");
-  return rp;
-}
-
-async function listCredentials(uid) {
-  const snap = await db.collection(PASSKEYS).where("uid", "==", uid).get();
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() || {}) }));
-}
-
-function credShape(c) {
-  return { id: c.id, label: c.label || "", deviceType: c.deviceType || null, backedUp: c.backedUp === true, rpID: c.rpID || null, createdAt: C.isoOf(c.createdAt), lastUsedAt: C.isoOf(c.lastUsedAt) };
-}
-
-/** เก็บ challenge ใหม่ (ทับใบเก่า · 1 ใบต่อคน) */
-async function saveChallenge(uid, { challenge, type, origin }, now) {
-  await db.collection(CHALLENGES).doc(uid).set({ challenge, type, origin, createdAt: now });
-}
-
-/** อ่าน + ลบ challenge ใน transaction เดียว (ใช้ครั้งเดียว · กัน replay) · แล้วค่อยตรวจชนิด/อายุ/ที่อยู่เว็บ */
-async function consumeChallenge(uid, expectedType, origin, now) {
-  const ref = db.collection(CHALLENGES).doc(uid);
-  const data = await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return null;
-    tx.delete(ref);
-    return snap.data() || {};
-  });
-  if (!data) refuse(409, "no_challenge");
-  if (data.type !== expectedType) refuse(409, "wrong_challenge_type");
-  if (C.challengeExpired(C.msOf(data.createdAt), now.getTime())) refuse(409, "challenge_expired");
-  if (data.origin !== origin) refuse(400, "bad_origin");
-  if (typeof data.challenge !== "string" || !data.challenge) refuse(409, "no_challenge");
-  return data;
-}
-
-/**
- * verifyAssertion({uid, origin, authResp, now, tools}) → {credentialId}
- *   จุดเดียวของการตรวจลายนิ้ว (ทดสอบพิธี · ก่อนเพิ่มกุญแจใบที่ 2 · ก่อนบันทึกทะเบียน) · requireUserVerification
- */
-async function verifyAssertion({ uid, origin, authResp, now, tools }) {
-  const rp = rpOr400(origin);
-  const { challenge } = await consumeChallenge(uid, "auth", rp.origin, now);
-  const credId = authResp && typeof authResp.id === "string" ? authResp.id : "";
-  if (!credId) refuse(400, "assertion_failed");
-  const credRef = db.collection(PASSKEYS).doc(credId);
-  const credSnap = await credRef.get();
-  if (!credSnap.exists) refuse(403, "unknown_credential");
-  const cred = credSnap.data() || {};
-  if (cred.uid !== uid) refuse(403, "credential_wrong_user");
-  if (cred.rpID && cred.rpID !== rp.rpID) refuse(403, "unknown_credential", "กุญแจนี้ลงทะเบียนไว้กับที่อยู่เว็บอื่น · ลงทะเบียนบนที่อยู่นี้ก่อน");
-  let v;
-  try {
-    v = await tools.verifyAuthenticationResponse({
-      response: authResp,
-      expectedChallenge: challenge,
-      expectedOrigin: rp.origin,
-      expectedRPID: rp.rpID,
-      credential: { id: credId, publicKey: C.fromB64url(cred.publicKey), counter: Number(cred.counter) || 0, transports: Array.isArray(cred.transports) ? cred.transports : [] },
-      requireUserVerification: true,
-    });
-  } catch (e) {
-    try { console.warn("office passkey verify throw", e && e.message); } catch (_) { /* */ }
-    refuse(403, "assertion_failed");
-  }
-  if (!v || v.verified !== true) refuse(403, "assertion_failed");
-  const newCounter = v.authenticationInfo && Number.isInteger(v.authenticationInfo.newCounter) ? v.authenticationInfo.newCounter : Number(cred.counter) || 0;
-  await credRef.update({ counter: newCounter, lastUsedAt: now });
-  return { credentialId: credId };
-}
-
 // ── audit ──────────────────────────────────────────────────────────────────
 
 const stamp = (now) => now.toISOString().replace(/[:.]/g, "-");
@@ -186,6 +102,5 @@ async function auditOutside(args) {
 }
 
 module.exports = {
-  PASSKEYS, CHALLENGES, AUDIT, Refusal, refuse, toolsOf, callerOf, gate, readRole, rpOr400,
-  listCredentials, credShape, saveChallenge, consumeChallenge, verifyAssertion, auditRef, auditEntry, auditOutside, stamp,
+  AUDIT, Refusal, refuse, toolsOf, callerOf, gate, readRole, auditRef, auditEntry, auditOutside, stamp,
 };

@@ -9,14 +9,14 @@
 //
 // accessRequest  คนที่ login แล้วแต่ไม่อยู่ในทะเบียนทีมงาน → สร้างคำขอ pending (มีอยู่แล้ว = ไม่เขียนซ้ำ) · ถูกปิด/ปฏิเสธ = 409 access_closed
 // userList       ทีมงาน (watcher/root) · แถว = officeUsers ∪ ทีมงานใน roster · ตัวนับ 5 ช่อง
-// userAdd        root + passkey · อีเมล → หาใน Firebase Auth → active ทันที
-// userSetStatus  root + passkey · approve pending→active · reject pending→rejected · disable active→disabled · enable disabled|rejected→active
-//   ทีมงานใน roster = 409 in_roster (จัดการที่ Watcher Console) · สถานะเปลี่ยนระหว่างแตะนิ้ว = 409 status_changed
-// audit: officeAudit ทุกการกด (สำเร็จ ใน transaction เดียวกับการเขียน · ถูกปัดหลังแตะนิ้วแล้ว = นอก transaction)
+// userAdd        root · อีเมล → หาใน Firebase Auth → active ทันที (จอไม่ได้ใช้แล้ว · คนใหม่มาทางขอเข้าใช้)
+// userSetStatus  root · approve pending→active · reject pending→rejected · disable active→disabled · enable disabled|rejected→active
+//   ทีมงานใน roster = 409 in_roster (จัดการที่ Watcher Console) · สถานะเปลี่ยนระหว่างกด = 409 status_changed
+// ไม่ใช้ passkey แล้ว (Pack ถอด 2026-11-11)
+// audit: officeAudit ทุกการกด (สำเร็จ ใน transaction เดียวกับการเขียน · ถูกปัดใน transaction = นอก transaction)
 "use strict";
 
 const { db } = require("../../firebase");
-const { PasskeyAssertion } = require("@shopchamp/schema");
 const { ok, sendDeny, internalError } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
 const WR = require("../_shared/watcherRoster");
@@ -50,11 +50,6 @@ function bodyOf(req) {
 function onlyKeys(b, allowed) {
   const extra = Object.keys(b).filter((k) => !allowed.includes(k));
   if (extra.length) bad(`ไม่รับช่อง: ${extra.join(", ")}`);
-}
-function passkeyOf(v) {
-  const r = PasskeyAssertion.safeParse(v);
-  if (!r.success) bad("passkey ต้องเป็นผลแตะนิ้ว {origin, authResp}");
-  return r.data;
 }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function emailOf(v) {
@@ -143,8 +138,8 @@ function buildRows(roster, docs) {
   return { rows: list, counts };
 }
 
-async function audit(now, actor, action, result, extra, credentialId) {
-  await S.auditOutside({ action, result, actor, passkeyCredentialId: credentialId || null, now, extra });
+async function audit(now, actor, action, result, extra) {
+  await S.auditOutside({ action, result, actor, now, extra });
 }
 
 // ── handler ────────────────────────────────────────────────────────────────
@@ -190,15 +185,13 @@ function userAdd(deps) {
   return wrap(async (req, res) => {
     const caller = S.callerOf(req);
     const b = bodyOf(req);
-    onlyKeys(b, ["email", "passkey"]);
+    onlyKeys(b, ["email"]);
     const email = emailOf(b.email);
-    const pk = passkeyOf(b.passkey);
     const now = await readNow(deps);
     const g = await S.gate(req, "root");
     const actor = actorOf(g);
     const tools = S.toolsOf(deps);
 
-    // ด่านก่อนแตะนิ้ว (ไม่เสียนิ้วกับคนที่เพิ่มไม่ได้)
     const u = await tools.lookupUserByEmail(email);
     if (!u || typeof u.uid !== "string" || !u.uid) S.refuse(404, "user_not_found", "ไม่พบบัญชีที่ใช้อีเมลนี้ · ให้เจ้าตัว login office ด้วย Google ครั้งแรกก่อน หรือสมัครแอป Shopchamp ด้วยอีเมลนี้");
     if (!C.UID_RE.test(u.uid)) S.refuse(422, "uid_unsupported", "บัญชีนี้มี uid รูปที่ทะเบียนรับไม่ได้");
@@ -206,7 +199,6 @@ function userAdd(deps) {
     const pre = await usersRef().doc(u.uid).get();
     if (pre && pre.exists && str((pre.data() || {}).status) === STATUS.ACTIVE) S.refuse(409, "already_active", "คนนี้ใช้งานได้อยู่แล้ว");
 
-    const { credentialId } = await S.verifyAssertion({ uid: caller.uid, origin: pk.origin, authResp: pk.authResp, now, tools });
     const ref = usersRef().doc(u.uid);
     const decidedBy = { uid: actor.uid, email: actor.email, name: actor.name };
     const out = await db.runTransaction(async (tx) => {
@@ -220,12 +212,12 @@ function userAdd(deps) {
       if (live) tx.update(ref, { ...base, prevStatus: str(live.status) });
       else tx.create(ref, { ...base, photoURL: null, addedVia: "root", requestedAt: null });
       tx.create(S.auditRef(now, caller.uid, "user.add", u.uid), S.auditEntry({
-        action: "user.add", result: "ok", actor, passkeyCredentialId: credentialId, now, extra: { targetUid: u.uid, email, prevStatus: live ? str(live.status) : null },
+        action: "user.add", result: "ok", actor, now, extra: { targetUid: u.uid, email, prevStatus: live ? str(live.status) : null },
       }));
       return { created: !live };
     });
     if (out.already) {
-      await audit(now, actor, "user.add", "rejected", { targetUid: u.uid, rejectCode: "already_active" }, credentialId);
+      await audit(now, actor, "user.add", "rejected", { targetUid: u.uid, rejectCode: "already_active" });
       S.refuse(409, "already_active", "คนนี้ใช้งานได้อยู่แล้ว");
     }
     return ok(res, { uid: u.uid, email: str(u.email).toLowerCase() || email, name: str(u.displayName), status: STATUS.ACTIVE, created: out.created });
@@ -236,14 +228,12 @@ function userSetStatus(deps) {
   return wrap(async (req, res) => {
     const caller = S.callerOf(req);
     const b = bodyOf(req);
-    onlyKeys(b, ["uid", "action", "passkey"]);
+    onlyKeys(b, ["uid", "action"]);
     const uid = uidOf(b.uid);
     const action = actionOf(b.action);
-    const pk = passkeyOf(b.passkey);
     const now = await readNow(deps);
     const g = await S.gate(req, "root");
     const actor = actorOf(g);
-    const tools = S.toolsOf(deps);
     const t = TRANSITIONS[action];
 
     if (WR.parseRoster(g.roster).uids.has(uid)) S.refuse(409, "in_roster", "คนนี้เป็นทีมงาน (watcher/root) · ถอดหรือเปลี่ยนที่ Watcher Console");
@@ -252,7 +242,6 @@ function userSetStatus(deps) {
     const preStatus = str((pre.data() || {}).status);
     if (!t.from.includes(preStatus)) S.refuse(409, "bad_transition", `สถานะ ${preStatus || "-"} ทำ ${action} ไม่ได้`, { status: preStatus });
 
-    const { credentialId } = await S.verifyAssertion({ uid: caller.uid, origin: pk.origin, authResp: pk.authResp, now, tools });
     const ref = usersRef().doc(uid);
     const out = await db.runTransaction(async (tx) => {
       const snap = await tx.get(ref);
@@ -260,13 +249,13 @@ function userSetStatus(deps) {
       if (!live || str(live.status) !== preStatus) return { changed: true, status: live ? str(live.status) : null };
       tx.update(ref, { status: t.to, prevStatus: preStatus, decidedAt: now, decidedBy: { uid: actor.uid, email: actor.email, name: actor.name }, updatedAt: now });
       tx.create(S.auditRef(now, caller.uid, `user.${action}`, uid), S.auditEntry({
-        action: `user.${action}`, result: "ok", actor, passkeyCredentialId: credentialId, now, extra: { targetUid: uid, from: preStatus, to: t.to },
+        action: `user.${action}`, result: "ok", actor, now, extra: { targetUid: uid, from: preStatus, to: t.to },
       }));
       return { changed: false };
     });
     if (out.changed) {
-      await audit(now, actor, `user.${action}`, "rejected", { targetUid: uid, rejectCode: "status_changed" }, credentialId);
-      S.refuse(409, "status_changed", "สถานะของผู้ใช้นี้เปลี่ยนระหว่างแตะนิ้ว · โหลดใหม่แล้วลองอีกครั้ง", { status: out.status });
+      await audit(now, actor, `user.${action}`, "rejected", { targetUid: uid, rejectCode: "status_changed" });
+      S.refuse(409, "status_changed", "สถานะของผู้ใช้นี้เปลี่ยนระหว่างกด · โหลดใหม่แล้วลองอีกครั้ง", { status: out.status });
     }
     return ok(res, { uid, status: t.to });
   });

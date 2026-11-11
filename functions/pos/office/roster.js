@@ -6,7 +6,7 @@
 //
 // rosterGet     watcher + root · คืนรายชื่อตามที่ server ตัดสินจริง (ระดับจาก rootUids · ชื่อ/อีเมลจาก people)
 // resolveEmail  root · ยังไม่มีทะเบียนพนักงานบริษัท ⇒ root พิมพ์อีเมล → หาใน Firebase Auth → คืน uid/ชื่อให้ยืนยัน (ไม่เขียนอะไร)
-// rosterSave    root + passkey ใบใหม่ทุกครั้ง · ส่งทั้งชุด แทนที่ทั้ง doc (การถอดถึงปลายทางแน่นอน)
+// rosterSave    root · ส่งทั้งชุด แทนที่ทั้ง doc (การถอดถึงปลายทางแน่นอน) · ไม่ใช้ passkey แล้ว (Pack ถอด 2026-11-11)
 //   ลำดับ: token → รูปคำขอ → root → ด่านเดียวกับ watcher-publish.js (uid · ซ้ำ · level · root ≤ 10) → expectCount → ว่างต้อง allowEmpty
 //          → ตรวจลายนิ้ว (กิน challenge) → uid ต้องมีใน Firebase Auth
 //          (ถอด/ลดระดับตัวเองได้ · จอเตือนแรง · ไม่ปัดที่ server เพราะรายชื่อว่างที่ติ๊กยืนยันต้องบันทึกได้ — คำถาม Pack ข้อ 3)
@@ -94,17 +94,15 @@ function rosterSave(deps) {
     await S.gate(req, "root");
     const tools = S.toolsOf(deps);
 
-    // ด่านล้วน (ก่อนแตะนิ้ว · ไม่กิน challenge) — ตัวเดียวกับ watcher-publish.js
+    // ด่านล้วน — ตัวเดียวกับ watcher-publish.js
     const checked = C.checkPeople(input.people);
     if (checked.problems.length) S.refuse(400, checked.problems[0].code, checked.problems[0].message, { problems: checked.problems });
     if (input.expectCount !== checked.people.length) S.refuse(400, "count_mismatch", `จำนวนที่จอเห็น (${input.expectCount}) ไม่ตรงรายชื่อที่ส่ง (${checked.people.length})`);
     if (!checked.people.length && input.allowEmpty !== true) S.refuse(400, "empty_needs_confirm", "รายชื่อว่าง = ไม่มีทีมงานเลย · ต้องติ๊กยืนยัน");
 
-    // ลายนิ้ว (ใช้ครั้งเดียว)
-    const { credentialId } = await S.verifyAssertion({ uid: caller.uid, origin: input.passkey.origin, authResp: input.passkey.authResp, now, tools });
     const actor = caller;
     const reject = async (status, code, message, extra) => {
-      await S.auditOutside({ action: "watcher.roster.save", result: "rejected", actor, passkeyCredentialId: credentialId, now, extra: { rejectCode: code } });
+      await S.auditOutside({ action: "watcher.roster.save", result: "rejected", actor, now, extra: { rejectCode: code } });
       S.refuse(status, code, message, extra);
     };
 
@@ -126,12 +124,12 @@ function rosterSave(deps) {
       const d = C.diffRoster(live, next);
       tx.set(ref, next);
       tx.create(db.collection(ROSTER_LOG).doc(logId), {
-        by: next.publishedBy, byUid: caller.uid, via: "office", rosterSha: next.rosterSha, passkeyCredentialId: credentialId, at: now,
+        by: next.publishedBy, byUid: caller.uid, via: "office", rosterSha: next.rosterSha, at: now,
         prev: live ? { uids: live.uids || [], rootUids: live.rootUids || [], rosterSha: liveSha } : null,
         next: { uids: next.uids, rootUids: next.rootUids }, added: d.added, removed: d.removed, levelChanged: d.levelChanged,
       });
       tx.create(S.auditRef(now, caller.uid, "watcher.roster.save"), S.auditEntry({
-        action: "watcher.roster.save", result: "ok", actor, passkeyCredentialId: credentialId, now,
+        action: "watcher.roster.save", result: "ok", actor, now,
         extra: { count: next.count, rootCount: next.rootCount, rosterSha: next.rosterSha, added: d.added, removed: d.removed, levelChanged: d.levelChanged, rosterLogId: logId },
       }));
       return { changed: false, d };
