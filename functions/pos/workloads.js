@@ -21,12 +21,24 @@ const ALL = "*";
 /** secret ของ posxpay บริษัท (DEV-0003 U2/U3) · ชื่อเดียวกับที่ company/_payCheck.js อ่าน · ผูกทั้ง pos (payRequest/payStatus) และ companyPaySweep */
 const COMPANY_PAY_SECRETS = Object.freeze(["COMPANY_POSXPAY_TOKEN", "COMPANY_POSXPAY_SERIAL"]);
 
+/** secret ของช่องทาง ScanGo (ร้าน Shopchamp บน ScanGo · lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม)
+ *   กุญแจร่วม 2 ทิศ: ScanGo ยิงเข้า /scango/* (scango/_partnerAuth.js) · Shopchamp ยิงออก /provider/shopchamp/* (scango/_outbound.js)
+ *   ค่าเดียวกับ SHOPCHAMP_PLATFORM_KEY ฝั่ง scango_server · ❌ ห้ามซ้ำกุญแจกลางของพี่น้อง (ฝั่งโน้นตอบ 503 platform_key_shared)
+ *   ⚠️ Pack ยังไม่สร้าง (2026-11-11) ⇒ `firebase functions:secrets:set SCANGO_SHOPCHAMP_KEY --project shopcham-24b0b` ก่อน deploy pos/scangoOutboxSweep
+ *   SCANGO_BASE_URL (ฐาน URL ของ function `scango` ฝั่ง ScanGo · ไม่ใช่ความลับ) = env ธรรมดา · บ้านนี้ไม่เคยมี env ธรรมดามาก่อน (ค่าทุกตัวที่ผ่านมาเป็น secret · ดู GATEWAY_CONFIG)
+ *     ทางที่ใช้: Pack สร้าง `functions/.env.shopcham-24b0b` (dotenv ของ firebase-functions v2 · โหลดตอน deploy · ใช้กับทุก function ใน codebase) ด้วยบรรทัด
+ *       SCANGO_BASE_URL=https://asia-southeast1-scango-53aeb.cloudfunctions.net/scango   (project scango-53aeb · gen2 onRequest ชื่อ scango · Pack ยืนยันค่าจริงก่อน)
+ *     agent สร้างไฟล์ .env* ไม่ได้ (hook no-credential ปัด) · `.env` เปล่าถูก gitignore · `.env.<project>` ไม่ถูก ignore ⇒ commit ได้ (ไม่มีของลับ)
+ *     ไม่ตั้ง = _outbound ตอบ not_configured (ไม่ยิง ไม่ลง outbox · log warn) · ❌ ไม่ใส่เป็น secret: ค่าไม่ลับ และ secret ที่ยังไม่สร้างทำให้ deploy ล้ม */
+const SCANGO_SECRETS = Object.freeze(["SCANGO_SHOPCHAMP_KEY"]);
+
 const FUNCTION_CONFIG = Object.freeze({
   // pos ผูก GATEWAY_CRED_ENC_KEY (Pack สร้าง secret 2026-11-07 · ใช้กับที่ลับ token LINE `shop.lineSettings`)
   //   + ONESIGNAL_REST_API_KEY (Pack สร้าง 2026-11-07 · ท่อ OneSignal ช่วงเปลี่ยนผ่าน `_shared/push/onesignalPipe.js` · ลบพร้อมท่อ)
   //   + COMPANY_POSXPAY_TOKEN / COMPANY_POSXPAY_SERIAL (DEV-0003 U2 · token/serial บริษัทของ posxpay · ⚠️ Pack ยังไม่สร้าง (2026-11-10) ⇒ ต้อง
   //     `firebase functions:secrets:set` ทั้ง 2 ตัวก่อน deploy pos ไม่งั้น deploy ล้ม · ย้าย merchant = เปลี่ยนค่า secret อย่างเดียว)
-  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS]) }),
+  //   + SCANGO_SHOPCHAMP_KEY (ScanGo · ดู SCANGO_SECRETS ข้างบน)
+  [FN.POS]: Object.freeze({ memory: "1GiB", concurrency: 40, maxInstances: 100, timeoutSeconds: 60, secrets: Object.freeze(["GATEWAY_CRED_ENC_KEY", "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS, ...SCANGO_SECRETS]) }),
   [FN.HEAVY]: Object.freeze({ memory: "2GiB", concurrency: 1, maxInstances: 30, timeoutSeconds: 300 }),
 });
 
@@ -73,4 +85,15 @@ const SWEEP_FN = "companyPaySweep";
 const SWEEP_SCHEDULE = Object.freeze({ schedule: "every 5 minutes", timeZone: "Asia/Bangkok", retryCount: 0 });
 const SWEEP_CONFIG = Object.freeze({ memory: "256MiB", timeoutSeconds: 120, maxInstances: 1, secrets: COMPANY_PAY_SECRETS });
 
-module.exports = { REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, COMPANY_PAY_SECRETS, SWEEP_FN, SWEEP_SCHEDULE, SWEEP_CONFIG, gateFor, segmentOf, segmentMap };
+// scangoOutboxSweep = งานตั้งเวลา (ScanGo · pos/scango/outboxSweep.js) ไม่ใช่ HTTP · ไม่ผ่าน gateFor
+//   ทุก 1 นาที Asia/Bangkok · 256MiB · timeout 120 วิ (outbox ≤200 แถว × ยิง 5 วิ ขนาน 20 · บิลค้าง ≤50 ใบ) · maxInstances 1 (กันรอบซ้อน · lease nextAttemptAt เป็นชั้นสอง)
+//   retryCount 0: รอบถัดไปอีก 1 นาทีเก็บตกเอง · secret: SCANGO_SHOPCHAMP_KEY (ยิง ScanGo) + ONESIGNAL_REST_API_KEY (ปิดบิลค้างเดิน sale.create → push สต๊อกวิกฤตผ่านท่อ OneSignal
+//   `_shared/push/onesignalPipe.js` · FCM ใช้ Admin SDK ไม่ต้องมี secret · ไม่มีกุญแจ = ท่อ OneSignal ข้ามเอง ไม่พัง)
+const SCANGO_SWEEP_FN = "scangoOutboxSweep";
+const SCANGO_SWEEP_SCHEDULE = Object.freeze({ schedule: "every 1 minutes", timeZone: "Asia/Bangkok", retryCount: 0 });
+const SCANGO_SWEEP_CONFIG = Object.freeze({ memory: "256MiB", timeoutSeconds: 120, maxInstances: 1, secrets: Object.freeze([...SCANGO_SECRETS, "ONESIGNAL_REST_API_KEY"]) });
+
+module.exports = {
+  REGION, FN, ALL, FUNCTION_CONFIG, GATEWAY_FN, GATEWAY_CONFIG, COMPANY_PAY_SECRETS, SWEEP_FN, SWEEP_SCHEDULE, SWEEP_CONFIG,
+  SCANGO_SECRETS, SCANGO_SWEEP_FN, SCANGO_SWEEP_SCHEDULE, SCANGO_SWEEP_CONFIG, gateFor, segmentOf, segmentMap,
+};

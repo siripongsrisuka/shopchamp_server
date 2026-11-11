@@ -9,6 +9,8 @@
 //   auth      'shop'    = checkIfAuthenticated → requireShopAccess (ร้านจาก body.shopId)
 //             'user'    = checkIfAuthenticated อย่างเดียว (ยังไม่รู้ร้าน · profile.loading หาเองจาก profile)
 //             'public'  = ไม่มีด่านตัวตน · ต้องมีชื่ออยู่ใน public-routes.js ด้วย (ตอนนี้ 1 แถว: /web-login/consume)
+//             'partner' = เซิร์ฟเวอร์คู่ค้า (ScanGo) ไม่ใช่คนในร้าน · ด่าน = กุญแจร่วม header x-scango-platform-key เทียบ secret
+//                         SCANGO_SHOPCHAMP_KEY (scango/_partnerAuth.js · ไม่ตั้ง = 503 · ไม่มี/ผิด = 401 no_auth) · ร้านจาก body.externalId
 //   access    (เฉพาะ auth 'shop') ไม่ใส่ = requireShopAccess ปกติ · "reportRead" = requireReportReadAccess (legacy owner-web parity
 //             ชั่วคราว · ให้ได้เฉพาะ contract report.* · app.js ปัดตอนสร้าง app ถ้าผูกที่อื่น)
 //   load      คืน handler · factory = ต้องเรียกด้วย deps ก่อน (สัญญา display.factory: true)
@@ -165,6 +167,23 @@ const ROUTES = Object.freeze([
   // แอปใหม่ 5.00 อ่าน/บันทึกประกาศ · segment announcement = pos · แอปเก่า 3.12 ไม่เรียก
   { contract: "announcement.feed", path: "/announcement/feed", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/feed").feed },
   { contract: "announcement.seen", path: "/announcement/seen", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/seen").seen },
+  // ── ScanGo (ร้าน Shopchamp ขายบนแอป ScanGo · แบบงาน lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม)
+  // ขาเข้าจากเซิร์ฟเวอร์ ScanGo (auth 'partner' = กุญแจร่วม header x-scango-platform-key · scango/_partnerAuth.js · ร้านมาจาก body.externalId)
+  { contract: "scango.menu", path: "/scango/menu", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/menu").menu },
+  { contract: "scango.deliveryQuote", path: "/scango/delivery/quote", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/deliveryQuote").deliveryQuote },
+  { contract: "scango.orderCreate", path: "/scango/order/create", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderCreate").orderCreate },
+  { contract: "scango.orderCancel", path: "/scango/order/cancel", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderCancel").orderCancel },
+  { contract: "scango.orderRemind", path: "/scango/order/remind", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderRemind").orderRemind },
+  { contract: "scango.orderState", path: "/scango/order/state", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderState").orderState },
+  { contract: "scango.orderDelivery", path: "/scango/order/delivery", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderDelivery").orderDelivery },
+  // ฝั่งแอปร้าน (auth 'shop' · path ขึ้นต้น /scango/shop/ แยกจากขาเข้าของ ScanGo)
+  { contract: "scango.settingsGet", path: "/scango/shop/settings-get", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsGet").settingsGet },
+  { contract: "scango.settingsSave", path: "/scango/shop/settings-save", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsSave").settingsSave },
+  // รายการสินค้าทั้งก้อน ≤1000 ตัว (ตอบ 409 too_many_products ได้ถึง 5000) ⇒ เกิน 100kb ได้
+  { contract: "scango.productsSet", path: "/scango/shop/products-set", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/productsSet").productsSet, bodyLimit: "300kb" },
+  { contract: "scango.productSearch", path: "/scango/shop/product-search", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/productSearch").productSearch },
+  { contract: "scango.orderList", path: "/scango/shop/order-list", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderList").orderList },
+  { contract: "scango.orderAction", path: "/scango/shop/order-action", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderAction").orderAction },
 ]);
 
 module.exports = { ROUTES };

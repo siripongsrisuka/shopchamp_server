@@ -15,6 +15,7 @@ const { ROUTES } = require("./routes");
 const { PUBLIC_ROUTES } = require("./public-routes");
 const { FUNCTION_CONFIG, FN } = require("./workloads");
 const { makeCheckIfAuthenticated } = require("./_shared/auth");
+const { requirePartnerKey } = require("./scango/_partnerAuth");
 
 const CENTER_API = path.resolve(__dirname, "../../../shopchamp-center/api");
 
@@ -39,10 +40,14 @@ async function post(base, p, body, headers = {}) {
   return { status: r.status, body: json, text };
 }
 
-/** ยิงทุก route ที่ไม่ใช่ public โดยไม่มี token · คืนรายการที่ไม่ได้ 401 no_auth (ว่าง = ผ่าน) */
+// ด่านคู่ค้าปลอม: กุญแจ "k-partner" ผ่าน (ไม่อ่าน process.env · เทสด่านจริงอยู่ที่ scango/_partnerAuth.test.js)
+const PARTNER_KEY = "k-partner";
+const partnerGate = requirePartnerKey({ SCANGO_SHOPCHAMP_KEY: PARTNER_KEY });
+
+/** ยิงทุก route ที่ไม่ใช่ public/partner โดยไม่มี token · คืนรายการที่ไม่ได้ 401 no_auth (ว่าง = ผ่าน) · partner ตรวจแยกที่เทสของตัวเอง (ไม่มี token อยู่แล้ว) */
 async function unguarded(fnName, opts = {}) {
-  const app = makeApp({ fnName, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, ...opts });
-  const routes = (opts.routes || ROUTES).filter((r) => (r.fn === fnName || r.fn === "*") && r.auth !== "public");
+  const app = makeApp({ fnName, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: partnerGate, ...opts });
+  const routes = (opts.routes || ROUTES).filter((r) => (r.fn === fnName || r.fn === "*") && r.auth !== "public" && r.auth !== "partner");
   const bad = [];
   await serve(app, async (base) => {
     for (const r of routes) {
@@ -71,6 +76,42 @@ test("ทะเบียน route: ทุกแถวมีสัญญาที
 
 test("ด่านตัวตน: ทุก route ของ pos และ pos_heavy ไม่มี token = 401 no_auth", async () => {
   for (const fn of Object.values(FN)) assert.deepEqual(await unguarded(fn), [], fn);
+});
+
+test("ด่านคู่ค้า (auth partner · เส้น /scango/* ที่ ScanGo ยิงเข้า): ไม่มี header = 401 · กุญแจผิด = 401 · ไม่ตั้ง secret = 503 · กุญแจถูก = ถึง handler · ไม่มี token ของบ้านนี้เกี่ยว", async () => {
+  const partnerRoutes = ROUTES.filter((r) => r.auth === "partner");
+  assert.equal(partnerRoutes.length, 7, "เส้นคู่ค้าของ ScanGo 7 เส้น (menu · delivery/quote · order/create · cancel · remind · state · delivery)");
+  assert.ok(partnerRoutes.every((r) => r.fn === FN.POS && /^\/scango\//.test(r.path) && !/^\/scango\/shop\//.test(r.path)));
+  // ฝั่งแอปร้านของ ScanGo อยู่ใต้ /scango/shop/* และเป็น auth shop (ผ่านด่านตัวตน + ด่านร้าน)
+  assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 6);
+  assert.ok(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).every((r) => r.auth === "shop"));
+
+  const app = makeApp({ fnName: FN.POS, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: partnerGate });
+  await serve(app, async (base) => {
+    for (const r of partnerRoutes) {
+      const none = await post(base, r.path, { externalId: "shopA" });
+      assert.deepEqual([none.status, none.body && none.body.error], [401, "no_auth"], `${r.path} ไม่มี header`);
+      const wrong = await post(base, r.path, { externalId: "shopA" }, { "x-scango-platform-key": "k-wrong" });
+      assert.deepEqual([wrong.status, wrong.body && wrong.body.error], [401, "no_auth"], `${r.path} กุญแจผิด`);
+      // token ของบ้านนี้ไม่ใช่ทางเข้าของเส้นคู่ค้า
+      const tok = await post(base, r.path, { externalId: "shopA" }, { authorization: "Bearer tok-u1" });
+      assert.equal(tok.status, 401, `${r.path} token แทนกุญแจไม่ได้`);
+    }
+    // กุญแจถูก = ผ่านด่าน ถึง handler (ฐานปลอมไม่มี ⇒ handler ตอบรูปของมันเอง ไม่ใช่ 401/503) · body เปล่า = 400 จาก handler
+    const okKey = await post(base, "/scango/menu", {}, { "x-scango-platform-key": PARTNER_KEY });
+    assert.deepEqual([okKey.status, okKey.body && okKey.body.error], [400, "invalid_request"], okKey.text.slice(0, 120));
+  });
+  // ไม่ตั้ง secret = 503 ทุกคำขอ (fail-closed · ไม่ใช่ 401)
+  const unset = makeApp({ fnName: FN.POS, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: requirePartnerKey({}) });
+  await serve(unset, async (base) => {
+    const r = await post(base, "/scango/order/state", { externalId: "shopA", orderRef: "R1" }, { "x-scango-platform-key": PARTNER_KEY });
+    assert.deepEqual([r.status, r.body && r.body.error], [503, "partner_not_configured"]);
+  });
+  // ทะเบียน: partner นอก /scango/ หรือเส้น /scango/* ที่ไม่ใช่ partner = สร้าง app ไม่ได้
+  const stray = ROUTES.map((r) => (r.path === "/sale/void" ? { ...r, auth: "partner" } : r));
+  assert.throws(() => makeApp({ fnName: FN.POS, routes: stray, requirePartnerKey: partnerGate }), /auth partner ใช้ได้เฉพาะเส้น/);
+  const leak = ROUTES.map((r) => (r.path === "/scango/menu" ? { ...r, auth: "user" } : r));
+  assert.throws(() => makeApp({ fnName: FN.POS, routes: leak, requirePartnerKey: partnerGate }), /auth ไม่ใช่ partner/);
 });
 
 test("ตัวกลายพันธุ์: ถอดด่านตัวตนออก = เทสด่านตัวตนแดง", async () => {

@@ -5,6 +5,8 @@
 //   ② scrubInternal     ลบ field ภายในที่ handler อ่านจาก req (amendVoid amendCarry amendOf shopAccess auth) ทั้งบน req และใน body
 //                       field พวกนี้ใส่ได้จากในโปรเซสเท่านั้น (sale.amend เรียก void/create ตรง · chunk4-case-additions.md §13)
 //   ③ checkIfAuthenticated  ไม่มี token / token ไม่ผ่าน = 401 no_auth (ตรวจก่อนอ่าน body · คนไม่มี token ส่งของใหญ่มาก็ไม่ถูกอ่าน)
+//      route auth 'partner' (ScanGo → Shopchamp · scango/*) ใช้ requirePartnerKey แทน: กุญแจร่วมใน header x-scango-platform-key
+//      เทียบ secret SCANGO_SHOPCHAMP_KEY (scango/_partnerAuth.js) · ไม่ตั้ง = 503 partner_not_configured · ไม่มี/ผิด = 401 no_auth · ไม่มีขั้น ⑥
 //   ④ bodyLimit + express.json   เกินเพดาน = 413 payload_too_large · JSON เสีย = 400 invalid_json
 //   ⑤ stripBody ลบ field ภายในจาก body อีกรอบหลังอ่าน (ลบแค่ใน body · req.auth ที่ ③ ตั้งต้องอยู่ต่อ)
 //   ⑥ requireShopAccess (route auth 'shop')   ร้านจาก body.shopId · แถว access:"reportRead" = requireReportReadAccess (legacy owner-web parity ชั่วคราว)
@@ -79,8 +81,11 @@ function checkRegistry(routes, publicRoutes) {
   for (const r of routes) {
     if (seen.has(r.path)) problems.push(`path ซ้ำ ${r.path}`);
     seen.add(r.path);
-    if (!["shop", "user", "public"].includes(r.auth)) problems.push(`${r.path} auth ไม่รู้จัก "${r.auth}"`);
+    if (!["shop", "user", "public", "partner"].includes(r.auth)) problems.push(`${r.path} auth ไม่รู้จัก "${r.auth}"`);
     if (r.auth === "public" && !pub.has(r.path)) problems.push(`${r.path} ไม่มีด่านตัวตนแต่ไม่อยู่ใน public-routes.js`);
+    // partner = เซิร์ฟเวอร์ ScanGo เท่านั้น ⇒ อยู่ใต้ /scango/ และไม่ใช่เส้นฝั่งแอปร้าน (/scango/shop/* เป็น auth shop)
+    if (r.auth === "partner" && !/^\/scango\/(?!shop\/)/.test(r.path)) problems.push(`${r.path} auth partner ใช้ได้เฉพาะเส้น /scango/* ที่ไม่ใช่ /scango/shop/*`);
+    if (r.auth !== "partner" && /^\/scango\/(?!shop\/)/.test(r.path)) problems.push(`${r.path} อยู่ใต้ /scango/ แต่ auth ไม่ใช่ partner`);
     // access "reportRead" (legacy owner-web parity · ไม่ดู status/แพ็กเกจพนักงาน) ให้ได้เฉพาะ route รายงานอ่านอย่างเดียว
     if (r.access !== undefined && r.access !== "reportRead") problems.push(`${r.path} access ไม่รู้จัก "${r.access}"`);
     if (r.access === "reportRead" && (r.auth !== "shop" || !/^report\./.test(String(r.contract)))) problems.push(`${r.path} ใช้ access reportRead ได้เฉพาะ route report.* ที่ auth shop`);
@@ -93,16 +98,19 @@ function checkRegistry(routes, publicRoutes) {
 }
 
 /**
- * makeApp({fnName, deps, checkIfAuthenticated, requireShopAccess, routes, publicRoutes}) → express app ของ function นั้น
+ * makeApp({fnName, deps, checkIfAuthenticated, requireShopAccess, requirePartnerKey, routes, publicRoutes}) → express app ของ function นั้น
  *   deps = ส่งเข้า factory ของ handler (ไม่ส่ง = ตัวจริง · e2e ส่งนาฬิกาตรึง)
  *   checkIfAuthenticated / requireShopAccess ไม่ส่ง = ตัวจริงจาก _shared/auth.js
+ *   requirePartnerKey ไม่ส่ง = ตัวจริงจาก scango/_partnerAuth.js (อ่าน process.env ตอนคำขอ · เทสส่ง requirePartnerKey(envปลอม))
  *   routes / publicRoutes ไม่ส่ง = ทะเบียนจริง (เทสส่งตัวกลายพันธุ์มาพิสูจน์ว่าด่านจับได้)
  */
-function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requireReportReadAccess, routes = ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
+function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requireReportReadAccess, requirePartnerKey, routes = ROUTES, publicRoutes = PUBLIC_ROUTES } = {}) {
   checkRegistry(routes, publicRoutes);
   const auth = require("./_shared/auth");
   const authn = checkIfAuthenticated || auth.checkIfAuthenticated;
   const shopz = requireShopAccess || auth.requireShopAccess;
+  // โหลดเฉพาะเมื่อทะเบียนมีแถว partner (function ที่ไม่มีเส้น scango ไม่ต้องโหลด)
+  const partnerz = requirePartnerKey || (routes.some((r) => r.auth === "partner" && (r.fn === "*" || r.fn === fnName)) ? require("./scango/_partnerAuth").requirePartnerKey() : null);
   // เทสที่ส่ง requireShopAccess ปลอมมาอย่างเดียว ⇒ route รายงานใช้ตัวปลอมเดียวกัน (ไม่ซ่อนตัวจริงไว้ใต้เทส)
   const reportz = requireReportReadAccess || (requireShopAccess ? requireShopAccess : auth.requireReportReadAccess);
 
@@ -119,7 +127,8 @@ function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requir
     if (typeof handler !== "function") throw new Error(`pos/app: handler ของ ${r.path} ไม่ใช่ฟังก์ชัน`);
     const limit = r.bodyLimit || DEFAULT_LIMIT;
     const chain = [scrubInternal];
-    if (r.auth !== "public") chain.push(authn);
+    if (r.auth === "partner") chain.push(partnerz);
+    else if (r.auth !== "public") chain.push(authn);
     chain.push(bodyLimit(limit), express.json({ limit }), stripBody);
     if (r.auth === "shop") chain.push(r.access === "reportRead" ? reportz : shopz);
     app.post(r.path, ...chain, handler);

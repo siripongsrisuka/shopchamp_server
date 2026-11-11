@@ -115,3 +115,5 @@ exports.pos_heavy = posFunctions.pos_heavy;
 exports.pos_gateway = posFunctions.pos_gateway;
 // ── งานตั้งเวลา companyPaySweep (DEV-0003 U3) · gen2 onSchedule ทุก 5 นาที Asia/Bangkok · ถาม posxpay เอง (ไม่มี webhook) · deploy: --only functions:companyPaySweep
 exports.companyPaySweep = posFunctions.companyPaySweep;
+// ── งานตั้งเวลา scangoOutboxSweep (ร้าน Shopchamp บน ScanGo) · gen2 onSchedule ทุก 1 นาที Asia/Bangkok · ยิงข่าวค้างซ้ำ + ปิดบิลค้าง · deploy: --only functions:scangoOutboxSweep
+exports.scangoOutboxSweep = posFunctions.scangoOutboxSweep;

@@ -1,6 +1,6 @@
 // pos/announcement/_testDb.js — ฐานปลอมที่เขียนลงจริงสำหรับเทสประกาศถึงร้าน (DEV-0003 0e) · ไม่ใช่ handler · ไม่ถูก route
 //   ใช้ใน office/announcement.test.js และ announcement/announcement.test.js
-//   รองรับ: doc get/set(merge)/create/update/delete · sub-collection · where (== <= >= array-contains · ช่องมีจุด) · orderBy · limit · count
+//   รองรับ: doc get/set(merge)/create/update/delete (update ช่องมีจุดลงชั้นลึก · _shared/fakeFieldValue) · sub-collection · where (== <= >= < > in array-contains · ช่องมีจุด) · orderBy · limit · count
 //           getAll · runTransaction (get ได้ทั้ง doc และ query · เขียนตอนจบ) · batch · FieldValue ปลอม (_shared/fakeFieldValue)
 //   install(seed) แทน functions/firebase ใน require.cache แล้วล้าง cache ของไฟล์ที่ส่งมา
 "use strict";
@@ -22,6 +22,7 @@ function memDb(clock) {
   const cmp = (dv, op, value) => {
     const a = msOf(dv), b = msOf(value);
     if (op === "array-contains") return Array.isArray(dv) && dv.includes(value);
+    if (op === "in") return Array.isArray(value) && value.includes(dv);
     if (a !== undefined && b !== undefined) { dv = a; value = b; } else if (a !== undefined || b !== undefined) return false;
     if (dv === undefined) return false;
     switch (op) {

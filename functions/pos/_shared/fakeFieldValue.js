@@ -41,9 +41,19 @@ function applyWrite(prev, data, { op, merge, commitTime }) {
   const t = commitTime instanceof Date ? commitTime : new Date();
   if (op === "set" && !merge) return resolve(undefined, data, t, false);
   if (op === "set" && merge) return resolve(prev, data, t, true);
-  // update: ทับรายช่องบนสุด
+  // update: ทับรายช่องบนสุด · ชื่อช่องมีจุด ("scango.enabled") = ลงชั้นลึกแบบ Firestore (แตะเฉพาะช่องปลาย · ช่องข้างเคียงใน map คงอยู่)
   const out = { ...(prev || {}) };
-  for (const [k, x] of Object.entries(data || {})) out[k] = resolve(out[k], x, t, false);
+  for (const [k, x] of Object.entries(data || {})) {
+    if (!k.includes(".")) { out[k] = resolve(out[k], x, t, false); continue; }
+    const parts = k.split(".");
+    let o = out;
+    for (const p of parts.slice(0, -1)) {
+      o[p] = isPlain(o[p]) ? { ...o[p] } : {};
+      o = o[p];
+    }
+    const leaf = parts[parts.length - 1];
+    o[leaf] = resolve(o[leaf], x, t, false);
+  }
   return out;
 }
 

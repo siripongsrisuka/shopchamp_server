@@ -152,7 +152,17 @@ test("④ export: index.js ต่อท้าย exports.pos_gateway · function
   assert.deepEqual(bound, [...SECRETS_CREATED, ...KBANK_SECRETS].sort(), "ผูกได้เฉพาะ secret ที่สร้างแล้ว");
   // DEV-0003 U2: COMPANY_POSXPAY_TOKEN/SERIAL ⚠️ Pack ยังไม่สร้าง (2026-11-10) · ต้องสร้างก่อน deploy pos / companyPaySweep ไม่งั้น deploy ล้ม (ดู workloads.js)
   const COMPANY_PAY_SECRETS = ["COMPANY_POSXPAY_TOKEN", "COMPANY_POSXPAY_SERIAL"];
-  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07) + posxpay บริษัท (DEV-0003)");
+  // ScanGo (ร้าน Shopchamp บน ScanGo · 2026-11-11): SCANGO_SHOPCHAMP_KEY ⚠️ Pack ยังไม่สร้าง · ต้องสร้างก่อน deploy pos / scangoOutboxSweep (ดู workloads.js SCANGO_SECRETS)
+  const SCANGO_SECRETS = ["SCANGO_SHOPCHAMP_KEY"];
+  assert.deepEqual((F.pos.__endpoint.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SECRETS_CREATED, "ONESIGNAL_REST_API_KEY", ...COMPANY_PAY_SECRETS, ...SCANGO_SECRETS].sort(), "pos ผูกกุญแจเดียวกัน (ที่ลับ token LINE) + กุญแจ OneSignal (Pack สร้าง 2026-11-07) + posxpay บริษัท (DEV-0003) + กุญแจ ScanGo");
+  // scangoOutboxSweep: งานตั้งเวลา gen2 ทุก 1 นาที · region เดียวกัน · ผูกกุญแจ ScanGo + OneSignal (ปิดบิลค้างเดิน sale.create → push) · maxInstances 1
+  const sgSweep = F.scangoOutboxSweep.__endpoint;
+  assert.equal(sgSweep.platform, "gcfv2");
+  assert.deepEqual(sgSweep.region, ["asia-southeast2"]);
+  assert.equal(sgSweep.scheduleTrigger.schedule, "every 1 minutes");
+  assert.equal(sgSweep.scheduleTrigger.timeZone, "Asia/Bangkok");
+  assert.equal(sgSweep.maxInstances, 1);
+  assert.deepEqual((sgSweep.secretEnvironmentVariables || []).map((s) => s.key).sort(), [...SCANGO_SECRETS, "ONESIGNAL_REST_API_KEY"].sort());
   // companyPaySweep (DEV-0003 U3): งานตั้งเวลา gen2 · region เดียวกัน · ผูกเฉพาะ posxpay บริษัท · maxInstances 1
   const sweep = F.companyPaySweep.__endpoint;
   assert.equal(sweep.platform, "gcfv2");

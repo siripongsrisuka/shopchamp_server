@@ -16,7 +16,9 @@ const POS = path.resolve(__dirname, "..");
 const READ_WITHOUT_CALLER = new Set(["system.ping", "shift.openList"]);
 // ไฟล์ที่ได้ส่ง { read: true } (เส้นอ่าน หรือ op อ่านของเส้นผสม)
 // announcement/feed.js (DEV-0003 0e) อ่านอย่างเดียว · watcher ไม่มีแถวในร้าน = ได้รายการว่าง
-const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/connections.js", "shopStaff/staffManage.js", "announcement/feed.js"]);
+const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/connections.js", "shopStaff/staffManage.js", "announcement/feed.js",
+  // ScanGo ฝั่งแอปร้าน: อ่านค่าตั้ง · ค้นสินค้า · รายการใบ (อ่านอย่างเดียว)
+  "scango/shop/settingsGet.js", "scango/shop/productSearch.js", "scango/shop/orderList.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());
