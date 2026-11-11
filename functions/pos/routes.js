@@ -145,6 +145,14 @@ const ROUTES = Object.freeze([
   { contract: "office.payRecheck", path: "/office/pay-recheck", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").payRecheck },
   { contract: "office.orderApprove", path: "/office/order-approve", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").orderApprove },
   { contract: "office.orderCancel", path: "/office/order-cancel", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").orderCancel },
+  // DEV-0003 0d หน้าอุปกรณ์ที่ขาย (admin/hardware · Pack เคาะ 1b 2a 3b 2026-11-11) · ดู = ทีมงาน · แก้ = root · ไม่มี passkey
+  { contract: "office.hwCatalog", path: "/office/hw-catalog", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCatalog },
+  { contract: "office.hwItemSave", path: "/office/hw-item-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwItemSave },
+  { contract: "office.hwArrange", path: "/office/hw-arrange", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwArrange },
+  { contract: "office.hwCategorySave", path: "/office/hw-category-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCategorySave },
+  { contract: "office.hwCategoryArrange", path: "/office/hw-category-arrange", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCategoryArrange },
+  { contract: "office.hwCategoryDelete", path: "/office/hw-category-delete", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwCategoryDelete },
+  { contract: "office.hwShippingSave", path: "/office/hw-shipping-save", fn: "pos", auth: "user", factory: true, load: () => require("./office/hardware").hwShippingSave },
 ]);
 
 module.exports = { ROUTES };
