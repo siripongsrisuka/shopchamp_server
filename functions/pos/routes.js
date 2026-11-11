@@ -140,6 +140,11 @@ const ROUTES = Object.freeze([
   { contract: "office.passkeyAssertOptions", path: "/office/passkey-assert-options", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertOptions },
   { contract: "office.passkeyAssertVerify", path: "/office/passkey-assert-verify", fn: "pos", auth: "user", factory: true, load: () => require("./office/passkey").assertVerify },
   // DEV-0003 ชำระเงิน/อนุมัติใบสั่งซื้อบริษัท (U4) · root ทำได้ · อนุมัติ/ยกเลิก = passkey ทุกครั้ง · watcher ดูอย่างเดียว
+  // DEV-0003 หน้าผู้ใช้งาน (Pack สั่ง 2026-11-11 · ยังไม่มีการกำหนดสิทธิ์) · ขอเข้าใช้ = คนนอก · ดูรายชื่อ = ทีมงาน · เพิ่ม/เปลี่ยนสถานะ = root + passkey
+  { contract: "office.accessRequest", path: "/office/access-request", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").accessRequest },
+  { contract: "office.userList", path: "/office/user-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").userList },
+  { contract: "office.userAdd", path: "/office/user-add", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").userAdd },
+  { contract: "office.userSetStatus", path: "/office/user-set-status", fn: "pos", auth: "user", factory: true, load: () => require("./office/users").userSetStatus },
   { contract: "office.payList", path: "/office/pay-list", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").payList },
   { contract: "office.payRecheck", path: "/office/pay-recheck", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").payRecheck },
   { contract: "office.orderApprove", path: "/office/order-approve", fn: "pos", auth: "user", factory: true, load: () => require("./office/pay").orderApprove },
