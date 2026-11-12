@@ -18,6 +18,7 @@
 "use strict";
 
 const { db } = require("../../firebase");
+const DF = require("./_deliveryFee");
 
 const ORDER_EVENT_PATH = "/provider/shopchamp/order/event";
 const VENUE_EVENT_PATH = "/provider/shopchamp/event";
@@ -167,40 +168,44 @@ async function notifyOrder({ orderRef, type, reason, at }, deps) {
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : null);
 
-/** เลขพร้อมเพย์ 10 (เบอร์) · 13 (บัตรประชาชน/นิติบุคคล) · 15 (e-wallet) หลัก · รับที่มีช่องว่าง/ขีด */
-const PROMPTPAY_RE = /^(\d{10}|\d{13}|\d{15})$/;
+/**
+ * เลขพร้อมเพย์ → ตัวเลขล้วนที่ใช้ได้ | null — กฎเดียวกับต้นแบบ (server แอปพี่น้อง origin/main `functions/claude/scango/venuePickup.js:20-27`)
+ *   เบอร์ 10 หลักขึ้นต้น 0 · เลขผู้เสียภาษี/บัตร 13 หลัก · e-Wallet 15 หลัก · รับที่มีช่องว่าง/ขีด
+ */
 function promptpayIdOf(v) {
-  const digits = str(v).replace(/[\s-]/g, "");
-  return PROMPTPAY_RE.test(digits) ? digits : null;
+  const d = str(v).replace(/[\s-]/g, "");
+  if (!/^\d+$/.test(d)) return null;
+  if (d.length === 10 && d.startsWith("0")) return d;
+  if (d.length === 13 || d.length === 15) return d;
+  return null;
 }
 
 /**
  * paymentQrOf(shop) → {type:'promptpay', id, name} | null — รูปที่ ScanGo รับ (`routes/provider.routes.js` venue_ordering › normalizePaymentQr)
- *   ScanGo ให้ไรเดอร์สร้าง QR พร้อมเพย์จาก "เลข" ⇒ ค่าตั้ง `shop.scango.paymentQr` ที่เป็นเลขพร้อมเพย์เท่านั้นที่ส่งได้
- *   ค่าที่เป็นลิงก์รูป QR (แอป 5.00 รุ่นแรกอัปโหลดรูป) = ScanGo ใช้ไม่ได้ ⇒ null (= ร้านรับเงินสดอย่างเดียวบน ScanGo · ScanGo ตั้ง transferEnabled:false)
- *   ⚠️ ตัดสินเอง 2026-11-11 (ลูกรวมงาน) · รายงาน Pack: ถ้าจะให้รับโอนบน ScanGo ช่อง paymentQr ต้องเป็นเลขพร้อมเพย์ ไม่ใช่รูป
+ *   รอบ 5 ยึดแบบพี่น้อง (`venuePickup.js:29-41`): เลขเดียวกับที่ POS โชว์ QR ตอนคิดเงิน = **`shop.receipt.promptpayId` + `promptpayStatus === true`**
+ *   (แอป Shopchamp `src/screens/CheckoutScreen.js:134-148`) ⇒ เงินโอนไปบัญชีเดียวกับที่หน้าร้านใช้
+ *   ถอยไปที่ `shop.scango.paymentQr` เดิม (ค่าตั้งของแอป 5.00 รุ่นแรก · เฉพาะที่เป็นเลขพร้อมเพย์) · ไม่มีทั้งคู่ = null (ScanGo ซ่อนตัวเลือกโอน)
+ *   ชื่อบนป้าย = ชื่อร้าน
  */
 function paymentQrOf(shop) {
-  const s = shop && isObj(shop.scango) ? shop.scango : {};
-  const id = promptpayIdOf(s.paymentQr);
+  const s = isObj(shop) ? shop : {};
+  const rc = isObj(s.receipt) ? s.receipt : {};
+  const primary = rc.promptpayStatus === true ? promptpayIdOf(rc.promptpayId) : null;
+  const sg = isObj(s.scango) ? s.scango : {};
+  const id = primary || promptpayIdOf(sg.paymentQr);
   if (!id) return null;
-  return { type: "promptpay", id, name: str(shop && shop.name).slice(0, 100) };
-}
-
-/** businessHours รูปที่ ScanGo เก็บ (`modules/venues/hours.js` normalizeBusinessHours): [{day 0-6 (0 = อาทิตย์ · ตรงกับ shop.scango.hours), open 'HH:mm', close 'HH:mm', closed:false}] */
-function businessHoursOf(hours) {
-  return (Array.isArray(hours) ? hours : [])
-    .filter((h) => isObj(h) && Number.isInteger(h.day) && h.day >= 0 && h.day <= 6 && /^\d{2}:\d{2}$/.test(str(h.open)) && /^\d{2}:\d{2}$/.test(str(h.close)))
-    .map((h) => ({ day: h.day, open: str(h.open), close: str(h.close), closed: false }));
+  return { type: "promptpay", id, name: str(s.name).slice(0, 100) };
 }
 
 /**
  * venuePayloadOf(shopId, shop, now) — body ของ `venue_ordering` จาก `shop.scango` (pure)
- *   รูปที่ฝั่งรับอ่าน (scango_server `routes/provider.routes.js` POST /provider/shopchamp/event):
- *     enabled (บังคับ) · name · phone · address · geo {lat,lng} (ไม่รู้ = null ❌ ไม่ส่ง 0,0) · businessHours · maxKm · prepMinutes ·
- *     paymentQr {type:'promptpay',id,name}|null (ส่งช่องนี้เสมอ ⇒ ScanGo ตั้ง transferEnabled ตามจริง) · pickup {name,address,lat,lng,phone,note} (จุดรับของให้ไรเดอร์)
+ *   ยึดแบบพี่น้อง (`ordering.js › orderingView` + `venuePickup.venueOrderingExtrasOf`) ตัดส่วนที่บ้านนี้ไม่มี (เครดิต · ส่วนลดกลุ่ม · รอบ · LINE · amenities)
+ *     enabled (บังคับ) · name · phone · address · geo {lat,lng} (มีเฉพาะร้านที่ตั้งพิกัดไว้แบบเดิม · ไม่รู้ = ไม่ส่งช่อง ❌ ไม่ส่ง 0,0) ·
+ *     minOrder · deliveryFee (= baseFee ให้ ScanGo รุ่นก่อน) · deliveryFeeModel · deliveryFeeSource · maxKm (= ขอบช่วงสุดท้าย) ·
+ *     paymentQr {type:'promptpay',id,name}|null (ส่งช่องนี้เสมอ ⇒ ScanGo ตั้ง transferEnabled ตามจริง) · pickup {name,address,lat,lng,phone,note}
  *     vertical ฝั่งรับบังคับ 'retail' เองจากโปรไฟล์ (ส่งไปเพื่ออ่านง่าย) · at = เวลาเกิดเหตุ (ข่าวเก่ากว่าถูกทิ้ง)
- *   acceptingOrders = เปิด + มีพิกัด + มีสินค้าที่เลือกขายอย่างน้อย 1 ตัว (ฝั่งรับไม่อ่านช่องนี้ · เมนู /scango/menu เป็นตัวตัดสินจริง)
+ *   รอบ 5 (Pack เคาะ 2026-11-12): ❌ ไม่ส่ง businessHours · prepMinutes · freeDeliveryMin (ScanGo ถือ/ตั้งที่เว็บร้าน)
+ *   acceptingOrders = เปิด + มีสินค้าที่เลือกขายอย่างน้อย 1 ตัว (ไม่ผูกพิกัดแล้ว · ฝั่งรับไม่อ่านช่องนี้ ใช้ enabled · เมนู /scango/menu ตัดสินจริง)
  *   eventId = `venue:<shopId>:<ms>` (ข่าวร้านแต่ละครั้งคนละตัว · doc id ของ outbox)
  */
 function venuePayloadOf(shopId, shop, now) {
@@ -210,6 +215,7 @@ function venuePayloadOf(shopId, shop, now) {
   const enabled = s.enabled === true;
   const products = Array.isArray(s.productIds) ? s.productIds.length : 0;
   const paymentQr = paymentQrOf(shop);
+  const d = DF.resolveDeliveryConfig(s);
   const name = str(shop && shop.name);
   const phone = str(shop && shop.tel) || null;
   const address = str(shop && shop.address) || null;
@@ -217,19 +223,18 @@ function venuePayloadOf(shopId, shop, now) {
     type: "venue_ordering",
     externalId: shopId,
     name,
-    geo,
+    ...(geo ? { geo } : {}),
     phone,
     address,
     enabled,
-    acceptingOrders: enabled && geo !== null && products > 0,
-    minOrder: num(s.minOrder),
-    deliveryFee: num(s.deliveryFee),
-    freeDeliveryMin: num(s.freeDeliveryMin),
-    maxKm: num(s.maxKm),
-    prepMinutes: num(s.prepMinutes),
+    acceptingOrders: enabled && products > 0,
+    minOrder: num(s.minOrder) !== null && s.minOrder >= 0 ? s.minOrder : 0,
+    deliveryFee: d.model.baseFee,
+    deliveryFeeModel: d.model,
+    deliveryFeeSource: d.source,
+    maxKm: d.maxKm,
     transferEnabled: paymentQr !== null,
     paymentQr,
-    businessHours: businessHoursOf(s.hours),
     vertical: "retail",
     pickup: { name, address: address || "", lat: geo ? geo.lat : null, lng: geo ? geo.lng : null, phone: phone || "", note: str(s.pickupNote) || null },
     at: now.toISOString(),
@@ -281,5 +286,5 @@ async function sendVenue(deps, { shopId } = {}) {
 module.exports = {
   ORDER_EVENT_PATH, VENUE_EVENT_PATH, HEADER, OUTBOX, TIMEOUT_MS, ORDER_EVENT_TYPES,
   configOf, isRetryable, postRaw, enqueue, sendEvent,
-  orderEventIdOf, orderEventPayloadOf, notifyOrder, promptpayIdOf, paymentQrOf, businessHoursOf, venuePayloadOf, notifyVenue, venueStatusOf, sendVenue,
+  orderEventIdOf, orderEventPayloadOf, notifyOrder, promptpayIdOf, paymentQrOf, venuePayloadOf, notifyVenue, venueStatusOf, sendVenue,
 };

@@ -32,7 +32,7 @@ const seed = {
 };
 const FILES = ["_core.js", "_menu.js", "_outbound.js", "_orderActions.js", "closeBill.js", "settingsLogin.js", "menu.js", "deliveryQuote.js", "orderCreate.js", "orderDelivery.js", "orderState.js", "outboxSweep.js",
   "shop/_common.js", "shop/settingsSave.js", "shop/orderAction.js", "shop/orderList.js", "../sale/create.js", "../member/_gate.js",
-  "_loginCode.js", "shop/loginStart.js", "shop/loginStatus.js", "merchantRelay.js", "shop/productsSet.js", "shop/productSearch.js"].map((f) => path.join(__dirname, f));
+  "_loginCode.js", "shop/loginStart.js", "shop/loginStatus.js", "merchantRelay.js", "shop/productsSet.js", "shop/productSearch.js", "_deliveryFee.js"].map((f) => path.join(__dirname, f));
 const mem = T.install(seed, FILES, () => NOW);
 const H = {
   menu: require("./menu").menu, quote: require("./deliveryQuote").deliveryQuote, create: require("./orderCreate").orderCreate, delivery: require("./orderDelivery").orderDelivery,
@@ -73,9 +73,10 @@ test("e2e · ร้านตั้งค่า → ScanGo ดึงเมนู 
   assert.equal(venue.body.type, "venue_ordering"); assert.equal(venue.body.externalId, SHOP); assert.equal(venue.body.enabled, true);
   assert.deepEqual(venue.body.geo, { lat: 13.7, lng: 100.5 });
   assert.deepEqual(venue.body.paymentQr, { type: "promptpay", id: "0812345678", name: "TEST Shopchamp" });
-  assert.deepEqual(venue.body.businessHours, [{ day: 3, open: "08:00", close: "20:00", closed: false }]);
+  for (const k of ["businessHours", "prepMinutes", "freeDeliveryMin"]) assert.equal(k in venue.body, false, `รอบ 5 ไม่ส่ง ${k}`);
   assert.deepEqual(venue.body.pickup, { name: "TEST Shopchamp", address: "123 ถนนทดสอบ", lat: 13.7, lng: 100.5, phone: "021234567", note: "หน้าร้าน" });
-  assert.equal(venue.body.vertical, "retail"); assert.equal(venue.body.maxKm, 5); assert.equal(venue.body.prepMinutes, 10);
+  assert.equal(venue.body.vertical, "retail"); assert.equal(venue.body.maxKm, 5);
+  assert.deepEqual(venue.body.deliveryFeeModel, { distance: "road", baseKm: 5, baseFee: 30, bands: [] }, "ค่าเหมาเดิม = สูตร 1 ช่วง");
 
   // ② ScanGo ดึงเมนู + ถามค่าส่ง (เลขเดียวกับที่ orderCreate จะคิด)
   const menu = await call(H.menu, { externalId: SHOP }, { headers: PARTNER });
@@ -193,7 +194,7 @@ test("e2e · รอบ 4 ไทล์ ScanGo: status → start → redeem คร
   const status = require("./shop/loginStatus").loginStatus;
   const R = require("./merchantRelay");
   let clock = NOW;
-  const d4 = { ...deps, now: () => clock, sealKey: Buffer.alloc(32, 3).toString("base64"), audit: () => {} };
+  const d4 = { ...deps, now: () => clock, audit: () => {} };
   const run = async (h, body, extra) => { const res = T.makeRes(); await h(d4)({ body, ...(extra || {}) }, res); return res; };
 
   // ไทล์: ร้านตั้งค่าแล้วในเทสแรก (scango.enabled boolean) ⇒ connected · เจ้าของ
@@ -231,4 +232,42 @@ test("e2e · รอบ 4 ไทล์ ScanGo: status → start → redeem คร
   const late = await run(SL.loginRedeem, { code: s2.body.code }, { headers: PARTNER });
   assert.deepEqual([late.code, late.body.error], [410, "code_expired"]);
   assert.equal(get(`scangoSettingsLogin/${s2.body.code.slice(0, 20)}`).status, "pending");
+});
+
+test("e2e · รอบ 5 เว็บร้านตั้งค่า: relay ordering (ขั้นต่ำ + สูตรแบบช่วง) → เขียน shop.scango + venue_ordering ถึง ScanGo ก่อนตอบ → เมนู/ค่าส่ง/สั่งตามสูตร · fee/preview คิดอย่างเดียว · ปิดรับ", async () => {
+  const R = require("./merchantRelay");
+  const d5 = { ...deps, audit: () => {} };
+  const run = async (h, body) => { const res = T.makeRes(); await h(d5)({ body, headers: PARTNER }, res); return res; };
+  const actor = { uid: `mo:shopchamp:${OWNER}`, personRef: OWNER, name: "เจ้าของ" };
+  const model = { baseKm: 2, baseFee: 20, bands: [{ toKm: 6, perKm: 5 }] };
+
+  const writes0 = mem.writes.length;
+  const pv = await run(R.merchantFeePreview, { externalId: SHOP, actor, deliveryFeeModel: model });
+  assert.equal(pv.code, 200, JSON.stringify(pv.body));
+  assert.deepEqual([pv.body.valid, pv.body.maxKm, pv.body.stepsLeft], [true, 6, 4]);
+  assert.deepEqual(pv.body.examples.find((x) => x.km === 4), { km: 4, fee: 30, outOfRange: false, how: "20 + 2×5" });
+  assert.equal(mem.writes.length, writes0, "preview ไม่เขียน");
+
+  const calls0 = http.calls.length;
+  const ord = await run(R.merchantOrdering, { externalId: SHOP, actor, minOrder: 50, deliveryFeeModel: model, maxKm: 6 });
+  assert.equal(ord.code, 200, JSON.stringify(ord.body));
+  assert.deepEqual(ord.body, { ok: true, ordering: { enabled: true, minOrder: 50, deliveryFee: 20, deliveryFeeModel: { distance: "road", ...model }, deliveryFeeSource: "model", maxKm: 6 }, synced: true, venue: "sent" });
+  assert.deepEqual(get(`shop/${SHOP}`).scango.deliveryFeeModel, { distance: "road", ...model });
+  const ev = http.calls.slice(calls0).find((c) => c.url.endsWith("/provider/shopchamp/event"));
+  assert.ok(ev, "ยิง venue_ordering ก่อนตอบ");
+  assert.deepEqual([ev.body.minOrder, ev.body.maxKm, ev.body.deliveryFeeSource], [50, 6, "model"]);
+
+  const menu = await run(H.menu, { externalId: SHOP });
+  assert.deepEqual([menu.body.minOrder, menu.body.maxKm, menu.body.deliveryFee, menu.body.deliveryFeeSource], [50, 6, 20, "model"]);
+  const q = await run(H.quote, { externalId: SHOP, distanceKm: 4, foodSubtotal: 50 });
+  assert.deepEqual([q.body.fee, q.body.riderFee, q.body.outOfRange], [30, 30, false]);
+  const far = await run(H.quote, { externalId: SHOP, distanceKm: 6.05, foodSubtotal: 50 });
+  assert.equal(far.body.outOfRange, true);
+
+  const bad = await run(R.merchantOrdering, { externalId: SHOP, actor, deliveryFeeModel: model, maxKm: 5 });
+  assert.deepEqual([bad.code, bad.body.error, bad.body.details.errors[0].field], [400, "bad_delivery_model", "maxKm"]);
+  const off = await run(R.merchantOrdering, { externalId: SHOP, actor, enabled: false });
+  assert.deepEqual([off.code, off.body.ordering.enabled], [200, false]);
+  const closed = await run(H.menu, { externalId: SHOP });
+  assert.deepEqual([closed.body.acceptingOrders, closed.body.closedReason], [false, "ordering_disabled"]);
 });

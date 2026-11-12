@@ -3,7 +3,6 @@
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const crypto = require("node:crypto");
 const path = require("node:path");
 const { install, makeRes } = require("../announcement/_testDb");
 
@@ -12,7 +11,6 @@ const SHOP = "wJNgra1ik0pzRQFlZNOD";
 const OTHER = "otherShop000000000001";
 const OWNER = "oZlTxlxRjaRdmMoH4aXOORiBBK73";
 const STAFF = "staffUid0000000000000001";
-const SEAL_KEY = Buffer.alloc(32, 9).toString("base64");
 const VIP_OK = [{ type: "staff", expire: new Date("2027-01-01T00:00:00Z") }];
 
 const shopDoc = (over) => ({
@@ -30,7 +28,7 @@ function load(seed) {
   const mem = install(seed || { [`shop/${SHOP}`]: shopDoc() }, FILES, () => NOW);
   const audit = [];
   let clock = NOW;
-  const deps = { now: () => clock, sealKey: SEAL_KEY, audit: (l) => audit.push(l) };
+  const deps = { now: () => clock, audit: (l) => audit.push(l) };
   return {
     mem, audit, deps, setNow: (d) => { clock = d; },
     L: require("./_loginCode"), SL: require("./settingsLogin"), start: require("./shop/loginStart").loginStart, status: require("./shop/loginStatus").loginStatus,
@@ -42,25 +40,12 @@ async function call(factory, deps, body, extra) {
   return res;
 }
 
-test("_loginCode: parseCode รับเฉพาะ '<id20>.<hex64>' · ผนึกผูก id/shopId/personId/secretHash/expiresAt · กุญแจไม่มี = error", () => {
+test("_loginCode: parseCode รับเฉพาะ '<id20>.<hex64>' · B2 ไม่มีผนึกแล้ว (รูปเดียวกับต้นแบบ)", () => {
   const { L } = load();
   const id = "A".repeat(20), sec = "f".repeat(64);
   assert.deepEqual(L.parseCode(` ${id}.${sec} `), { id, secret: sec });
   for (const bad of [undefined, 5, "", `${id}.${sec.toUpperCase()}`, `${id}x.${sec}`, `${id}.${sec}0`, `${id}${sec}`]) assert.equal(L.parseCode(bad), null, String(bad));
-  const k = L.readSealKey({ sealKey: SEAL_KEY });
-  assert.ok(Buffer.isBuffer(k.key));
-  const exp = new Date(NOW.getTime() + 1000);
-  const doc = { shopId: SHOP, personId: OWNER, secretHash: L.sha256Hex(sec), expiresAt: exp };
-  doc.seal = L.sealOf(k.key, { id, shopId: SHOP, personId: OWNER, secretHash: doc.secretHash, expiresAtMs: exp.getTime() });
-  assert.equal(L.sealMatches(k.key, id, doc), true);
-  for (const tweak of [{ shopId: OTHER }, { personId: STAFF }, { secretHash: L.sha256Hex("x") }, { expiresAt: new Date(exp.getTime() + 1) }, { seal: "0".repeat(64) }, { expiresAt: null }]) {
-    assert.equal(L.sealMatches(k.key, id, { ...doc, ...tweak }), false, JSON.stringify(Object.keys(tweak)));
-  }
-  assert.equal(L.sealMatches(k.key, "B".repeat(20), doc), false, "ย้ายผนึกข้าม doc ไม่ได้");
-  // กุญแจคนละชุดกับผนึกของ webLogin (HKDF info ต่างกัน)
-  const wl = require("../webLogin/core").readSealKey({ sealKey: SEAL_KEY });
-  assert.notDeepEqual(wl.key, k.key);
-  assert.ok(L.readSealKey({ env: {} }).error);
+  for (const k of ["readSealKey", "sealOf", "sealMatches"]) assert.equal(k in L, false, k);
 });
 
 test("loginStatus: connected จาก merchantLinkedAt หรือ enabled เป็น boolean · มีแค่ productIds = false · isOwner จาก humanResource · ไม่เขียน", async () => {
@@ -84,7 +69,7 @@ test("loginStatus: connected จาก merchantLinkedAt หรือ enabled เ
   assert.equal((await call(status, deps, { shopId: OTHER }, { shopAccess: owner })).body.error, "wrong_shop");
 });
 
-test("loginStart: เจ้าของได้รหัส '<id20>.<hex64>' อายุ 120 วิ · doc เก็บ hash + ผนึก ไม่มี secret ดิบ · log ไม่มีรหัส", async () => {
+test("loginStart: เจ้าของได้รหัส '<id20>.<hex64>' อายุ 120 วิ · doc รูปต้นแบบ (hash · ไม่มีผนึก) ไม่มี secret ดิบ · log ไม่มีรหัส", async () => {
   const { start, deps, mem, audit, L } = load();
   const r = await call(start, deps, { shopId: SHOP }, { shopAccess: owner });
   assert.equal(r.code, 200, JSON.stringify(r.body));
@@ -95,7 +80,7 @@ test("loginStart: เจ้าของได้รหัส '<id20>.<hex64>' �
   assert.equal(doc.secretHash, L.sha256Hex(p.secret));
   assert.deepEqual([doc.shopId, doc.personId, doc.status, doc.expiresAt.getTime()], [SHOP, OWNER, "pending", NOW.getTime() + 120000]);
   assert.ok(!JSON.stringify(doc).includes(p.secret), "ไม่เก็บ secret ดิบ");
-  assert.equal(L.sealMatches(L.readSealKey(deps).key, p.id, doc), true);
+  assert.deepEqual(Object.keys(doc).sort(), ["createdAt", "expiresAt", "personId", "secretHash", "shopId", "status"], "ช่องเดียวกับต้นแบบ");
   assert.equal(mem.writes.length, 1);
   assert.ok(!JSON.stringify(audit).includes(p.secret) && audit.some((l) => l.event === "start" && l.result === "ok"));
   // 2 ครั้ง = 2 รหัสคนละตัว
@@ -103,7 +88,7 @@ test("loginStart: เจ้าของได้รหัส '<id20>.<hex64>' �
   assert.notEqual(r2.body.code, r.body.code);
 });
 
-test("loginStart: พนักงาน / root ที่ไม่อยู่ในร้าน / เจ้าของ inActive = 403 owner_only · watcher 403 · ไม่มีกุญแจ 503 · ไม่เขียน", async () => {
+test("loginStart: พนักงาน / root ที่ไม่อยู่ในร้าน / เจ้าของ inActive = 403 owner_only · watcher 403 · ไม่ต้องมีกุญแจ · ไม่เขียน", async () => {
   for (const [access, seed, code, error] of [
     [staff, null, 403, "owner_only"],
     [root, null, 403, "owner_only"],
@@ -117,8 +102,8 @@ test("loginStart: พนักงาน / root ที่ไม่อยู่ใ
   }
   const { start, deps, mem } = load();
   const r = await call(start, { ...deps, sealKey: undefined, env: {} }, { shopId: SHOP }, { shopAccess: owner });
-  assert.deepEqual([r.code, r.body.error], [503, "scango_login_not_configured"]);
-  assert.equal(mem.writes.length, 0);
+  assert.equal(r.code, 200, "B2: ไม่มีกุญแจผนึกก็ออกรหัสได้");
+  assert.equal(mem.writes.length, 1);
 });
 
 test("loginRedeem: แลกครั้งเดียว → ตัวตนเจ้าของ · ใบ claimed · ประทับ merchantLinkedAt ครั้งแรก · ครั้งที่ 2 = 409 already_used", async () => {
@@ -163,26 +148,22 @@ test("loginRedeem: เจ้าของถูกปิดสถานะ/ลด
   }
 });
 
-test("loginRedeem: secret ผิด / ไม่มีรหัส / doc ที่ client สร้างเอง (ไม่มีผนึกหรือผนึกผิด) = 404 code_not_found · รูปผิด 400 · ไม่มีกุญแจ 503 · ช่องเกิน 400", async () => {
+test("loginRedeem: secret ผิด / ไม่มีรหัส = 404 code_not_found · ใบไม่มีร้าน/คน = 409 · expiresAt อ่านไม่ออก 410 · รูปผิด 400 · ช่องเกิน 400 · B2 ไม่ต้องมีกุญแจ", async () => {
   const { start, SL, deps, mem, L } = load();
   const code = (await call(start, deps, { shopId: SHOP }, { shopAccess: owner })).body.code;
   const [id] = code.split(".");
   const wrong = await call(SL.loginRedeem, deps, { code: `${id}.${"0".repeat(64)}` });
   assert.deepEqual([wrong.code, wrong.body.error, wrong.body.externalId], [404, "code_not_found", undefined]);
   assert.equal((await call(SL.loginRedeem, deps, { code: `${"Z".repeat(20)}.${"0".repeat(64)}` })).body.error, "code_not_found");
-  // ปลอม: คนที่ login ได้สร้าง doc เองชี้ร้านคนอื่น + uid เจ้าของจริง (rules ที่ live ยังเปิด) — ไม่มีผนึก / ผนึกจากกุญแจอื่น
   const sec = "e".repeat(64);
-  const forged = { secretHash: L.sha256Hex(sec), shopId: SHOP, personId: OWNER, status: "pending", createdAt: NOW, expiresAt: new Date(NOW.getTime() + 60000) };
-  mem.store.set(`scangoSettingsLogin/${"F".repeat(20)}`, forged);
-  const otherKey = L.readSealKey({ sealKey: Buffer.alloc(32, 1).toString("base64") }).key;
-  mem.store.set(`scangoSettingsLogin/${"G".repeat(20)}`, { ...forged, seal: L.sealOf(otherKey, { id: "G".repeat(20), shopId: SHOP, personId: OWNER, secretHash: forged.secretHash, expiresAtMs: forged.expiresAt.getTime() }) });
-  for (const fid of ["F", "G"]) {
-    const r = await call(SL.loginRedeem, deps, { code: `${fid.repeat(20)}.${sec}` });
-    assert.deepEqual([r.code, r.body.error], [404, "code_not_found"], fid);
-  }
+  const base = { secretHash: L.sha256Hex(sec), shopId: SHOP, personId: OWNER, status: "pending", createdAt: NOW, expiresAt: new Date(NOW.getTime() + 60000) };
+  mem.store.set(`scangoSettingsLogin/${"F".repeat(20)}`, { ...base, shopId: "" });
+  mem.store.set(`scangoSettingsLogin/${"G".repeat(20)}`, { ...base, expiresAt: "ไม่ใช่เวลา" });
+  assert.deepEqual([(await call(SL.loginRedeem, deps, { code: `${"F".repeat(20)}.${sec}` })).body.error], ["already_used"]);
+  assert.deepEqual([(await call(SL.loginRedeem, deps, { code: `${"G".repeat(20)}.${sec}` })).body.error], ["code_expired"]);
   for (const bad of [{}, { code: "" }, { code: 5 }, { code: "abc.def" }]) assert.deepEqual([(await call(SL.loginRedeem, deps, bad)).body.error], ["code_invalid"], JSON.stringify(bad));
   assert.equal((await call(SL.loginRedeem, deps, { code, externalId: SHOP })).body.error, "invalid_request");
-  assert.equal((await call(SL.loginRedeem, { ...deps, sealKey: undefined, env: {} }, { code })).code, 503);
-  // ทั้งหมดข้างบนไม่ได้ใช้รหัสจริง
-  assert.equal(mem.store.get(`scangoSettingsLogin/${id}`).status, "pending");
+  assert.equal(mem.store.get(`scangoSettingsLogin/${id}`).status, "pending", "ทั้งหมดข้างบนไม่ได้ใช้รหัสจริง");
+  const noKey = await call(SL.loginRedeem, { ...deps, sealKey: undefined, env: {} }, { code });
+  assert.equal(noKey.code, 200, "B2: ไม่ต้องมีกุญแจผนึก");
 });

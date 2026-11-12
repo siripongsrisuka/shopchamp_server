@@ -1,7 +1,7 @@
 // pos/scango/deliveryQuote.js — POST /pos/scango/delivery/quote {externalId, distanceKm, foodSubtotal?} (auth 'partner')
 //
-// เลขเดียวกับที่ orderCreate คิด (_menu.quoteDelivery) · ระยะ = ระยะถนนที่ ScanGo วัดเอง (ฝั่งนี้ไม่วัด)
-// outOfRange = 200 พร้อมธง (ScanGo ซ่อนร้าน) · ไม่ขึ้นกับ enabled/เวลาเปิด · 404 shop_not_found · 400 invalid_request
+// เลขเดียวกับที่ orderCreate คิด (_menu.quoteDelivery · สูตรแบบช่วง _deliveryFee ยกจากพี่น้อง) · ระยะ = ระยะถนนที่ ScanGo วัดเอง (ฝั่งนี้ไม่วัด)
+// outOfRange = 200 พร้อมธง (ScanGo ซ่อนร้าน) · ไม่ขึ้นกับ enabled · 404 shop_not_found · 400 invalid_request
 "use strict";
 
 const { ok } = require("../_shared/respond");

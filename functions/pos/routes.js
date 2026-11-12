@@ -183,6 +183,9 @@ const ROUTES = Object.freeze([
   { contract: "scango.loginRedeem", path: "/scango/settings-login/redeem", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginRedeem },
   { contract: "scango.merchantProductsList", path: "/scango/merchant/products/list", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantProductsList },
   { contract: "scango.merchantProductsSet", path: "/scango/merchant/products/set", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantProductsSet, bodyLimit: "300kb" },
+  // รอบ 5 (Pack เคาะ 2026-11-12 · ค่าตั้งย้ายไปเว็บร้าน ScanGo): เปิด/ปิดรับ · ขั้นต่ำ · สูตรค่าส่งแบบช่วง + ตารางตัวอย่าง (ยึดแบบพี่น้อง)
+  { contract: "scango.merchantOrdering", path: "/scango/merchant/ordering", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantOrdering },
+  { contract: "scango.merchantFeePreview", path: "/scango/merchant/fee/preview", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantFeePreview },
   // ฝั่งแอปร้าน (auth 'shop' · path ขึ้นต้น /scango/shop/ แยกจากขาเข้าของ ScanGo)
   { contract: "scango.settingsGet", path: "/scango/shop/settings-get", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsGet").settingsGet },
   { contract: "scango.settingsSave", path: "/scango/shop/settings-save", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsSave").settingsSave },

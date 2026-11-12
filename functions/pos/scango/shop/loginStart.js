@@ -4,12 +4,12 @@
 //   แอปเปิด WebView `https://merchant.scango.biz/?in=pos#pc=<code>` → เว็บส่ง code ให้เซิร์ฟเวอร์ ScanGo
 //   (scango_server `functions/auth/posExchange.js`) → connector.redeemLoginCode → `POST /pos/scango/settings-login/redeem` (scango.loginRedeem)
 // คำขอ {shopId} · คำตอบ 200 {ok, code:'<id20>.<hex64>', expiresAt:<ms>} · อายุ 2 นาที · ใช้ครั้งเดียว
-// ด่าน: callerAccess (เขียน · watcher 403 watcher_read_only) → schema 400 → กุญแจผนึกไม่มี 503 scango_login_not_configured
+// ด่าน: callerAccess (เขียน · watcher 403 watcher_read_only) → schema 400
 //   → ร้านไม่มี 404 shop_not_found → ไม่ใช่แถวเจ้าของ active ใน humanResource 403 owner_only
 //   (`../settingsLogin`.ownerOf · ทีมงาน Shopchamp ที่ไม่ได้เป็นเจ้าของร้าน = 403 ตามต้นแบบ: root ไม่ได้ · สัญญา R1)
-// เขียน: `create()` doc `scangoSettingsLogin/{id20}` = {v:1, secretHash, shopId, personId: uid, status:'pending', createdAt, expiresAt, seal}
+// เขียน: `create()` doc `scangoSettingsLogin/{id20}` = {secretHash, shopId, personId: uid, status:'pending', createdAt, expiresAt} (รูปเดียวกับต้นแบบ · ไม่ผนึก · B2)
 //   (ไม่ใช่ set · id ชน = ลองใหม่ 1 ครั้งแล้วยอมเป็น 500 · ท่าเดียวกับ webLogin.start) · ❌ ไม่เก็บ secret ดิบ (`../_loginCode`)
-// deps: now · sealKey (base64 · เทส/harness) · env · newCode() → {id, secret} (harness ตรึงค่า) · audit(line)
+// deps: now · newCode() → {id, secret} (harness ตรึงค่า) · audit(line)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
@@ -37,9 +37,6 @@ function loginStart(deps) {
       if (!input) return;
       const gen = depOr(deps, "newCode", L.newCode);
       const now = await readNow(deps);
-      const k = L.readSealKey(deps);
-      if (k.error) { audit("start", "scango_login_not_configured", shopId, uid); return sendDeny(res, deny(503, "scango_login_not_configured", L.MSG.scango_login_not_configured)); }
-
       const snap = await db.collection("shop").doc(shopId).get();
       if (!snap.exists) return sendDeny(res, deny(404, "shop_not_found"));
       if (!ownerOf(snap.data() || {}, uid, now)) { audit("start", "owner_only", shopId, uid); return sendDeny(res, deny(403, "owner_only", L.MSG.owner_only)); }
@@ -49,16 +46,13 @@ function loginStart(deps) {
       for (let attempt = 0; attempt < 2 && !made; attempt++) {
         const g = gen() || {};
         if (!L.SID_RE.test(String(g.id)) || !L.HEX64_RE.test(String(g.secret))) throw new Error("scango.loginStart: ตัวสุ่มรหัสคืนรูปผิด");
-        const secretHash = L.sha256Hex(g.secret);
         const doc = {
-          v: 1,
-          secretHash,
+          secretHash: L.sha256Hex(g.secret), // ❌ ไม่เก็บ secret ดิบ
           shopId,
           personId: uid,
           status: "pending",
           createdAt: now,
           expiresAt,
-          seal: L.sealOf(k.key, { id: g.id, shopId, personId: uid, secretHash, expiresAtMs: expiresAt.getTime() }),
         };
         try {
           await db.collection(L.COLLECTION).doc(g.id).create(doc);

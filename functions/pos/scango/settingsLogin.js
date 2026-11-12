@@ -19,9 +19,9 @@
 // POST /pos/scango/settings-login/redeem {code}  (scango.loginRedeem · รอบ 4 Pack เคาะ 2026-11-12)
 //   แบบที่ยึดจากพี่น้อง: server แอปพี่น้อง origin/main `functions/claude/scango/settingsLogin.js` › redeem · ผู้เรียก = connector ฝั่ง ScanGo
 //   (`redeemLoginCode` → `/auth/pos/exchange` ของ scango_server) · code = ที่ scango.loginStart ออก (`<id20>.<hex64>` · `_loginCode.js`)
-//   ลำดับตรวจ (ต้นแบบ + ผนึก): รูป 400 code_invalid → กุญแจผนึกไม่มี 503 scango_login_not_configured → ใน transaction:
-//     ไม่มี doc 404 code_not_found · secret ผิด 404 code_not_found (ไม่บอกว่ามีรหัสนี้) · ผนึกไม่ตรง 404 code_not_found
-//     · หมดอายุ/expiresAt อ่านไม่ออก 410 code_expired · status ≠ pending 409 already_used
+//   ลำดับตรวจ (ต้นแบบ · ไม่มีผนึกแล้ว Pack เคาะ B2): รูป 400 code_invalid → ใน transaction:
+//     ไม่มี doc 404 code_not_found · secret ผิด 404 code_not_found (ไม่บอกว่ามีรหัสนี้)
+//     · หมดอายุ/expiresAt อ่านไม่ออก 410 code_expired · status ≠ pending 409 already_used · ใบไม่มี shopId/personId 409 already_used (ต้นแบบ)
 //     · ร้านไม่มี / personId ไม่ใช่แถวเจ้าของ active ใน humanResource **ตอนแลก** 403 owner_only (ใบยัง pending · หมดอายุเองใน 2 นาที)
 //     → update ใบ {status:'claimed', claimedAt} + ประทับ shop.scango.merchantLinkedAt ครั้งแรกครั้งเดียว (dotted ช่องเดียว · scango.loginStatus อ่าน)
 //   → 200 {externalId: shop doc id, personRef: uid, name: ชื่อแถวเจ้าของ, venueName: ชื่อร้าน}
@@ -126,8 +126,6 @@ function loginRedeem(deps) {
     C.onlyKeys(b, ["code"]);
     const parsed = L.parseCode(b.code);
     if (!parsed) { audit("redeem", "code_invalid", "", ""); no(400, "code_invalid"); }
-    const k = L.readSealKey(deps);
-    if (k.error) { audit("redeem", "scango_login_not_configured", "", ""); no(503, "scango_login_not_configured"); }
     const now = await readNow(deps);
     const ref = db.collection(L.COLLECTION).doc(parsed.id);
     let out;
@@ -138,10 +136,9 @@ function loginRedeem(deps) {
         if (!d) no(404, "code_not_found");
         if (!L.secretMatches(parsed.secret, d.secretHash)) no(404, "code_not_found");
         const expMs = L.msOf(d.expiresAt);
-        if (expMs === null) no(410, "code_expired"); // ผนึกครอบ expiresAt ⇒ ไม่มีค่าก็ตรวจผนึกไม่ได้ · fail-closed
-        if (!L.sealMatches(k.key, parsed.id, d)) no(404, "code_not_found");
-        if (L.isExpired(now.getTime(), expMs)) no(410, "code_expired");
+        if (expMs === null || L.isExpired(now.getTime(), expMs)) no(410, "code_expired"); // อ่านไม่ออก = หมดอายุ (fail-closed · ต้นแบบ)
         if (d.status !== "pending") no(409, "already_used");
+        if (typeof d.shopId !== "string" || !C.ID_RE.test(d.shopId) || typeof d.personId !== "string" || !d.personId) no(409, "already_used");
         const shopRef = db.collection("shop").doc(d.shopId);
         const shopSnap = await tx.get(shopRef);
         const shop = shopSnap && shopSnap.exists ? shopSnap.data() || {} : null;

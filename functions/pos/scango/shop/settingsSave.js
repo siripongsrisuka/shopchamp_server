@@ -5,7 +5,7 @@
 //    freeDeliveryMin|null, maxKm, prepMinutes, paymentQr ('' หรือ URL https), pickupNote}
 //   hours: เปิดก่อนปิด (ข้ามเที่ยงคืน = แยก 2 แถว) · ช่วงในวันเดียวกันห้ามทับ · ≤3 ช่วงต่อวัน · รวม ≤21 แถว
 // ด่าน: callerAccess (เขียน) → schema 400 invalid_request → เจ้าของเท่านั้น 403 owner_required
-//   transaction: shop ไม่มี 404 · ผู้เรียกไม่ active 403 not_shop_member · enabled:true แต่ขาด location/hours/สินค้า
+//   transaction: shop ไม่มี 404 · ผู้เรียกไม่ active 403 not_shop_member · enabled:true แต่ยังไม่เลือกสินค้า (รอบ 5: ไม่ดูพิกัด/เวลาแล้ว)
 //   = 409 scango_not_ready {missing:[...]} (สินค้านับจาก shop.scango.productIds ที่ productsSet ตรวจแล้ว)
 //   เขียน `tx.update` เฉพาะ `scango.<ช่องในคำขอ>` (dotted) ⇒ productIds และช่องอื่นของร้านไม่ถูกแตะ
 // หลัง commit: ส่ง venue_ordering ด้วย deps.sendVenue หรือ `../_outbound`.sendVenue(deps, {shopId, enabled, settings})

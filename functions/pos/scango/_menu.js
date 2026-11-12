@@ -1,23 +1,23 @@
 // pos/scango/_menu.js — สูตรล้วนของช่องทาง ScanGo (pure · ไม่แตะฐาน · ไม่อ่านนาฬิกาเอง)
 //
-// แบบ: lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม · รูปเมนู/ค่าส่ง = สัญญา §b ของร้านพี่น้อง (ScanGo อ่านรูปเดียวกันทุกเจ้า)
+// แบบ: lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม + §รอบ 5 · รูปเมนู/ค่าส่ง = สัญญา §b ของร้านพี่น้อง (ScanGo อ่านรูปเดียวกันทุกเจ้า)
 //   ใช้ร่วม: menu · deliveryQuote · orderCreate ⇒ ราคา/ของหมด/ค่าส่ง เลขเดียวกันทุกเส้นโดยโครงสร้าง
 //
-// ค่าตั้งร้าน `shop.scango` = {enabled, location:{lat,lng}, hours:[{day,open,close}], minOrder, deliveryFee, freeDeliveryMin|null,
-//   maxKm, prepMinutes, paymentQr, pickupNote, productIds:[≤1000]}
-//   hours: day 0-6 (0 = อาทิตย์ · เวลาไทย UTC+7) · open/close 'HH:mm' · close ≤ open = ข้ามเที่ยงคืน (close == open = 24 ชม.)
-//          ไม่มี/ว่าง = เปิดตลอด (ตัดสินเอง · รายงาน Pack) · แถวผิดรูป = ไม่นับ
-// ราคา: `logic.linePrice(stock, 1, {now})` ต่อหน่วย · fullPrice มีเฉพาะเมื่อโปรลดจริง · ❌ ไม่ส่งโปรท้ายบิล/สมาชิก/ส่วนลดค่าส่ง/ส่วนลดกลุ่ม (D1)
+// ค่าตั้งร้าน `shop.scango` ที่ไฟล์นี้อ่าน = {enabled, minOrder, deliveryFeeModel?, productIds:[≤1000]}
+//   + ค่าส่งแบบเดิม (deliveryFee · maxKm · freeDeliveryMin) อ่านเป็นสูตรให้ร้านที่ตั้งไว้แล้ว (`_deliveryFee.resolveDeliveryConfig`)
+//   รอบ 5 (Pack เคาะ 2026-11-12 · ยึดแบบพี่น้อง): เวลาทำการ · เวลาเตรียม · พิกัด · โปร = ScanGo ถือเอง (ตั้งที่เว็บร้าน)
+//     ⇒ ไฟล์นี้ **ไม่ปิดรับตามเวลาแล้ว** (ช่อง hours/prepMinutes ในฐานยังอยู่ แต่ไม่มีใครอ่าน) · ปิดรับ = enabled เท่านั้น
+// ราคา: `logic.linePrice(stock, 1, {now})` ต่อหน่วย · fullPrice มีเฉพาะเมื่อโปรลดจริง · ❌ ไม่ส่งโปรท้ายบิล/สมาชิก/ส่วนลดค่าส่ง/ส่วนลดกลุ่ม
 // หมด: stockCountStatus === true และ stock ≤ 0 (อ่านไม่ออก = หมด · fail-closed)
-// ค่าส่ง: เหมาเท่ากันทุกระยะใน maxKm · ส่งฟรีเมื่อค่าสินค้า ≥ freeDeliveryMin (ร้านออกแทน shopPays) · maxKm ไม่ตั้ง = นอกระยะทุกที่
+// ค่าส่ง: สูตรแบบช่วง (`_deliveryFee` · คัดจากต้นแบบ) · เมนูส่งสูตร + ไกลสุด · ตัวเลขต่อระยะ = quoteDelivery
 "use strict";
 
 const crypto = require("crypto");
 const logic = require("@shopchamp/logic");
+const DF = require("./_deliveryFee");
 
 const PROVIDER_ID = "shopchamp";
 const PRODUCT_MAX = 1000;
-const TZ_OFFSET_MS = 7 * 3600 * 1000; // ไทยไม่มี DST
 const DISABLED_DISCOUNT = Object.freeze({ enabled: false, tiers: Object.freeze([]) });
 
 const str = (v) => (v == null ? "" : String(v).trim());
@@ -25,58 +25,25 @@ const num = (v) => { const n = typeof v === "number" ? v : typeof v === "string"
 const isObj = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
 const round2 = (n) => logic.toSatang(n) / 100;
 
-/** ค่าตั้งร้านที่อ่านแล้ว (ค่าแปลก = ค่าปลอดภัย) */
+/** ค่าตั้งร้านที่อ่านแล้ว (ค่าแปลก = ค่าปลอดภัย) · delivery = สูตรที่ใช้จริง (`_deliveryFee.resolveDeliveryConfig`) */
 function configOf(shop) {
   const s = isObj(shop) && isObj(shop.scango) ? shop.scango : {};
   const nonNeg = (v) => { const n = num(v); return n !== null && n >= 0 ? n : null; };
-  const free = nonNeg(s.freeDeliveryMin);
-  const maxKm = nonNeg(s.maxKm);
-  const prep = num(s.prepMinutes);
   return {
     enabled: s.enabled === true,
-    hours: Array.isArray(s.hours) ? s.hours : [],
     minOrder: nonNeg(s.minOrder) || 0,
-    deliveryFee: nonNeg(s.deliveryFee) || 0,
-    freeDeliveryMin: free !== null && free > 0 ? free : null,
-    maxKm: maxKm !== null && maxKm > 0 ? maxKm : null,
-    prepMinutes: prep !== null && prep >= 1 && prep <= 240 ? Math.round(prep) : null,
+    delivery: DF.resolveDeliveryConfig(s),
     productIds: [...new Set((Array.isArray(s.productIds) ? s.productIds : []).filter((x) => typeof x === "string" && x !== "" && !x.includes("/")))].slice(0, PRODUCT_MAX),
   };
 }
 
-// ── เวลาเปิดปิด ──────────────────────────────────────────────────────────
-const hm = (v) => {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(str(v));
-  if (!m) return null;
-  const h = Number(m[1]), mi = Number(m[2]);
-  return h <= 24 && mi < 60 && h * 60 + mi <= 1440 ? h * 60 + mi : null;
-};
-
-/** isOpenAt(hours, now) → boolean · ไม่มีแถวที่ใช้ได้เลย = เปิดตลอด */
-function isOpenAt(hours, now) {
-  const rows = (Array.isArray(hours) ? hours : [])
-    .filter(isObj)
-    .map((r) => ({ day: Number(r.day), open: hm(r.open), close: hm(r.close) }))
-    .filter((r) => Number.isInteger(r.day) && r.day >= 0 && r.day <= 6 && r.open !== null && r.close !== null);
-  if (!rows.length) return true;
-  const local = new Date(now.getTime() + TZ_OFFSET_MS);
-  const day = local.getUTCDay();
-  const t = local.getUTCHours() * 60 + local.getUTCMinutes();
-  const yesterday = (day + 6) % 7;
-  for (const r of rows) {
-    if (r.open === r.close && r.day === day) return true;
-    if (r.close > r.open) { if (r.day === day && t >= r.open && t < r.close) return true; continue; }
-    if (r.day === day && t >= r.open) return true; // ข้ามเที่ยงคืน ส่วนของวันนี้
-    if (r.day === yesterday && t < r.close) return true; // ข้ามเที่ยงคืน ส่วนที่ล้นมาจากเมื่อวาน
-  }
-  return false;
-}
-
-/** acceptingOf(shop, now) → {accepting, reason} · reason ศัพท์เดียวกับพี่น้อง: ordering_disabled | shop_closed */
-function acceptingOf(shop, now) {
+/**
+ * acceptingOf(shop, _now) → {accepting, reason} · reason ศัพท์เดียวกับพี่น้อง: ordering_disabled
+ *   ต้นแบบ (`menu.js › acceptingOf`) = enabled && เครดิต && !temptClose · บ้านนี้ไม่มีเครดิต · เวลาทำการเป็นของ ScanGo (รอบ 5) ⇒ เหลือ enabled
+ */
+function acceptingOf(shop, _now) {
   const c = configOf(shop);
   if (!c.enabled) return { accepting: false, reason: "ordering_disabled" };
-  if (!isOpenAt(c.hours, now)) return { accepting: false, reason: "shop_closed" };
   return { accepting: true, reason: null };
 }
 
@@ -147,49 +114,25 @@ function categoryTreeOf(smartCategory) {
 }
 
 // ── ค่าส่ง ───────────────────────────────────────────────────────────────
-/** ระยะปัดขึ้น 0.1 กม. (กันเศษลอย 3.2000000001) */
-const ceilKm = (km) => Math.ceil(Number((km * 10).toFixed(6))) / 10;
-
-/** กติกาส่งฟรีในรูปขั้นบันไดของสัญญา (ขั้นเดียว maxOff null = ส่งฟรี) · ScanGo คิดเลขเดียวกับร้านพี่น้องรุ่นที่ใช้ freeDeliveryMin */
-function deliveryDiscountView(cfg) {
-  return cfg.freeDeliveryMin ? { enabled: true, tiers: [{ minSubtotal: cfg.freeDeliveryMin, maxOff: null }] } : { ...DISABLED_DISCOUNT, tiers: [] };
-}
-
-/** สูตรค่าส่งในรูปของสัญญา (เหมาทุกระยะ · baseKm = ไกลสุด) */
-function deliveryFeeModelOf(cfg) {
-  return { distance: "road", baseKm: cfg.maxKm || 0, baseFee: cfg.deliveryFee, bands: [] };
-}
+/** ระยะปัดขึ้น 0.1 กม. (สูตรเดียวกับ `_deliveryFee`) */
+const ceilKm = (km) => DF._internals.roundKmUp(km);
 
 /**
- * quoteDelivery(shop, {distanceKm, foodSubtotal}) — เลขเดียวกับที่ orderCreate คิด
- *   fee = ลูกค้าจ่าย · riderFee = ไรเดอร์ได้ (เต็มเสมอ) · shopPays = ร้านออกแทนเมื่อส่งฟรี
+ * quoteDelivery(shop, {distanceKm, foodSubtotal}) — เลขเดียวกับที่ orderCreate คิด (สูตรแบบช่วง `_deliveryFee.calcDeliveryFee`)
+ *   fee = ลูกค้าจ่าย · riderFee = ไรเดอร์ได้ (เต็มเสมอ) · shopPays = ร้านออกแทนเมื่อส่งฟรี (เฉพาะร้านที่ตั้ง freeDeliveryMin แบบเดิมไว้)
  *   foodSubtotal null = ไม่รู้ยอด = ไม่ฟรี (fail-closed)
  */
 function quoteDelivery(shop, { distanceKm, foodSubtotal }) {
   const cfg = configOf(shop);
-  const roundedKm = ceilKm(distanceKm);
-  const outOfRange = cfg.maxKm === null || roundedKm > cfg.maxKm;
-  const rule = deliveryDiscountView(cfg);
-  const base = {
-    distanceKm, roundedKm, outOfRange, maxKm: cfg.maxKm,
-    freeDeliveryMin: cfg.freeDeliveryMin || 0, minOrder: cfg.minOrder, steps: [],
-    deliveryFeeModel: deliveryFeeModelOf(cfg), deliveryFeeSource: "flat", deliveryDiscountRule: rule,
-    deliveryDiscountTier: null, nextDeliveryTier: null,
-  };
-  if (outOfRange) {
-    return { ...base, fee: null, riderFee: null, shopPays: 0, free: false, deliveryDiscount: 0, feeBeforeDiscount: null, feeAfterDiscount: null };
-  }
-  const riderFee = cfg.deliveryFee;
-  const free = cfg.freeDeliveryMin !== null && foodSubtotal !== null && foodSubtotal !== undefined && foodSubtotal >= cfg.freeDeliveryMin;
-  const fee = free ? 0 : riderFee;
-  const shopPays = free ? riderFee : 0;
-  const tier = free ? rule.tiers[0] : null;
-  const next = !free && cfg.freeDeliveryMin !== null && riderFee > 0 && foodSubtotal !== null && foodSubtotal !== undefined
-    ? { minSubtotal: cfg.freeDeliveryMin, maxOff: null, shortBy: round2(cfg.freeDeliveryMin - foodSubtotal), discount: riderFee, feeAfterDiscount: 0 }
-    : null;
+  const d = cfg.delivery;
+  const q = DF.calcDeliveryFee({ model: d.model, distanceKm, foodSubtotal, freeDeliveryMin: d.freeDeliveryMin });
   return {
-    ...base, fee, riderFee, shopPays, free, deliveryDiscount: shopPays, feeBeforeDiscount: riderFee, feeAfterDiscount: fee,
-    deliveryDiscountTier: tier, nextDeliveryTier: next,
+    distanceKm, roundedKm: q.roundedKm, outOfRange: q.outOfRange, maxKm: q.maxKm,
+    freeDeliveryMin: d.freeDeliveryMin, minOrder: cfg.minOrder, steps: q.steps,
+    deliveryFeeModel: d.model, deliveryFeeSource: d.source, deliveryDiscountRule: q.deliveryDiscountRule,
+    deliveryDiscountTier: q.deliveryDiscountTier, nextDeliveryTier: q.nextDeliveryTier,
+    fee: q.fee, riderFee: q.riderFee, shopPays: q.shopPays, free: q.free, deliveryDiscount: q.deliveryDiscount,
+    feeBeforeDiscount: q.feeBeforeDiscount, feeAfterDiscount: q.feeAfterDiscount,
   };
 }
 
@@ -201,7 +144,9 @@ function menuVersionOf(parts) {
 /**
  * buildMenu({shop, products, now}) → Menu (รูป [C§1] · providerId shopchamp)
  *   products = stock docs `{id, ...data}` ที่ handler โหลดตาม productIds และเป็นของร้านนี้แล้ว · ลำดับ = ลำดับ productIds
- *   ❌ ไม่มี promos · loyalty · newCustomer · groupDiscount · rails (D1 · Pack ยังไม่ยืนยัน)
+ *   ค่าส่ง = สูตรแบบช่วง (deliveryFeeModel · source · maxKm = ขอบช่วงสุดท้าย · deliveryFee = baseFee ให้ ScanGo รุ่นก่อน ท่าเดียวกับต้นแบบ)
+ *   รอบ 5: ❌ ไม่ส่ง freeDeliveryMin · ❌ ไม่ส่ง prepMin (ScanGo ถือ) · deliveryDiscount ปิดเสมอ (โปร/ส่วนลดค่าส่งเป็นของ ScanGo)
+ *   ❌ ไม่มี promos · loyalty · newCustomer · groupDiscount · rails
  */
 function buildMenu({ shop, products, now }) {
   const s = isObj(shop) ? shop : {};
@@ -209,23 +154,21 @@ function buildMenu({ shop, products, now }) {
   const list = (Array.isArray(products) ? products : []).map((p) => productView(p, now)).filter(Boolean);
   const categoryTree = categoryTreeOf(s.smartCategory);
   const acc = acceptingOf(s, now);
-  const deliveryDiscount = deliveryDiscountView(cfg);
-  const deliveryFeeModel = deliveryFeeModelOf(cfg);
+  const d = cfg.delivery;
+  const deliveryFee = d.model.baseFee;
   return {
     providerId: PROVIDER_ID,
-    menuVersion: menuVersionOf({ products: list, categoryTree, minOrder: cfg.minOrder, deliveryFee: cfg.deliveryFee, freeDeliveryMin: cfg.freeDeliveryMin, maxKm: cfg.maxKm }),
+    menuVersion: menuVersionOf({ products: list, categoryTree, minOrder: cfg.minOrder, deliveryFee, deliveryFeeModel: d.model }),
     currency: "THB",
     acceptingOrders: acc.accepting,
     acceptingReason: acc.reason,
     ...(acc.reason ? { closedReason: acc.reason } : {}),
     minOrder: cfg.minOrder,
-    deliveryFee: cfg.deliveryFee,
-    deliveryFeeModel,
-    deliveryFeeSource: "flat",
-    freeDeliveryMin: cfg.freeDeliveryMin || 0,
-    maxKm: cfg.maxKm,
-    deliveryDiscount,
-    ...(cfg.prepMinutes ? { prepMin: cfg.prepMinutes } : {}),
+    deliveryFee,
+    deliveryFeeModel: d.model,
+    deliveryFeeSource: d.source,
+    maxKm: d.maxKm,
+    deliveryDiscount: { ...DISABLED_DISCOUNT, tiers: [] },
     categoryTree,
     rails: [],
     products: list,
@@ -233,6 +176,6 @@ function buildMenu({ shop, products, now }) {
 }
 
 module.exports = {
-  PROVIDER_ID, PRODUCT_MAX, configOf, isOpenAt, acceptingOf, isDeleted, isOut, stockLeft, unitPriceOf, productView,
-  categoryTreeOf, ceilKm, quoteDelivery, deliveryDiscountView, buildMenu, menuVersionOf, round2,
+  PROVIDER_ID, PRODUCT_MAX, configOf, acceptingOf, isDeleted, isOut, stockLeft, unitPriceOf, productView,
+  categoryTreeOf, ceilKm, quoteDelivery, buildMenu, menuVersionOf, round2,
 };

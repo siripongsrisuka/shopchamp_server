@@ -80,7 +80,7 @@ test("ด่านตัวตน: ทุก route ของ pos และ pos_h
 
 test("ด่านคู่ค้า (auth partner · เส้น /scango/* ที่ ScanGo ยิงเข้า): ไม่มี header = 401 · กุญแจผิด = 401 · ไม่ตั้ง secret = 503 · กุญแจถูก = ถึง handler · ไม่มี token ของบ้านนี้เกี่ยว", async () => {
   const partnerRoutes = ROUTES.filter((r) => r.auth === "partner");
-  assert.equal(partnerRoutes.length, 12, "เส้นคู่ค้าของ ScanGo 12 เส้น (menu · delivery/quote · order/create · cancel · remind · state · delivery · settings-login/account · owner-check · redeem · merchant/products/list · merchant/products/set)");
+  assert.equal(partnerRoutes.length, 14, "เส้นคู่ค้าของ ScanGo 14 เส้น (menu · delivery/quote · order/create · cancel · remind · state · delivery · settings-login/account · owner-check · redeem · merchant/products/list · merchant/products/set · merchant/ordering · merchant/fee/preview)");
   assert.ok(partnerRoutes.every((r) => r.fn === FN.POS && /^\/scango\//.test(r.path) && !/^\/scango\/shop\//.test(r.path)));
   // ฝั่งแอปร้านของ ScanGo อยู่ใต้ /scango/shop/* และเป็น auth shop (ผ่านด่านตัวตน + ด่านร้าน)
   assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 8);

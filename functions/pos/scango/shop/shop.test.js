@@ -41,7 +41,7 @@ function venueSpy(result = { status: "sent", sent: true, queued: false }) {
 }
 
 // ── settingsGet ────────────────────────────────────────────────────────────────
-test("settingsGet: ร้านไม่เคยตั้ง = ค่าตั้งต้น configured:false missing ครบ 3 · watcher อ่านได้", async () => {
+test("settingsGet: ร้านไม่เคยตั้ง = ค่าตั้งต้น configured:false missing เหลือ products (รอบ 5) · watcher อ่านได้", async () => {
   F.reset({ shop: { shopA: shopDoc() } });
   const r = await call(settingsGet, {}, { shopId: "shopA" }, WATCHER);
   assert.equal(r.code, 200, JSON.stringify(r.body));
@@ -50,7 +50,7 @@ test("settingsGet: ร้านไม่เคยตั้ง = ค่าตั�
   assert.equal(r.body.scango.location, null);
   assert.deepEqual(r.body.scango.productIds, []);
   assert.equal(r.body.productCount, 0);
-  assert.deepEqual(r.body.missing, ["location", "hours", "products"]);
+  assert.deepEqual(r.body.missing, ["products"]);
 });
 
 test("settingsGet: ร้านตั้งแล้ว = ค่าในฐาน + productCount · ร้านผิด 403 · ช่องเกิน 400 · ร้านไม่มี 404", async () => {
@@ -98,14 +98,18 @@ test("settingsSave: พนักงาน 403 owner_required · watcher 403 · �
   assert.equal(spy.calls.length, 0);
 });
 
-test("settingsSave: เปิดรับใบแต่ขาดของ = 409 scango_not_ready พร้อม missing · ปิดอยู่บันทึกได้แม้ขาด", async () => {
+test("settingsSave: เปิดรับใบแต่ยังไม่เลือกสินค้า = 409 scango_not_ready missing ['products'] · รอบ 5 ไม่ดูพิกัด/เวลาแล้ว · ปิดอยู่บันทึกได้แม้ขาด", async () => {
   F.reset({ shop: { shopA: shopDoc() } });
   const spy = venueSpy();
   const r = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: true, location: null, hours: [] }), OWNER);
   assert.equal(r.code, 409);
   assert.equal(r.body.error, "scango_not_ready");
-  assert.deepEqual(r.body.missing, ["location", "hours", "products"]);
+  assert.deepEqual(r.body.missing, ["products"]);
   assert.equal(F.log.length, 0);
+  F.reset({ shop: { shopA: shopDoc({ productIds: ["p1"] }) } });
+  const noGeo = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: true, location: null, hours: [] }), OWNER);
+  assert.equal(noGeo.code, 200, "มีสินค้า เปิดได้แม้ไม่มีพิกัด/เวลา (แอปรุ่นแรกยังบันทึกได้)");
+  F.reset({ shop: { shopA: shopDoc() } });
   const off = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: false, location: null, hours: [] }), OWNER);
   assert.equal(off.code, 200, JSON.stringify(off.body));
   assert.equal(F.data.shop.shopA.scango.location, null);

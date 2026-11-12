@@ -50,14 +50,17 @@ test("ส่งซ้ำ: 200 duplicate คืนสถานะเดิม ไ
   assert.deepEqual([o.code, o.body.error], [409, "order_ref_conflict"]);
 });
 
-test("ปิดรับ: สวิตช์ปิด = ordering_disabled · นอกเวลา = shop_closed (409 venue_not_accepting ไม่เขียน)", async () => {
-  for (const [sc, reason] of [[{ enabled: false }, "ordering_disabled"], [{ hours: [{ day: 3, open: "18:00", close: "22:00" }] }, "shop_closed"]]) {
-    const { mem, deps, mod } = load({ [`shop/${SHOP}`]: shop(sc) });
+test("ปิดรับ: สวิตช์ปิด = ordering_disabled (409 venue_not_accepting ไม่เขียน) · รอบ 5 เวลาทำการเดิมในฐานไม่ปิดรับแล้ว (ScanGo ถือ)", async () => {
+  {
+    const { mem, deps, mod } = load({ [`shop/${SHOP}`]: shop({ enabled: false }) });
     const r = await call(mod("orderCreate.js").orderCreate(deps), body());
-    assert.deepEqual([r.code, r.body.error, r.body.reason], [409, "venue_not_accepting", reason]);
+    assert.deepEqual([r.code, r.body.error, r.body.reason], [409, "venue_not_accepting", "ordering_disabled"]);
     assert.equal(mem.writes.length, 0);
     assert.equal(deps.pushes.length, 0);
   }
+  const { deps, mod } = load({ [`shop/${SHOP}`]: shop({ hours: [{ day: 3, open: "18:00", close: "22:00" }] }) });
+  const r = await call(mod("orderCreate.js").orderCreate(deps), body());
+  assert.equal(r.code, 200, JSON.stringify(r.body));
 });
 
 test("menu_changed: ราคาไม่ตรง · ไม่ส่งราคา · ไม่ได้เลือกขาย · ลบแล้ว · ร้านอื่น · ไม่มี doc · หมด · ของไม่พอ · มีตัวเลือก", async () => {

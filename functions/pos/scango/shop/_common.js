@@ -2,7 +2,8 @@
 //
 // แบบ: lanes/dev/source/shopchamp-scango-design.md §"แอปร้าน → Shopchamp server"
 // `shop.scango` = {enabled, location:{lat,lng}|null, hours:[{day,open,close}], minOrder, deliveryFee, freeDeliveryMin|null,
-//                  maxKm, prepMinutes, paymentQr, pickupNote, productIds:[≤1000]}
+//                  maxKm, prepMinutes, paymentQr, pickupNote, productIds:[≤1000], deliveryFeeModel?}
+//   รอบ 5: deliveryFeeModel ตั้งจากเว็บร้าน ScanGo (relay ordering) · location/hours/prepMinutes ยังเก็บได้จากแอปรุ่นแรก แต่ไม่มีใครอ่าน (ScanGo ถือ)
 //   ร้านที่ยังไม่เคยตั้ง = ไม่มีช่อง scango · ผู้อ่านเติมค่าตั้งต้น (DEFAULTS) เอง ไม่เขียนค่าตั้งต้นลงฐาน
 // คำขอตรวจด้วย zod ในไฟล์นี้ (ยังไม่มีใน @shopchamp/schema · ❌ ไม่แก้ packages)
 // ❌ ไม่ require SDK ตัวจริง
@@ -77,12 +78,13 @@ function scangoOf(shop) {
   return out;
 }
 
-/** missingForEnable(settings) — ของที่ขาดก่อนเปิดรับใบ: 'location' · 'hours' · 'products' */
+/**
+ * missingForEnable(settings) — ของที่ขาดก่อนเปิดรับใบ: 'products'
+ *   รอบ 5 (Pack เคาะ 2026-11-12 · ยึดแบบพี่น้อง): พิกัด · เวลาทำการ เป็นของ ScanGo (ตั้งที่เว็บร้าน) ⇒ ไม่ใช่เงื่อนไขเปิดรับอีกแล้ว
+ *   ต้นแบบ (`ordering.js`) ไม่มีด่านของขาดเลย · บ้านนี้คง 'products' ไว้ เพราะร้านปลีกเลือกสินค้าทีละตัว (B2) ไม่มีสินค้า = เมนูว่าง
+ */
 function missingForEnable(s) {
   const miss = [];
-  const loc = s && s.location;
-  if (!isObj(loc) || !Number.isFinite(loc.lat) || !Number.isFinite(loc.lng)) miss.push("location");
-  if (!Array.isArray(s && s.hours) || !s.hours.length) miss.push("hours");
   if (!Array.isArray(s && s.productIds) || !s.productIds.length) miss.push("products");
   return miss;
 }

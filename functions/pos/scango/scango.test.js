@@ -107,26 +107,38 @@ test("outbound · notifyOrder: ยิงไม่ออกแต่ลง outbox
   await OB.notifyOrder({ orderRef: "R1", type: "ready" }, deps({ env: {} }));
   assert.equal(get("scangoOrder/R1").notified.ready, undefined);
 });
-test("outbound · venuePayloadOf: รูป venue_ordering ที่ ScanGo อ่าน (paymentQr เป็นลิงก์รูป = null · pickup มีพิกัด/เบอร์ · businessHours รูป ScanGo)", () => {
+test("outbound · venuePayloadOf: รูป venue_ordering ที่ ScanGo อ่าน (paymentQr เป็นลิงก์รูป = null · pickup มีพิกัด/เบอร์ · รอบ 5 ไม่ส่งเวลา/เวลาเตรียม/ส่งฟรี · สูตรค่าส่ง)", () => {
   const p = OB.venuePayloadOf("shopA", get("shop/shopA"), NOW);
   assert.equal(p.type, "venue_ordering"); assert.equal(p.externalId, "shopA"); assert.equal(p.name, "ร้านเอ");
   assert.deepEqual(p.geo, { lat: 13.7, lng: 100.5 }); assert.equal(p.phone, "021234567"); assert.equal(p.address, null);
-  assert.equal(p.enabled, true); assert.equal(p.acceptingOrders, true); assert.equal(p.maxKm, 5); assert.equal(p.prepMinutes, 15);
+  assert.equal(p.enabled, true); assert.equal(p.acceptingOrders, true); assert.equal(p.maxKm, 5);
+  assert.deepEqual(p.deliveryFeeModel, { distance: "road", baseKm: 5, baseFee: 20, bands: [] }); assert.equal(p.deliveryFee, 20); assert.equal(p.deliveryFeeSource, "legacy");
+  for (const k of ["businessHours", "prepMinutes", "freeDeliveryMin"]) assert.equal(k in p, false, k);
   // "qr://shopA" ไม่ใช่เลขพร้อมเพย์ ⇒ ScanGo ใช้สร้าง QR ไม่ได้ = ส่ง null (ร้านรับเงินสดอย่างเดียวบน ScanGo)
   assert.equal(p.transferEnabled, false); assert.equal(p.paymentQr, null); assert.equal(p.vertical, "retail");
   assert.deepEqual(p.pickup, { name: "ร้านเอ", address: "", lat: 13.7, lng: 100.5, phone: "021234567", note: "หน้าร้าน" });
-  assert.deepEqual(p.businessHours, [{ day: 1, open: "08:00", close: "20:00", closed: false }]);
   assert.equal(p.at, NOW.toISOString()); assert.equal(p.eventId, `venue:shopA:${NOW.getTime()}`);
   const off = OB.venuePayloadOf("shopB", { scango: { enabled: true, productIds: [] } }, NOW);
-  assert.equal(off.acceptingOrders, false); assert.equal(off.geo, null); assert.equal(off.transferEnabled, false); assert.equal(off.paymentQr, null);
+  assert.equal(off.acceptingOrders, false); assert.equal("geo" in off, false, "ไม่รู้พิกัด = ไม่ส่งช่อง (ScanGo ถือพิกัด)"); assert.equal(off.transferEnabled, false); assert.equal(off.paymentQr, null);
   assert.deepEqual(off.pickup, { name: "", address: "", lat: null, lng: null, phone: "", note: null });
   // เลขพร้อมเพย์ (เบอร์ 10 · บัตร 13 · e-wallet 15 · มีขีด/ช่องว่างได้) = ส่งรูป {type, id, name} · เลขผิดหลัก = null
   const pp = OB.venuePayloadOf("shopA", { ...get("shop/shopA"), scango: { ...get("shop/shopA").scango, paymentQr: "081-234-5678" } }, NOW);
   assert.deepEqual(pp.paymentQr, { type: "promptpay", id: "0812345678", name: "ร้านเอ" }); assert.equal(pp.transferEnabled, true);
   assert.equal(OB.promptpayIdOf("1 2345 67890 12 3"), "1234567890123"); assert.equal(OB.promptpayIdOf("123456789012345"), "123456789012345");
   assert.equal(OB.promptpayIdOf("12345"), null); assert.equal(OB.promptpayIdOf("https://x/qr.png"), null);
-  // แถวเวลาที่ผิดรูป/วันนอก 0-6 = ไม่ส่ง (ScanGo ทิ้งอยู่แล้ว · ไม่ส่งของเสียไป)
-  assert.deepEqual(OB.businessHoursOf([{ day: 7, open: "08:00", close: "20:00" }, { day: 0, open: "8:00", close: "20:00" }, { day: 0, open: "08:00", close: "20:00" }]), [{ day: 0, open: "08:00", close: "20:00", closed: false }]);
+  assert.equal(OB.promptpayIdOf("1812345678"), null, "เบอร์ 10 หลักต้องขึ้นต้น 0 (กฎต้นแบบ)");
+  // ไม่ผูกพิกัด: เปิด + มีสินค้า = acceptingOrders true แม้ไม่มีพิกัด
+  assert.equal(OB.venuePayloadOf("shopB", { scango: { enabled: true, productIds: ["p1"] } }, NOW).acceptingOrders, true);
+  // รอบ 5 พร้อมเพย์ = ค่าตั้ง POS (shop.receipt.promptpayId + promptpayStatus) ก่อน · ปิดสถานะ = ถอยไป scango.paymentQr เดิม
+  const base = get("shop/shopA");
+  const rc = OB.venuePayloadOf("shopA", { ...base, receipt: { promptpayStatus: true, promptpayId: "0899999999" }, scango: { ...base.scango, paymentQr: "081-234-5678" } }, NOW);
+  assert.deepEqual(rc.paymentQr, { type: "promptpay", id: "0899999999", name: "ร้านเอ" });
+  const rcOff = OB.venuePayloadOf("shopA", { ...base, receipt: { promptpayStatus: false, promptpayId: "0899999999" }, scango: { ...base.scango, paymentQr: "081-234-5678" } }, NOW);
+  assert.equal(rcOff.paymentQr.id, "0812345678");
+  assert.equal(OB.venuePayloadOf("shopA", { ...base, receipt: { promptpayStatus: false, promptpayId: "0899999999" } }, NOW).paymentQr, null);
+  // สูตรแบบช่วงที่ตั้งจากเว็บ = ชนะค่าเดิม · maxKm = ขอบช่วงสุดท้าย
+  const md = OB.venuePayloadOf("shopA", { ...base, scango: { ...base.scango, deliveryFeeModel: { baseKm: 2, baseFee: 25, bands: [{ toKm: 8, perKm: 5 }] } } }, NOW);
+  assert.deepEqual([md.maxKm, md.deliveryFee, md.deliveryFeeSource], [8, 25, "model"]);
 });
 test("outbound · notifyVenue ยิงไปเส้น /provider/shopchamp/event", async () => {
   const r = await OB.notifyVenue("shopA", null, deps());
