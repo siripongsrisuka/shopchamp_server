@@ -1,4 +1,4 @@
-// pos/scango/settingsLogin.js — 2 เส้นที่เซิร์ฟเวอร์ ScanGo ใช้ตรวจเจ้าของร้าน ตอน login เว็บร้าน ScanGo ด้วยบัญชี Shopchamp (Pack เคาะ 2026-11-12)
+// pos/scango/settingsLogin.js — 3 เส้นที่เซิร์ฟเวอร์ ScanGo ใช้ตอนเข้าเว็บร้าน ScanGo: login ด้วยบัญชี Shopchamp (account · owner-check) และแลกรหัสจากแอปร้าน (redeem) · Pack เคาะ 2026-11-12
 //   auth 'partner' (กุญแจร่วม header x-scango-platform-key · _partnerAuth.js) เหมือน /scango/* อื่น
 //
 // POST /pos/scango/settings-login/account {idToken}  (scango.loginAccount)
@@ -16,7 +16,19 @@
 //   ScanGo ถามซ้ำทุกครั้งที่ใช้สิทธิ์ (คนถูกถอดจากเจ้าของภายหลัง = isOwner false) · ร้าน = shop/{externalId} (doc id)
 //   → 200 {isOwner, name, shopName} · name = ชื่อแถวเจ้าของ (ไม่ใช่เจ้าของ = '' · ไม่บอกชื่อพนักงาน) · ร้านไม่มี 404 shop_not_found
 //
-// อ่านอย่างเดียว ไม่เขียนฐาน · ❌ ห้าม require SDK ตัวจริงตรงนี้ (verifyIdToken ตัวจริงโหลดตอนเรียกเท่านั้น · harness/เทสฉีด deps.verifyIdToken)
+// POST /pos/scango/settings-login/redeem {code}  (scango.loginRedeem · รอบ 4 Pack เคาะ 2026-11-12)
+//   แบบที่ยึดจากพี่น้อง: server แอปพี่น้อง origin/main `functions/claude/scango/settingsLogin.js` › redeem · ผู้เรียก = connector ฝั่ง ScanGo
+//   (`redeemLoginCode` → `/auth/pos/exchange` ของ scango_server) · code = ที่ scango.loginStart ออก (`<id20>.<hex64>` · `_loginCode.js`)
+//   ลำดับตรวจ (ต้นแบบ + ผนึก): รูป 400 code_invalid → กุญแจผนึกไม่มี 503 scango_login_not_configured → ใน transaction:
+//     ไม่มี doc 404 code_not_found · secret ผิด 404 code_not_found (ไม่บอกว่ามีรหัสนี้) · ผนึกไม่ตรง 404 code_not_found
+//     · หมดอายุ/expiresAt อ่านไม่ออก 410 code_expired · status ≠ pending 409 already_used
+//     · ร้านไม่มี / personId ไม่ใช่แถวเจ้าของ active ใน humanResource **ตอนแลก** 403 owner_only (ใบยัง pending · หมดอายุเองใน 2 นาที)
+//     → update ใบ {status:'claimed', claimedAt} + ประทับ shop.scango.merchantLinkedAt ครั้งแรกครั้งเดียว (dotted ช่องเดียว · scango.loginStatus อ่าน)
+//   → 200 {externalId: shop doc id, personRef: uid, name: ชื่อแถวเจ้าของ, venueName: ชื่อร้าน}
+//   รหัสปฏิเสธ = ชุด LOGIN_CODES ที่ connector แปล (code_invalid 400 · code_not_found 404 · already_used 409 · code_expired 410 · owner_only 403)
+//   ช่องเกิน = 400 invalid_request · log 1 บรรทัด/เหตุการณ์ ❌ ไม่มีรหัส
+//
+// account / owner-check อ่านอย่างเดียว ไม่เขียนฐาน · ❌ ห้าม require SDK ตัวจริงตรงนี้ (verifyIdToken ตัวจริงโหลดตอนเรียกเท่านั้น · harness/เทสฉีด deps.verifyIdToken)
 "use strict";
 
 const { db } = require("../../firebase");
@@ -24,6 +36,7 @@ const { ok } = require("../_shared/respond");
 const { readNow, depOr } = require("../_shared/deps");
 const { memberStatusOf, roleOf, OWNER_POSITION } = require("../_shared/auth");
 const C = require("./_core");
+const L = require("./_loginCode");
 
 const TOKEN_MAX = 4096;
 const PORT_SCAN_MAX = 50; // ค่า shopId จาก port ที่อ่านต่อคำขอ
@@ -105,4 +118,46 @@ function loginOwnerCheck(deps) {
   });
 }
 
-module.exports = { loginAccount, loginOwnerCheck, portShopIds, ownerOf, TOKEN_MAX, PORT_SCAN_MAX, SHOPS_MAX };
+function loginRedeem(deps) {
+  const audit = L.auditOf(deps);
+  const no = (status, code) => C.refuse(status, code, L.MSG[code]);
+  return C.wrap(async (req, res) => {
+    const b = C.bodyOf(req);
+    C.onlyKeys(b, ["code"]);
+    const parsed = L.parseCode(b.code);
+    if (!parsed) { audit("redeem", "code_invalid", "", ""); no(400, "code_invalid"); }
+    const k = L.readSealKey(deps);
+    if (k.error) { audit("redeem", "scango_login_not_configured", "", ""); no(503, "scango_login_not_configured"); }
+    const now = await readNow(deps);
+    const ref = db.collection(L.COLLECTION).doc(parsed.id);
+    let out;
+    try {
+      out = await C.runTx(async (tx) => {
+        const snap = await tx.get(ref);
+        const d = snap && snap.exists ? snap.data() || {} : null;
+        if (!d) no(404, "code_not_found");
+        if (!L.secretMatches(parsed.secret, d.secretHash)) no(404, "code_not_found");
+        const expMs = L.msOf(d.expiresAt);
+        if (expMs === null) no(410, "code_expired"); // ผนึกครอบ expiresAt ⇒ ไม่มีค่าก็ตรวจผนึกไม่ได้ · fail-closed
+        if (!L.sealMatches(k.key, parsed.id, d)) no(404, "code_not_found");
+        if (L.isExpired(now.getTime(), expMs)) no(410, "code_expired");
+        if (d.status !== "pending") no(409, "already_used");
+        const shopRef = db.collection("shop").doc(d.shopId);
+        const shopSnap = await tx.get(shopRef);
+        const shop = shopSnap && shopSnap.exists ? shopSnap.data() || {} : null;
+        const person = shop ? ownerOf(shop, d.personId, now) : null;
+        if (!person) no(403, "owner_only");
+        tx.update(ref, { status: "claimed", claimedAt: now });
+        if (!(C.isObj(shop.scango) && shop.scango.merchantLinkedAt)) tx.update(shopRef, { "scango.merchantLinkedAt": now });
+        return { externalId: d.shopId, personRef: d.personId, name: textOf(person.name), venueName: textOf(shop.name) };
+      });
+    } catch (e) {
+      if (e instanceof C.Refusal) audit("redeem", e.deny.error, "", "");
+      throw e;
+    }
+    audit("redeem", "ok", out.externalId, out.personRef);
+    return ok(res, out);
+  });
+}
+
+module.exports = { loginAccount, loginOwnerCheck, loginRedeem, portShopIds, ownerOf, TOKEN_MAX, PORT_SCAN_MAX, SHOPS_MAX };

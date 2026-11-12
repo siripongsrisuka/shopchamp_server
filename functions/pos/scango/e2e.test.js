@@ -3,6 +3,7 @@
 //   เส้นทาง: ตั้งค่าร้าน (settingsSave → venue_ordering) → ScanGo ดึงเมนู → สั่ง (orderCreate · push ร้าน) → ร้านกดรับ/พร้อมส่ง (orderAction · ข่าว accepted/ready ออก)
 //           → ไรเดอร์ assigned/picked_up/delivering/delivered (orderDelivery) → ปิดบิลด้วย sale/create.js ตัวจริง (เลขบิล · ตัดสต็อก · guard)
 //           → orderState/orderList เห็นบิลปิดแล้ว · ข่าวที่ยิงไม่ออกลง outbox แล้วตัวกวาดยิงซ้ำสำเร็จ
+//   รอบ 4: ไทล์ ScanGo (loginStatus) → เจ้าของขอรหัส (loginStart) → ScanGo แลก (loginRedeem) ครั้งเดียว → เว็บร้าน relay ตั้งสินค้า → เมนูเห็น
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -30,7 +31,8 @@ const seed = {
   "stock/p2": { shopId: SHOP, name: "น้ำเปล่า", price: 7, cost: 4, stock: 0, stockCountStatus: false, unit: "ขวด", category: ["c1"] },
 };
 const FILES = ["_core.js", "_menu.js", "_outbound.js", "_orderActions.js", "closeBill.js", "settingsLogin.js", "menu.js", "deliveryQuote.js", "orderCreate.js", "orderDelivery.js", "orderState.js", "outboxSweep.js",
-  "shop/_common.js", "shop/settingsSave.js", "shop/orderAction.js", "shop/orderList.js", "../sale/create.js", "../member/_gate.js"].map((f) => path.join(__dirname, f));
+  "shop/_common.js", "shop/settingsSave.js", "shop/orderAction.js", "shop/orderList.js", "../sale/create.js", "../member/_gate.js",
+  "_loginCode.js", "shop/loginStart.js", "shop/loginStatus.js", "merchantRelay.js", "shop/productsSet.js", "shop/productSearch.js"].map((f) => path.join(__dirname, f));
 const mem = T.install(seed, FILES, () => NOW);
 const H = {
   menu: require("./menu").menu, quote: require("./deliveryQuote").deliveryQuote, create: require("./orderCreate").orderCreate, delivery: require("./orderDelivery").orderDelivery,
@@ -183,4 +185,50 @@ test("e2e · login เว็บร้าน ScanGo: idToken ของเจ้�
   const bad = await run(SL.loginAccount, { idToken: "tok-forged" });
   assert.deepEqual([bad.code, bad.body.error], [401, "account_token_invalid"]);
   assert.equal(mem.writes.length, writesBefore, "อ่านอย่างเดียว");
+});
+
+test("e2e · รอบ 4 ไทล์ ScanGo: status → start → redeem ครั้งเดียว (ซ้ำ 409) → relay ตั้งสินค้าด้วยตัวตนที่แลกได้ → เมนูเปลี่ยน · หมดอายุ 410 · ไม่ใช่เจ้าของ 403", async () => {
+  const SL = require("./settingsLogin");
+  const start = require("./shop/loginStart").loginStart;
+  const status = require("./shop/loginStatus").loginStatus;
+  const R = require("./merchantRelay");
+  let clock = NOW;
+  const d4 = { ...deps, now: () => clock, sealKey: Buffer.alloc(32, 3).toString("base64"), audit: () => {} };
+  const run = async (h, body, extra) => { const res = T.makeRes(); await h(d4)({ body, ...(extra || {}) }, res); return res; };
+
+  // ไทล์: ร้านตั้งค่าแล้วในเทสแรก (scango.enabled boolean) ⇒ connected · เจ้าของ
+  const st = await run(status, { shopId: SHOP }, { shopAccess: owner });
+  assert.deepEqual(st.body, { ok: true, connected: true, isOwner: true });
+
+  // ไม่ใช่เจ้าของ (คนที่ไม่มีแถวเจ้าของในร้าน) ขอรหัส = 403 · ไม่มี doc ใหม่
+  const before = docsOf("scangoSettingsLogin").length;
+  const notOwner = await run(start, { shopId: SHOP }, { shopAccess: { shopId: SHOP, uid: "someStaff", role: "staff", rights: ["111"] } });
+  assert.deepEqual([notOwner.code, notOwner.body.error], [403, "owner_only"]);
+  assert.equal(docsOf("scangoSettingsLogin").length, before);
+
+  // เจ้าของได้รหัส → ScanGo แลก → ตัวตนเจ้าของ · ครั้งที่ 2 = 409 already_used
+  const s1 = await run(start, { shopId: SHOP }, { shopAccess: owner });
+  assert.equal(s1.code, 200, JSON.stringify(s1.body));
+  assert.match(s1.body.code, /^[A-Za-z0-9]{20}\.[0-9a-f]{64}$/);
+  const r1 = await run(SL.loginRedeem, { code: s1.body.code }, { headers: PARTNER });
+  assert.equal(r1.code, 200, JSON.stringify(r1.body));
+  assert.deepEqual(r1.body, { ok: true, externalId: SHOP, personRef: OWNER, name: "", venueName: "TEST Shopchamp" });
+  assert.ok(get(`shop/${SHOP}`).scango.merchantLinkedAt, "ประทับว่ามีใบบน ScanGo แล้ว");
+  const r2 = await run(SL.loginRedeem, { code: s1.body.code }, { headers: PARTNER });
+  assert.deepEqual([r2.code, r2.body.error], [409, "already_used"]);
+
+  // เว็บร้าน relay ตั้งสินค้าด้วยตัวตนที่แลกได้ → shop.scango.productIds เปลี่ยน → เมนูที่ ScanGo ดึงเห็นแค่ p1
+  const actor = { uid: `mo:shopchamp:${r1.body.personRef}`, personRef: r1.body.personRef, name: "เจ้าของ" };
+  const set = await run(R.merchantProductsSet, { externalId: r1.body.externalId, productIds: ["p1"], actor }, { headers: PARTNER });
+  assert.deepEqual([set.code, set.body.selectedCount], [200, 1], JSON.stringify(set.body));
+  assert.deepEqual(get(`shop/${SHOP}`).scango.productIds, ["p1"]);
+  const menu = await run(H.menu, { externalId: SHOP }, { headers: PARTNER });
+  assert.deepEqual(menu.body.products.map((p) => p.productId), ["p1"]);
+
+  // รหัสใหม่ที่ไม่ได้แลกภายใน 2 นาที = 410 code_expired
+  const s2 = await run(start, { shopId: SHOP }, { shopAccess: owner });
+  clock = new Date(NOW.getTime() + 120001);
+  const late = await run(SL.loginRedeem, { code: s2.body.code }, { headers: PARTNER });
+  assert.deepEqual([late.code, late.body.error], [410, "code_expired"]);
+  assert.equal(get(`scangoSettingsLogin/${s2.body.code.slice(0, 20)}`).status, "pending");
 });
