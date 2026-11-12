@@ -24,10 +24,12 @@ const seed = {
     scango: { enabled: false, location: null, hours: [], minOrder: 0, deliveryFee: 30, freeDeliveryMin: 500, maxKm: 5, prepMinutes: 10, paymentQr: "", pickupNote: "", productIds: ["p1", "p2"] },
   },
   [`billId/${SHOP}`]: { month: 11, receipts: 41 },
+  // login เว็บร้าน ScanGo (settingsLogin.js): profile เจ้าของชี้ร้านด้วย field shopId
+  [`profile/${OWNER}`]: { name: "คุณเจ้าของ", port: [{ position: ["001"], shopId: SHOP, shopName: "TEST Shopchamp" }] },
   "stock/p1": { shopId: SHOP, name: "โค้ก", price: 15, cost: 10, stock: 10, stockCountStatus: true, unit: "ขวด", category: ["c1"], barcode: "8850001" },
   "stock/p2": { shopId: SHOP, name: "น้ำเปล่า", price: 7, cost: 4, stock: 0, stockCountStatus: false, unit: "ขวด", category: ["c1"] },
 };
-const FILES = ["_core.js", "_menu.js", "_outbound.js", "_orderActions.js", "closeBill.js", "menu.js", "deliveryQuote.js", "orderCreate.js", "orderDelivery.js", "orderState.js", "outboxSweep.js",
+const FILES = ["_core.js", "_menu.js", "_outbound.js", "_orderActions.js", "closeBill.js", "settingsLogin.js", "menu.js", "deliveryQuote.js", "orderCreate.js", "orderDelivery.js", "orderState.js", "outboxSweep.js",
   "shop/_common.js", "shop/settingsSave.js", "shop/orderAction.js", "shop/orderList.js", "../sale/create.js", "../member/_gate.js"].map((f) => path.join(__dirname, f));
 const mem = T.install(seed, FILES, () => NOW);
 const H = {
@@ -166,4 +168,19 @@ test("e2e · ร้านตั้งค่า → ScanGo ดึงเมนู 
   // ⑨ ข่าวที่ยิงออกทั้งหมด = venue_ordering 1 · accepted 1 · ready (ครั้งแรกตก + กวาดสำเร็จ) 2
   const types = http.calls.map((c) => c.body.type);
   assert.deepEqual(types, ["venue_ordering", "accepted", "ready", "ready"]);
+});
+
+test("e2e · login เว็บร้าน ScanGo: idToken ของเจ้าของ → ร้านของตัวเอง → owner-check ยืนยันเจ้าของ · token ผิด 401 · ไม่เขียนฐาน", async () => {
+  const SL = require("./settingsLogin");
+  const writesBefore = mem.writes.length;
+  const loginDeps = { ...deps, verifyIdToken: async (t) => { if (t !== "tok-owner") throw Object.assign(new Error("bad"), { code: "auth/argument-error" }); return { uid: OWNER }; } };
+  const run = async (h, body) => { const res = T.makeRes(); await h(loginDeps)({ body, headers: PARTNER }, res); return res; };
+  const acc = await run(SL.loginAccount, { idToken: "tok-owner" });
+  assert.equal(acc.code, 200, JSON.stringify(acc.body));
+  assert.deepEqual(acc.body, { ok: true, personRef: OWNER, name: "คุณเจ้าของ", shops: [{ externalId: SHOP, name: "TEST Shopchamp" }] });
+  const chk = await run(SL.loginOwnerCheck, { personRef: acc.body.personRef, externalId: acc.body.shops[0].externalId });
+  assert.deepEqual([chk.code, chk.body.isOwner, chk.body.shopName], [200, true, "TEST Shopchamp"]);
+  const bad = await run(SL.loginAccount, { idToken: "tok-forged" });
+  assert.deepEqual([bad.code, bad.body.error], [401, "account_token_invalid"]);
+  assert.equal(mem.writes.length, writesBefore, "อ่านอย่างเดียว");
 });

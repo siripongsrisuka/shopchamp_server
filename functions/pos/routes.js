@@ -176,6 +176,9 @@ const ROUTES = Object.freeze([
   { contract: "scango.orderRemind", path: "/scango/order/remind", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderRemind").orderRemind },
   { contract: "scango.orderState", path: "/scango/order/state", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderState").orderState },
   { contract: "scango.orderDelivery", path: "/scango/order/delivery", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderDelivery").orderDelivery },
+  // login เว็บร้าน ScanGo ด้วยบัญชี Shopchamp (Pack เคาะ 2026-11-12): ScanGo ส่ง idToken มาถามว่าเป็นเจ้าของร้านไหน · ถามซ้ำว่ายังเป็นเจ้าของไหม
+  { contract: "scango.loginAccount", path: "/scango/settings-login/account", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginAccount },
+  { contract: "scango.loginOwnerCheck", path: "/scango/settings-login/owner-check", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginOwnerCheck },
   // ฝั่งแอปร้าน (auth 'shop' · path ขึ้นต้น /scango/shop/ แยกจากขาเข้าของ ScanGo)
   { contract: "scango.settingsGet", path: "/scango/shop/settings-get", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsGet").settingsGet },
   { contract: "scango.settingsSave", path: "/scango/shop/settings-save", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsSave").settingsSave },
