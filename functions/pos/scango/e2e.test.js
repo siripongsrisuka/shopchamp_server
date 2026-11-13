@@ -1,5 +1,6 @@
 // pos/scango/e2e.test.js — ครบวงจรร้าน Shopchamp บน ScanGo ด้วย handler ตัวจริงทุกตัว + ฐานปลอมที่เขียนลงจริง (announcement/_testDb) · ❌ ไม่แตะ Firestore จริง ❌ ไม่ออกเน็ต (http ฉีด)
 //   รัน: node --test functions/pos/scango/e2e.test.js
+//   DEV-0009: /scango/link → ใบ v1 เซ็น HMAC ผ่าน express จริง → push → ตัวเลขใบใหม่ → event ร้านกดรับ → ลด
 //   รอบ 4: ไทล์ ScanGo (loginStatus) → เจ้าของขอรหัส (loginStart) → ScanGo แลก (loginRedeem) ครั้งเดียว → เว็บร้าน relay ตั้งสินค้า → เมนูเห็น
 "use strict";
 const { test } = require("node:test");
@@ -26,7 +27,7 @@ const seed = {
   "stock/p1": { shopId: SHOP, name: "โค้ก", price: 15, cost: 10, stock: 10, stockCountStatus: true, unit: "ขวด", category: ["c1"], barcode: "8850001" },
   "stock/p2": { shopId: SHOP, name: "น้ำเปล่า", price: 7, cost: 4, stock: 0, stockCountStatus: false, unit: "ขวด", category: ["c1"] },
 };
-const FILES = ["_core.js", "_menu.js", "settingsLogin.js", "menu.js", "shop/_common.js", "shop/orderList.js", "../member/_gate.js",
+const FILES = ["_core.js", "_menu.js", "settingsLogin.js", "menu.js", "link.js", "v1/orderV1.js", "shop/_common.js", "shop/orderList.js", "../member/_gate.js",
   "_loginCode.js", "shop/loginStart.js", "shop/loginStatus.js", "merchantRelay.js", "shop/productsSet.js", "shop/productSearch.js", "_deliveryFee.js"].map((f) => path.join(__dirname, f));
 const mem = T.install(seed, FILES, () => NOW);
 const H = { menu: require("./menu").menu, list: require("./shop/orderList").orderList };
@@ -105,3 +106,62 @@ test("e2e · รอบ 4 ไทล์ ScanGo: status → start → redeem คร
   assert.equal(get(`scangoSettingsLogin/${s2.body.code.slice(0, 20)}`).status, "pending");
 });
 
+
+test("e2e · DEV-0009 ผ่าน express จริง: ScanGo /scango/link เปิดช่องทาง → ใบ v1 เซ็น HMAC (ราคาไม่ตรง/สินค้าหมดก็รับ) → push ถึงร้าน → ตัวเลขใบใหม่ 1 → ร้านกดรับบนเว็บ (event) → 0 · ScanGo ถามสถานะ · ลายเซ็นผิด/หมดอายุ ไม่ถึงฐาน", async () => {
+  const { makeApp } = require("../app");
+  const { requirePartnerKey } = require("./_partnerAuth");
+  const { requirePartnerSignature, sign } = require("./v1/partnerSign");
+  const clock = () => NOW;
+  const app = makeApp({
+    fnName: "pos", deps,
+    checkIfAuthenticated: (req, res, next) => { req.auth = { uid: OWNER }; next(); },
+    requireShopAccess: (req, res, next) => { req.shopAccess = owner; next(); },
+    requirePartnerKey: requirePartnerKey(ENV),
+    requirePartnerSignature: requirePartnerSignature({ env: ENV, now: clock }),
+  });
+  const srv = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const send = async (p, raw, headers) => {
+    const r = await fetch(base + p, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: raw });
+    return { status: r.status, body: await r.json() };
+  };
+  const signed = (raw, { ts = NOW.getTime(), key = ENV.SCANGO_SHOPCHAMP_KEY } = {}) => ({ "x-scango-partner": "shopchamp", "x-scango-timestamp": String(ts), "x-scango-signature": sign({ timestamp: ts, rawBody: raw, secret: key }) });
+  const newCount = async () => (await send("/scango/shop/order-list", JSON.stringify({ shopId: SHOP, states: ["requested"] }), { authorization: "Bearer x" })).body.orders.length;
+  try {
+    // ① ScanGo เปิดช่องทาง (กุญแจ header) → shop.scango.enabled true (ป๊อปอัปในแอปฟังเมื่อ true)
+    const ln = await send("/scango/link", JSON.stringify({ externalId: SHOP, linked: true }), PARTNER);
+    assert.deepEqual([ln.status, ln.body], [200, { ok: true, linked: true }]);
+    assert.equal(get(`shop/${SHOP}`).scango.enabled, true);
+    const st = await send("/scango/shop/login-status", JSON.stringify({ shopId: SHOP }), { authorization: "Bearer x" });
+    assert.deepEqual([st.status, st.body.connected], [200, true]);
+
+    // ② ใบ v1 (ไบต์ดิบมีช่องว่าง · p1 ราคาจริง 15 แต่ส่ง 12 · p2 ราคา 7 ส่ง 7) — Pack A: รับ
+    const order = { schema: "scango.order.v1", orderId: "sg-e2e-v1", code: "QQ11", venueRef: SHOP, items: [{ lineId: "L1", productRef: "p1", name: "โค้ก", qty: 20, unitPrice: 12, lineTotal: 240 }], bill: { subtotal: 240, discounts: [{ kind: "promotion", title: "โปร", amount: 10 }], deliveryFee: 20, total: 250 } };
+    const raw = JSON.stringify(order, null, 1);
+    const pushBefore = pushes.length;
+    const bad = await send("/scango/v1/orders", raw, signed(raw, { key: "k-wrong" }));
+    const old = await send("/scango/v1/orders", raw, signed(raw, { ts: NOW.getTime() - 300001 }));
+    assert.deepEqual([bad.status, bad.body.code, old.status, old.body.code], [401, "signature_invalid", 401, "signature_expired"]);
+    assert.equal(mem.store.get("scangoOrder/sg-e2e-v1"), undefined, "ลายเซ็นไม่ผ่าน = ไม่ถึงฐาน");
+    const cr = await send("/scango/v1/orders", raw, signed(raw));
+    assert.deepEqual([cr.status, cr.body], [200, { ok: true, partnerOrderRef: "sg-e2e-v1" }]);
+    assert.deepEqual(pushes.slice(pushBefore).map((m) => m.data), [{ type: "scango_order", orderRef: "sg-e2e-v1" }]);
+    assert.equal(await newCount(), 1);
+    const again = await send("/scango/v1/orders", raw, signed(raw));
+    assert.deepEqual([again.status, again.body.duplicate, pushes.length - pushBefore], [200, true, 1]);
+
+    // ③ ร้านกดรับบนเว็บร้าน ScanGo → event → ตัวเลขใบใหม่ 0 · ScanGo ถามสถานะ = accepted
+    const ev = JSON.stringify({ schema: "scango.order-event.v1", eventId: "ev-1", orderId: "sg-e2e-v1", type: "venue.accepted", at: NOW.toISOString(), actor: "venue" });
+    const ea = await send("/scango/v1/orders/sg-e2e-v1/events", ev, signed(ev));
+    assert.deepEqual([ea.status, ea.body], [200, { ok: true, applied: true }]);
+    assert.equal(await newCount(), 0);
+    const sr = await send("/scango/v1/orders/sg-e2e-v1/state", "{}", signed("{}"));
+    assert.deepEqual([sr.status, sr.body.state, sr.body.partnerOrderRef], [200, "accepted", "sg-e2e-v1"]);
+
+    // ④ ScanGo ปิดช่องทาง → enabled false
+    const off = await send("/scango/link", JSON.stringify({ externalId: SHOP, linked: false }), PARTNER);
+    assert.deepEqual([off.status, get(`shop/${SHOP}`).scango.enabled], [200, false]);
+  } finally {
+    await new Promise((r) => srv.close(r));
+  }
+});

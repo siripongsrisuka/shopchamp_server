@@ -170,6 +170,13 @@ const ROUTES = Object.freeze([
   // ── ScanGo (ร้าน Shopchamp ขายบนแอป ScanGo · แบบงาน lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม)
   // ขาเข้าจากเซิร์ฟเวอร์ ScanGo (auth 'partner' = กุญแจร่วม header x-scango-platform-key · scango/_partnerAuth.js · ร้านมาจาก body.externalId)
   { contract: "scango.menu", path: "/scango/menu", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/menu").menu },
+  // DEV-0009 (Pack เคาะ 1 2026-11-13 · ยึดแบบพี่น้อง /scango/link): ScanGo บอกร้านเปิด/ปิดช่องทาง → shop.scango.enabled
+  { contract: "scango.link", path: "/scango/link", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/link").link },
+  // ScanGo Order API v1 (DEV-0009 · ยึดแบบพี่น้อง claude/scango/v1/) · auth 'partnerSigned' = ลายเซ็น HMAC (scango/v1/partnerSign.js) ไม่ใช่กุญแจ header
+  //   รับใบใหม่ → scangoOrder + push ถึงร้าน (Pack A: ไม่ปัดใบเอง) · เหตุการณ์จากเว็บร้าน ScanGo ขยับสถานะ · ScanGo ถามสถานะ
+  { contract: "scango.v1OrderCreate", path: "/scango/v1/orders", fn: "pos", auth: "partnerSigned", factory: true, load: () => require("./scango/v1/orderV1").v1OrderCreate },
+  { contract: "scango.v1OrderEvent", path: "/scango/v1/orders/:orderId/events", fn: "pos", auth: "partnerSigned", factory: true, load: () => require("./scango/v1/orderV1").v1OrderEvent },
+  { contract: "scango.v1OrderState", path: "/scango/v1/orders/:orderId/state", fn: "pos", auth: "partnerSigned", factory: true, load: () => require("./scango/v1/orderV1").v1OrderState },
   // login เว็บร้าน ScanGo ด้วยบัญชี Shopchamp (Pack เคาะ 2026-11-12): ScanGo ส่ง idToken มาถามว่าเป็นเจ้าของร้านไหน · ถามซ้ำว่ายังเป็นเจ้าของไหม
   { contract: "scango.loginAccount", path: "/scango/settings-login/account", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginAccount },
   { contract: "scango.loginOwnerCheck", path: "/scango/settings-login/owner-check", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginOwnerCheck },
