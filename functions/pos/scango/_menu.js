@@ -1,7 +1,7 @@
 // pos/scango/_menu.js — สูตรล้วนของช่องทาง ScanGo (pure · ไม่แตะฐาน · ไม่อ่านนาฬิกาเอง)
 //
 // แบบ: lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม + §รอบ 5 · รูปเมนู/ค่าส่ง = สัญญา §b ของร้านพี่น้อง (ScanGo อ่านรูปเดียวกันทุกเจ้า)
-//   ใช้ร่วม: menu · deliveryQuote · orderCreate ⇒ ราคา/ของหมด/ค่าส่ง เลขเดียวกันทุกเส้นโดยโครงสร้าง
+//   ใช้: menu (DEV-0009 2026-11-13 ถอด deliveryQuote · orderCreate แล้ว · quoteDelivery เหลือไว้ให้เทสสูตร ไม่มีเส้นเรียก)
 //
 // ค่าตั้งร้าน `shop.scango` ที่ไฟล์นี้อ่าน = {enabled, minOrder, deliveryFeeModel?, productIds:[≤1000]}
 //   + ค่าส่งแบบเดิม (deliveryFee · maxKm · freeDeliveryMin) อ่านเป็นสูตรให้ร้านที่ตั้งไว้แล้ว (`_deliveryFee.resolveDeliveryConfig`)

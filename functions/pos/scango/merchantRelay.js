@@ -18,31 +18,13 @@
 //   imageUrl = stock.imageId (เป็น URL อยู่แล้ว · ว่าง = ไม่ใส่ช่อง) · category = ชื่อหมวดชั้นลึกสุดในเส้นทางที่เจอใน shop.smartCategory (ไม่เจอ = ไม่ใส่)
 // POST /pos/scango/merchant/products/set {externalId, productIds, actor}  (scango.merchantProductsSet)
 //   → 200 {selectedCount} · แกน = shop/productsSet (แทนทั้งรายการ · ≤1000 · มีจริงในร้าน · ตัดซ้ำ)
-// POST /pos/scango/merchant/ordering {externalId, actor, enabled?, minOrder?, deliveryFeeModel?, maxKm?}  (scango.merchantOrdering · รอบ 5)
-//   ยกจากต้นแบบ `merchantRelay.js › orderingRelayBody` + `ordering.js › parseBody/ordering` (เปิด/ปิดรับ · ขั้นต่ำ · สูตรค่าส่งแบบช่วง)
-//   ช่องอื่น = 400 field_not_relayed details.errors[{field,message}] (ไม่ทิ้งเงียบ) · สูตรผิด = 400 bad_delivery_model details.errors รายช่อง
-//   maxKm = ตัวยืนยัน (ไม่เก็บแยก · ไกลสุดคิดจากขอบช่วงสุดท้าย) · ส่ง maxKm ไม่ส่งสูตร / ไม่ตรง = 400 bad_delivery_model field maxKm
-//   ไม่มีช่องที่ตั้งเลย = 400 invalid_request · ด่านเจ้าของ (403 owner_only · รหัสต้นแบบ) คงไว้ในแกน แต่ทาง relay ผ่านเสมอ (ทำแทนเจ้าของ · C2)
-//   enabled:true แต่ยังไม่เลือกสินค้า = 409 scango_not_ready {missing:['products']} (ต้นแบบไม่มีด่านนี้ · บ้านนี้คงไว้เพราะร้านปลีกเลือกทีละตัว)
-//   เขียน `shop.scango.<enabled|minOrder|deliveryFeeModel>` (dotted · transaction ตรวจสมาชิกซ้ำ) → **ยิง venue_ordering ให้เสร็จก่อนตอบ**
-//   → 200 {ordering:{enabled, minOrder, deliveryFee, deliveryFeeModel, deliveryFeeSource, maxKm}, synced, venue, reason?}
-//     synced = ถึง ScanGo แล้ว · venue = คำเดียวกับ settingsSave (sent|queued|skipped|failed) · ยิงไม่ออก = ค่าตั้งบันทึกแล้ว synced:false
-// POST /pos/scango/merchant/fee/preview {externalId, actor, deliveryFeeModel, maxKm?, distancesKm?}  (scango.merchantFeePreview · รอบ 5)
-//   คิดอย่างเดียว ไม่อ่าน/เขียนค่าตั้ง (ด่าน actor/สมาชิก/merchantRelay เหมือนเส้นอื่น) · `_deliveryFee.feePreview` (ยกจากต้นแบบ)
-//   → 200 {valid, errors, maxKm, stepsLeft, examples:[{km, fee, outOfRange, how, edge?}]} · สูตรผิด = 200 valid:false (ไม่ 400 · จอเรียกทุกครั้งที่พิมพ์)
 // คำตอบไม่สำเร็จของแกน = ส่งต่อทั้งสถานะและซอง (400 invalid_request · 403 right_required · 409 too_many_products · 409 product_not_found ฯลฯ)
 // ❌ ไม่ require SDK ตัวจริง
 "use strict";
 
 const { ok, fail } = require("../_shared/respond");
-const { readNow } = require("../_shared/deps");
-const { db } = require("../../firebase");
-const { sendDeny, internalError } = require("../_shared/respond");
-const { isOwner } = require("../_shared/auth");
-const { readShopForWrite, Refusal: GateRefusal } = require("../member/_gate");
 const C = require("./_core");
 const S = require("./shop/_common");
-const DF = require("./_deliveryFee");
 
 const ACTOR_UID_RE = /^(mo|md|ms|admin):[^\s]{1,160}$/; // ชุดเดียวกับต้นแบบ (ms: = พนักงานเว็บร้าน ScanGo)
 const short6 = (v) => (typeof v === "string" ? v.slice(0, 6) : "");
@@ -102,8 +84,7 @@ function categoryNameOf(shop) {
  *   keys = ช่องที่รับนอกจาก externalId/actor (ช่องเกิน = 400 invalid_request) · core = factory ของ handler แกน
  *   shape(body200, shop) → คำตอบ 200 ของเว็บ
  */
-function relay(op, keys, core, shape, opts) {
-  const passAll = !!(opts && opts.passAll); // ordering: ช่องเกินให้แกนตัดสินเอง (400 field_not_relayed แบบต้นแบบ)
+function relay(op, keys, core, shape) {
   return function factory(deps) {
     const log = logOf(deps);
     const coreHandler = core(deps);
@@ -111,7 +92,7 @@ function relay(op, keys, core, shape, opts) {
       const line = { op, shopId: "", actor: "", personRef6: "", result: "" };
       try {
         const b = C.bodyOf(req);
-        if (!passAll) C.onlyKeys(b, ["externalId", "actor", ...keys]);
+        C.onlyKeys(b, ["externalId", "actor", ...keys]);
         const shopId = C.idOf(b.externalId, "externalId");
         line.shopId = shopId;
         const actor = actorOf(b.actor);
@@ -121,8 +102,7 @@ function relay(op, keys, core, shape, opts) {
         const access = accessOf(shopId, actor);
 
         const body = { shopId };
-        const pass = passAll ? Object.keys(b).filter((k) => k !== "externalId" && k !== "actor" && k !== "shopId") : keys;
-        for (const k of pass) if (C.has(b, k) && b[k] !== undefined) body[k] = b[k];
+        for (const k of keys) if (C.has(b, k) && b[k] !== undefined) body[k] = b[k];
         const r = captureRes();
         await coreHandler({ body, shopAccess: access }, r);
         line.result = r.code >= 200 && r.code < 300 ? "ok" : (C.isObj(r.body) && r.body.error) || `status_${r.code}`;
@@ -153,124 +133,9 @@ const merchantProductsList = relay("products/list", ["q", "cursor"], (d) => requ
 
 const merchantProductsSet = relay("products/set", ["productIds"], (d) => require("./shop/productsSet").productsSet(d), (b) => ({ selectedCount: b.productCount }));
 
-// ── ordering (เฉพาะ enabled · minOrder · deliveryFeeModel · maxKm) ───────────────────────────
-const ORDERING_KEYS = ["enabled", "minOrder", "deliveryFeeModel", "maxKm"];
-const badModel = (message, errors) => C.refuse(400, "bad_delivery_model", message, { details: { errors } });
-
-/**
- * orderingPatchOf(body) → patch {enabled?, minOrder?, deliveryFeeModel?} (pure · โยน Refusal)
- *   ลำดับ/ข้อความเดียวกับต้นแบบ (`orderingRelayBody` → `parseBody`)
- */
-function orderingPatchOf(body) {
-  const b = C.isObj(body) ? body : {};
-  const extra = Object.keys(b).filter((k) => !ORDERING_KEYS.includes(k) && k !== "shopId");
-  if (extra.length) {
-    C.refuse(400, "field_not_relayed", `ช่องเหล่านี้ตั้งผ่านเว็บ ScanGo ไม่ได้: ${extra.join(", ")}`, { details: { errors: extra.map((field) => ({ field, message: "ไม่ได้ส่งต่อทางนี้" })) } });
-  }
-  if (b.maxKm !== undefined) {
-    if (b.deliveryFeeModel === undefined) {
-      const message = "ไกลสุดคิดจากสูตรค่าส่ง — ส่ง deliveryFeeModel มาด้วย";
-      badModel(message, [{ field: "maxKm", message }]);
-    }
-    const v = DF.validateDeliveryFeeModel(b.deliveryFeeModel);
-    if (v.ok && Math.abs(Number(b.maxKm) - DF.maxKmOf(v.model)) > 1e-9) {
-      const message = `ไกลสุด (${b.maxKm} กม.) ไม่ตรงกับขอบช่วงสุดท้ายของสูตร (${DF.maxKmOf(v.model)} กม.)`;
-      badModel(message, [{ field: "maxKm", message }]);
-    }
-  }
-  const patch = {};
-  if (b.enabled !== undefined) {
-    if (typeof b.enabled !== "boolean") C.bad("enabled ต้องเป็น true หรือ false");
-    patch.enabled = b.enabled;
-  }
-  if (b.minOrder !== undefined) {
-    const n = typeof b.minOrder === "string" && b.minOrder.trim() !== "" ? Number(b.minOrder) : b.minOrder;
-    if (typeof n !== "number" || !Number.isFinite(n) || n < 0) C.bad("minOrder ต้องเป็นตัวเลข ≥ 0");
-    patch.minOrder = Math.round(n * 100) / 100;
-  }
-  if (b.deliveryFeeModel !== undefined) {
-    const v = DF.validateDeliveryFeeModel(b.deliveryFeeModel);
-    if (!v.ok) badModel(`สูตรค่าส่งไม่ถูกต้อง: ${v.errors.map((e) => e.message).join(" · ")}`, v.errors);
-    patch.deliveryFeeModel = v.model;
-  }
-  if (!Object.keys(patch).length) C.bad("ต้องส่ง enabled / minOrder / deliveryFeeModel อย่างน้อย 1 ช่อง");
-  return patch;
-}
-
-/** ก้อน ordering ที่ตอบเว็บ (สูตรที่ใช้จริงหลังรวมค่าเดิม · ท่าเดียวกับต้นแบบ `orderingView` ตัดช่องที่บ้านนี้ไม่มี) */
-function orderingViewOf(scango) {
-  const s = C.isObj(scango) ? scango : {};
-  const d = DF.resolveDeliveryConfig(s);
-  const min = typeof s.minOrder === "number" && Number.isFinite(s.minOrder) && s.minOrder >= 0 ? s.minOrder : 0;
-  return { enabled: s.enabled === true, minOrder: min, deliveryFee: d.model.baseFee, deliveryFeeModel: d.model, deliveryFeeSource: d.source, maxKm: d.maxKm };
-}
-
-function sendVenueOf(deps) {
-  const v = deps ? deps.sendVenue : undefined;
-  if (v === undefined || v === null) return (...a) => require("./_outbound").sendVenue(...a);
-  if (typeof v !== "function") throw new TypeError("deps.sendVenue ต้องเป็นฟังก์ชัน");
-  return v;
-}
-
-/** แกนของเส้น ordering (รูปเดียวกับ handler ฝั่งแอป: req {body:{shopId,...}, shopAccess}) */
-function orderingCore(deps) {
-  return async function handler(req, res) {
-    try {
-      const access = req.shopAccess;
-      const { shopId: _sid, ...input } = C.isObj(req.body) ? req.body : {};
-      const patch = orderingPatchOf(input);
-      if (!isOwner(access)) C.refuse(403, "owner_only", "เฉพาะเจ้าของร้านเท่านั้นที่เปิด/ปิดช่องทาง ScanGo ได้");
-      const sendVenue = sendVenueOf(deps);
-      const now = await readNow(deps);
-      let next = null;
-      await db.runTransaction(async (tx) => {
-        const { shopRef, shop } = await readShopForWrite({ tx, shopDocId: access.shopId, access, now });
-        const prev = C.isObj(shop.scango) ? shop.scango : {};
-        if (patch.enabled === true) {
-          const missing = S.missingForEnable({ productIds: S.scangoOf(shop).productIds });
-          if (missing.length) C.refuse(409, "scango_not_ready", "ยังไม่ได้เลือกสินค้าที่ขายบน ScanGo เปิดรับออเดอร์ไม่ได้", { missing });
-        }
-        const write = {};
-        for (const k of Object.keys(patch)) write[`scango.${k}`] = patch[k];
-        tx.update(shopRef, write);
-        next = { ...prev, ...patch };
-      });
-      let venue = "failed";
-      let reason = null;
-      try {
-        const r = await sendVenue(deps, { shopId: access.shopId });
-        venue = C.isObj(r) && S.VENUE_STATUSES.includes(r.status) ? r.status : "failed";
-        if (C.isObj(r) && typeof r.reason === "string" && r.reason) reason = r.reason;
-      } catch (e) {
-        try { console.error("scango.merchantOrdering sendVenue", e && e.name, e && e.message); } catch (_) { /* ไม่ล้มคำตอบ */ }
-      }
-      return ok(res, { ordering: orderingViewOf(next), synced: venue === "sent", venue, ...(reason ? { reason } : {}) });
-    } catch (e) {
-      if (e instanceof C.Refusal || e instanceof GateRefusal || e instanceof S.Refusal) return sendDeny(res, e.deny);
-      return internalError(res, e);
-    }
-  };
-}
-
-const merchantOrdering = relay("ordering", ORDERING_KEYS, orderingCore, (b) => {
-  const { ok: _ok, ...rest } = b;
-  return rest;
-}, { passAll: true });
-
-// ── fee/preview (คิดอย่างเดียว · สูตรที่ยังไม่บันทึก) ─────────────────────────────────────────
-function feePreviewCore() {
-  return async function handler(req, res) {
-    const b = C.isObj(req.body) ? req.body : {};
-    const { ok: _ok, ...out } = DF.feePreview({ deliveryFeeModel: b.deliveryFeeModel, maxKm: b.maxKm, distancesKm: b.distancesKm });
-    return ok(res, out);
-  };
-}
-const merchantFeePreview = relay("fee/preview", ["deliveryFeeModel", "maxKm", "distancesKm"], feePreviewCore, (b) => {
-  const { ok: _ok, ...rest } = b;
-  return rest;
-});
+// 🪦 DEV-0009 (Pack "ลุย" 2026-11-13): ถอด /scango/merchant/ordering · /scango/merchant/fee/preview แล้ว
+//   ค่าส่ง · ขั้นต่ำ · เปิด/ปิดรับ = ScanGo ถือเอง (venues.ordering) · ScanGo บอกเปิด/ปิดช่องทางผ่าน /scango/link (scango/link.js)
 
 module.exports = {
-  merchantProductsList, merchantProductsSet, merchantOrdering, merchantFeePreview, _orderingCore: orderingCore,
-  actorOf, accessOf, categoryNameOf, orderingPatchOf, orderingViewOf, ACTOR_UID_RE, ORDERING_KEYS,
+  merchantProductsList, merchantProductsSet, actorOf, accessOf, categoryNameOf, ACTOR_UID_RE,
 };

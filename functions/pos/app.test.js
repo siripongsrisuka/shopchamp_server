@@ -80,10 +80,10 @@ test("ด่านตัวตน: ทุก route ของ pos และ pos_h
 
 test("ด่านคู่ค้า (auth partner · เส้น /scango/* ที่ ScanGo ยิงเข้า): ไม่มี header = 401 · กุญแจผิด = 401 · ไม่ตั้ง secret = 503 · กุญแจถูก = ถึง handler · ไม่มี token ของบ้านนี้เกี่ยว", async () => {
   const partnerRoutes = ROUTES.filter((r) => r.auth === "partner");
-  assert.equal(partnerRoutes.length, 14, "เส้นคู่ค้าของ ScanGo 14 เส้น (menu · delivery/quote · order/create · cancel · remind · state · delivery · settings-login/account · owner-check · redeem · merchant/products/list · merchant/products/set · merchant/ordering · merchant/fee/preview)");
+  assert.equal(partnerRoutes.length, 6, "เส้นคู่ค้าของ ScanGo 6 เส้น (menu · settings-login/account · owner-check · redeem · merchant/products/list · merchant/products/set)");
   assert.ok(partnerRoutes.every((r) => r.fn === FN.POS && /^\/scango\//.test(r.path) && !/^\/scango\/shop\//.test(r.path)));
   // ฝั่งแอปร้านของ ScanGo อยู่ใต้ /scango/shop/* และเป็น auth shop (ผ่านด่านตัวตน + ด่านร้าน)
-  assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 8);
+  assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 3, "order-list · login-status · login-start");
   assert.ok(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).every((r) => r.auth === "shop"));
 
   const app = makeApp({ fnName: FN.POS, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: partnerGate });
@@ -104,7 +104,7 @@ test("ด่านคู่ค้า (auth partner · เส้น /scango/* ท
   // ไม่ตั้ง secret = 503 ทุกคำขอ (fail-closed · ไม่ใช่ 401)
   const unset = makeApp({ fnName: FN.POS, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: requirePartnerKey({}) });
   await serve(unset, async (base) => {
-    const r = await post(base, "/scango/order/state", { externalId: "shopA", orderRef: "R1" }, { "x-scango-platform-key": PARTNER_KEY });
+    const r = await post(base, "/scango/menu", { externalId: "shopA" }, { "x-scango-platform-key": PARTNER_KEY });
     assert.deepEqual([r.status, r.body && r.body.error], [503, "partner_not_configured"]);
   });
   // ทะเบียน: partner นอก /scango/ หรือเส้น /scango/* ที่ไม่ใช่ partner = สร้าง app ไม่ได้

@@ -117,3 +117,5 @@ exports.pos_gateway = posFunctions.pos_gateway;
 exports.companyPaySweep = posFunctions.companyPaySweep;
 // ── งานตั้งเวลา scangoOutboxSweep (ร้าน Shopchamp บน ScanGo) · gen2 onSchedule ทุก 1 นาที Asia/Bangkok · ยิงข่าวค้างซ้ำ + ปิดบิลค้าง · deploy: --only functions:scangoOutboxSweep
 exports.scangoOutboxSweep = posFunctions.scangoOutboxSweep;
+// 🪦 DEV-0009 (Pack "ลุย" 2026-11-13): scangoOutboxSweep ถอดแล้ว · pos/functions.js ไม่ส่งตัวนี้ ⇒ บรรทัดบนได้ค่า undefined = deploy ไม่เห็น function นี้
+//    (2 บรรทัดบนคงไว้เพราะไฟล์นี้ต่อท้ายอย่างเดียว · legacy-freeze) · ตัวที่ live ต้องลบเอง: firebase functions:delete scangoOutboxSweep

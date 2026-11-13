@@ -6,7 +6,7 @@ const { install, makeRes } = require("../announcement/_testDb");
 const NOW = new Date("2026-11-11T05:00:00.000Z"); // พุธ 12:00 ไทย
 const SHOP = "wJNgra1ik0pzRQFlZNOD";
 const OTHER = "otherShop000000000001";
-const FILES = ["_core.js", "menu.js", "deliveryQuote.js", "orderCreate.js", "orderCancel.js", "orderRemind.js", "orderState.js"].map((f) => path.join(__dirname, f));
+const FILES = ["_core.js", "menu.js"].map((f) => path.join(__dirname, f));
 
 const shop = (scango) => ({
   name: "TEST Shopchamp",

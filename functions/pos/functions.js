@@ -9,7 +9,7 @@
 
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { REGION, FN, FUNCTION_CONFIG, GATEWAY_CONFIG, SWEEP_SCHEDULE, SWEEP_CONFIG, SCANGO_SWEEP_SCHEDULE, SCANGO_SWEEP_CONFIG } = require("./workloads");
+const { REGION, FN, FUNCTION_CONFIG, GATEWAY_CONFIG, SWEEP_SCHEDULE, SWEEP_CONFIG} = require("./workloads");
 
 function lazyApp(fnName) {
   let app = null;
@@ -37,8 +37,6 @@ module.exports = {
   pos_gateway: onRequest({ region: REGION, invoker: "public", ...GATEWAY_CONFIG }, lazyGatewayApp()),
   // DEV-0003 U3: กวาดใบจ่าย posxpay ที่ยังรอ ทุก 5 นาที (ไม่มี webhook) · โค้ดโหลดตอนรอบแรก · deploy: --only functions:companyPaySweep
   companyPaySweep: onSchedule({ region: REGION, ...SWEEP_SCHEDULE, ...SWEEP_CONFIG }, () => require("./company/paySweep").runScheduled()),
-  // ScanGo: ยิงข่าวที่ค้างใน scangoOutbox ซ้ำ + ปิดบิลที่ค้าง ทุก 1 นาที (pos/scango/outboxSweep.js) · deploy: --only functions:scangoOutboxSweep
-  scangoOutboxSweep: onSchedule({ region: REGION, ...SCANGO_SWEEP_SCHEDULE, ...SCANGO_SWEEP_CONFIG }, () => require("./scango/outboxSweep").runScheduled()),
   lazyApp,
   lazyGatewayApp,
 };

@@ -1,24 +1,20 @@
 // เทส pos/scango/shop/*.js (เส้นฝั่งแอปร้าน scango.*) · รัน: node --test functions/pos/scango/shop/shop.test.js
-//   ❌ ไม่แตะ Firestore จริง (ฐานปลอม ./_testDb.js) · sendVenue / _orderActions = ของปลอมผ่าน deps
+//   ❌ ไม่แตะ Firestore จริง (ฐานปลอม ./_testDb.js)
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { installFakeDb, call } = require("./_testDb");
 
 const F = installFakeDb();
-const { settingsGet } = require("./settingsGet");
-const { settingsSave } = require("./settingsSave");
 const { productsSet } = require("./productsSet");
 const { productSearch, PAGE_SIZE, SCAN_LIMIT } = require("./productSearch");
 const { orderList } = require("./orderList");
-const { orderAction } = require("./orderAction");
 
 const NOW = new Date("2026-11-11T03:00:00.000Z");
 const FUTURE = new Date("2027-12-31T00:00:00.000Z");
 const OWNER = { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] };
 const STAFF = (rights) => ({ shopId: "shopA", uid: "u-staff", role: "staff", rights });
 const WATCHER = { shopId: "shopA", uid: "u-w", role: "owner", rights: [], watcher: true, readOnly: true };
-const ROOT = { shopId: "shopA", uid: "u-root", role: "owner", rights: [], byAdmin: true, root: true };
 
 const shopDoc = (scango) => ({
   shopId: "shopA",
@@ -28,141 +24,6 @@ const shopDoc = (scango) => ({
   ...(scango ? { scango } : {}),
 });
 const prod = (o = {}) => ({ shopId: "shopA", name: "น้ำดื่ม", price: 10, barcode: "885000", unit: "ขวด", imageId: "", category: ["c1"], stock: 5, stockCountStatus: true, ...o });
-const SETTINGS = (o = {}) => ({
-  shopId: "shopA", enabled: false, location: { lat: 13.7, lng: 100.5 }, hours: [{ day: 1, open: "08:00", close: "20:00" }],
-  minOrder: 100, deliveryFee: 20, freeDeliveryMin: 500, maxKm: 5, prepMinutes: 15,
-  paymentQr: "https://firebasestorage.googleapis.com/v0/b/x/o/qr.png", pickupNote: "หน้าร้าน", ...o,
-});
-function venueSpy(result = { status: "sent", sent: true, queued: false }) {
-  const calls = [];
-  const fn = async (_deps, arg) => { calls.push(arg); return result; };
-  fn.calls = calls;
-  return fn;
-}
-
-// ── settingsGet ────────────────────────────────────────────────────────────────
-test("settingsGet: ร้านไม่เคยตั้ง = ค่าตั้งต้น configured:false missing เหลือ products (รอบ 5) · watcher อ่านได้", async () => {
-  F.reset({ shop: { shopA: shopDoc() } });
-  const r = await call(settingsGet, {}, { shopId: "shopA" }, WATCHER);
-  assert.equal(r.code, 200, JSON.stringify(r.body));
-  assert.equal(r.body.configured, false);
-  assert.equal(r.body.scango.enabled, false);
-  assert.equal(r.body.scango.location, null);
-  assert.deepEqual(r.body.scango.productIds, []);
-  assert.equal(r.body.productCount, 0);
-  assert.deepEqual(r.body.missing, ["products"]);
-});
-
-test("settingsGet: ร้านตั้งแล้ว = ค่าในฐาน + productCount · ร้านผิด 403 · ช่องเกิน 400 · ร้านไม่มี 404", async () => {
-  F.reset({ shop: { shopA: shopDoc({ ...SETTINGS({ enabled: true }), shopId: undefined, productIds: ["p1", "p2"] }) } });
-  const r = await call(settingsGet, {}, { shopId: "shopA" }, STAFF([]));
-  assert.equal(r.code, 200);
-  assert.equal(r.body.scango.enabled, true);
-  assert.equal(r.body.productCount, 2);
-  assert.deepEqual(r.body.missing, []);
-  assert.equal((await call(settingsGet, {}, { shopId: "shopB" }, OWNER)).code, 403);
-  assert.equal((await call(settingsGet, {}, { shopId: "shopA", x: 1 }, OWNER)).code, 400);
-  F.reset({ shop: {} });
-  assert.equal((await call(settingsGet, {}, { shopId: "shopA" }, OWNER)).code, 404);
-});
-
-// ── settingsSave ───────────────────────────────────────────────────────────────
-test("settingsSave: เจ้าของบันทึก = เขียนเฉพาะ scango.<ช่อง> · productIds เดิมคงอยู่ · ช่องอื่นของร้านไม่ถูกแตะ · ส่ง venue", async () => {
-  F.reset({ shop: { shopA: shopDoc({ productIds: ["p1"], enabled: false }) } });
-  const spy = venueSpy();
-  const r = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: true }), OWNER);
-  assert.equal(r.code, 200, JSON.stringify(r.body));
-  assert.equal(r.body.venue, "sent");
-  const s = F.data.shop.shopA;
-  assert.equal(s.name, "ร้าน A");
-  assert.deepEqual(s.scango.productIds, ["p1"]);
-  assert.equal(s.scango.enabled, true);
-  assert.deepEqual(s.scango.location, { lat: 13.7, lng: 100.5 });
-  assert.equal(s.scango.freeDeliveryMin, 500);
-  const keys = Object.keys(F.log[0].v).sort();
-  assert.deepEqual(keys, ["deliveryFee", "enabled", "freeDeliveryMin", "hours", "location", "maxKm", "minOrder", "paymentQr", "pickupNote", "prepMinutes"].map((k) => `scango.${k}`).sort());
-  assert.equal(spy.calls.length, 1);
-  assert.equal(spy.calls[0].shopId, "shopA");
-  assert.equal(spy.calls[0].enabled, true);
-});
-
-test("settingsSave: พนักงาน 403 owner_required · watcher 403 · ไม่เขียน ไม่ส่ง venue", async () => {
-  F.reset({ shop: { shopA: shopDoc() } });
-  const spy = venueSpy();
-  const a = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS(), STAFF(["101", "111"]));
-  assert.equal(a.code, 403);
-  assert.equal(a.body.error, "owner_required");
-  const w = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS(), WATCHER);
-  assert.equal(w.body.error, "watcher_read_only");
-  assert.equal(F.log.length, 0);
-  assert.equal(spy.calls.length, 0);
-});
-
-test("settingsSave: เปิดรับใบแต่ยังไม่เลือกสินค้า = 409 scango_not_ready missing ['products'] · รอบ 5 ไม่ดูพิกัด/เวลาแล้ว · ปิดอยู่บันทึกได้แม้ขาด", async () => {
-  F.reset({ shop: { shopA: shopDoc() } });
-  const spy = venueSpy();
-  const r = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: true, location: null, hours: [] }), OWNER);
-  assert.equal(r.code, 409);
-  assert.equal(r.body.error, "scango_not_ready");
-  assert.deepEqual(r.body.missing, ["products"]);
-  assert.equal(F.log.length, 0);
-  F.reset({ shop: { shopA: shopDoc({ productIds: ["p1"] }) } });
-  const noGeo = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: true, location: null, hours: [] }), OWNER);
-  assert.equal(noGeo.code, 200, "มีสินค้า เปิดได้แม้ไม่มีพิกัด/เวลา (แอปรุ่นแรกยังบันทึกได้)");
-  F.reset({ shop: { shopA: shopDoc() } });
-  const off = await call(settingsSave, { now: () => NOW, sendVenue: spy }, SETTINGS({ enabled: false, location: null, hours: [] }), OWNER);
-  assert.equal(off.code, 200, JSON.stringify(off.body));
-  assert.equal(F.data.shop.shopA.scango.location, null);
-});
-
-test("settingsSave: ตรวจรูปเข้ม 400 (เวลา · ช่วงทับ · QR ไม่ใช่ https · ช่องขาด/เกิน · ค่าติดลบ)", async () => {
-  F.reset({ shop: { shopA: shopDoc() } });
-  const d = { now: () => NOW, sendVenue: venueSpy() };
-  const bad = [
-    SETTINGS({ hours: [{ day: 7, open: "08:00", close: "20:00" }] }),
-    SETTINGS({ hours: [{ day: 1, open: "8:00", close: "20:00" }] }),
-    SETTINGS({ hours: [{ day: 1, open: "20:00", close: "08:00" }] }),
-    SETTINGS({ hours: [{ day: 1, open: "08:00", close: "12:00" }, { day: 1, open: "11:00", close: "15:00" }] }),
-    SETTINGS({ paymentQr: "http://x.com/qr.png" }),
-    SETTINGS({ paymentQr: "ไม่ใช่ลิงก์" }),
-    SETTINGS({ minOrder: -1 }),
-    SETTINGS({ maxKm: 0 }),
-    SETTINGS({ prepMinutes: 1.5 }),
-    SETTINGS({ location: { lat: 100, lng: 1 } }),
-    SETTINGS({ productIds: ["p1"] }),
-    (() => { const s = SETTINGS(); delete s.pickupNote; return s; })(),
-  ];
-  for (const b of bad) {
-    const r = await call(settingsSave, d, b, OWNER);
-    assert.equal(r.code, 400, JSON.stringify(b));
-    assert.equal(r.body.error, "invalid_request");
-  }
-  const okTwo = await call(settingsSave, d, SETTINGS({ hours: [{ day: 1, open: "08:00", close: "12:00" }, { day: 1, open: "13:00", close: "20:00" }], freeDeliveryMin: null, paymentQr: "" }), OWNER);
-  assert.equal(okTwo.code, 200, JSON.stringify(okTwo.body));
-  assert.equal(F.log.length, 1);
-});
-
-test("settingsSave: ส่ง venue ล้ม = ค่าตั้งบันทึกแล้ว ตอบ 200 venue:'failed' · root ได้ byAdmin", async () => {
-  F.reset({ shop: { shopA: shopDoc({ productIds: ["p1"] }) } });
-  const boom = async () => { throw new Error("network"); };
-  const orig = console.error; console.error = () => {};
-  const r = await call(settingsSave, { now: () => NOW, sendVenue: boom }, SETTINGS({ enabled: true }), ROOT);
-  console.error = orig;
-  assert.equal(r.code, 200);
-  assert.equal(r.body.venue, "failed");
-  assert.equal(r.body.byAdmin, true);
-  assert.equal(F.data.shop.shopA.scango.enabled, true);
-  // สถานะจาก sendVenue ส่งต่อตามจริง (ไม่เดาว่า sent): queued (ลง outbox) · skipped (env ไม่ตั้ง) · รูปที่ไม่รู้จัก/ไม่คืนอะไร = failed
-  for (const [ret, want] of [[{ status: "queued", sent: false, queued: true }, "queued"], [{ status: "skipped", reason: "not_configured" }, "skipped"], [{ status: "ok" }, "failed"], [null, "failed"]]) {
-    const rr = await call(settingsSave, { now: () => NOW, sendVenue: venueSpy(ret) }, SETTINGS({ enabled: true }), OWNER);
-    assert.equal(rr.code, 200);
-    assert.equal(rr.body.venue, want, JSON.stringify(ret));
-  }
-  // เลขพร้อมเพย์ในช่อง paymentQr (ทางที่ ScanGo ใช้สร้าง QR ได้) = ผ่าน · เลขผิดหลัก = 400
-  assert.equal((await call(settingsSave, { now: () => NOW, sendVenue: venueSpy() }, SETTINGS({ paymentQr: "081-234-5678" }), OWNER)).code, 200);
-  assert.equal((await call(settingsSave, { now: () => NOW, sendVenue: venueSpy() }, SETTINGS({ paymentQr: "0812345" }), OWNER)).code, 400);
-});
-
 // ── productsSet ────────────────────────────────────────────────────────────────
 test("productsSet: ตั้งรายการ (ตัดซ้ำ คงลำดับ) เขียนช่องเดียว · พนักงานที่มี '111' ได้ · ไม่มี 403", async () => {
   F.reset({ shop: { shopA: shopDoc({ enabled: false }) }, stock: { p1: prod(), p2: prod({ name: "ขนม" }) } });
@@ -308,55 +169,3 @@ test("orderList: ของร้านนี้ ใหม่สุดก่อ�
   assert.equal((await call(orderList, {}, { shopId: "shopA", states: [] }, OWNER)).code, 400);
 });
 
-// ── orderAction ────────────────────────────────────────────────────────────────
-function actionsSpy(result) {
-  const calls = [];
-  const mk = (name) => async (_deps, arg) => { calls.push({ name, ...arg }); return typeof result === "function" ? result(name) : result; };
-  return { calls, actions: { accept: mk("accept"), ready: mk("ready"), reject: mk("reject") } };
-}
-
-test("orderAction: ส่งต่อ _orderActions ด้วย order + actor + reason · ผลรวมในคำตอบ", async () => {
-  F.reset({ shop: { shopA: shopDoc() }, scangoOrder: { o1: { shopId: "shopA", state: "requested" } } });
-  const s = actionsSpy({ state: "accepted" });
-  const r = await call(orderAction, { orderActions: s.actions }, { shopId: "shopA", orderRef: "o1", action: "accept" }, STAFF(["100"]));
-  assert.equal(r.code, 200, JSON.stringify(r.body));
-  assert.equal(r.body.state, "accepted");
-  assert.equal(r.body.orderRef, "o1");
-  assert.equal(s.calls[0].name, "accept");
-  assert.equal(s.calls[0].order.orderRef, "o1");
-  assert.equal(s.calls[0].order.state, "requested");
-  assert.deepEqual(s.calls[0].actor, { uid: "u-staff", role: "staff" });
-  const rj = await call(orderAction, { orderActions: s.actions }, { shopId: "shopA", orderRef: "o1", action: "reject", reason: "ของหมด" }, OWNER);
-  assert.equal(rj.code, 200);
-  assert.equal(s.calls[1].reason, "ของหมด");
-});
-
-test("orderAction: reject ไม่มีเหตุผล 400 · ไม่มีสิทธิ์ขาย 403 · ใบไม่มี 404 · ใบร้านอื่น 409 · watcher 403", async () => {
-  F.reset({ shop: { shopA: shopDoc() }, scangoOrder: { o1: { shopId: "shopA", state: "requested" }, oB: { shopId: "shopB", state: "requested" } } });
-  const s = actionsSpy({});
-  const d = { orderActions: s.actions };
-  assert.equal((await call(orderAction, d, { shopId: "shopA", orderRef: "o1", action: "reject" }, OWNER)).code, 400);
-  assert.equal((await call(orderAction, d, { shopId: "shopA", orderRef: "o1", action: "reject", reason: "  " }, OWNER)).code, 400);
-  assert.equal((await call(orderAction, d, { shopId: "shopA", orderRef: "o1", action: "cook" }, OWNER)).code, 400);
-  assert.equal((await call(orderAction, d, { shopId: "shopA", orderRef: "o1", action: "accept" }, STAFF(["111"]))).code, 403);
-  const nf = await call(orderAction, d, { shopId: "shopA", orderRef: "zz", action: "accept" }, OWNER);
-  assert.equal(nf.code, 404); assert.equal(nf.body.error, "scango_order_not_found");
-  const other = await call(orderAction, d, { shopId: "shopA", orderRef: "oB", action: "accept" }, OWNER);
-  assert.equal(other.code, 409); assert.equal(other.body.error, "scango_order_other_shop");
-  assert.equal((await call(orderAction, d, { shopId: "shopA", orderRef: "o1", action: "accept" }, WATCHER)).body.error, "watcher_read_only");
-  assert.equal(s.calls.length, 0);
-});
-
-test("orderAction: _orderActions ปัด (คืน deny หรือ throw .deny) = ส่งต่อเป็น error · throw อื่น = 500", async () => {
-  F.reset({ shop: { shopA: shopDoc() }, scangoOrder: { o1: { shopId: "shopA", state: "delivered" } } });
-  const d1 = { orderActions: { accept: async () => ({ ok: false, status: 409, error: "scango_bad_state", extra: { state: "delivered" } }) } };
-  const r1 = await call(orderAction, d1, { shopId: "shopA", orderRef: "o1", action: "accept" }, OWNER);
-  assert.equal(r1.code, 409); assert.equal(r1.body.error, "scango_bad_state"); assert.equal(r1.body.state, "delivered");
-  const e = new Error("x"); e.deny = { ok: false, status: 409, error: "scango_bad_state" };
-  const r2 = await call(orderAction, { orderActions: { ready: async () => { throw e; } } }, { shopId: "shopA", orderRef: "o1", action: "ready" }, OWNER);
-  assert.equal(r2.code, 409);
-  const orig = console.error; console.error = () => {};
-  const r3 = await call(orderAction, { orderActions: { ready: async () => { throw new Error("boom"); } } }, { shopId: "shopA", orderRef: "o1", action: "ready" }, OWNER);
-  console.error = orig;
-  assert.equal(r3.code, 500);
-});

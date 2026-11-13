@@ -170,12 +170,6 @@ const ROUTES = Object.freeze([
   // ── ScanGo (ร้าน Shopchamp ขายบนแอป ScanGo · แบบงาน lanes/dev/source/shopchamp-scango-design.md §เส้นเชื่อม)
   // ขาเข้าจากเซิร์ฟเวอร์ ScanGo (auth 'partner' = กุญแจร่วม header x-scango-platform-key · scango/_partnerAuth.js · ร้านมาจาก body.externalId)
   { contract: "scango.menu", path: "/scango/menu", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/menu").menu },
-  { contract: "scango.deliveryQuote", path: "/scango/delivery/quote", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/deliveryQuote").deliveryQuote },
-  { contract: "scango.orderCreate", path: "/scango/order/create", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderCreate").orderCreate },
-  { contract: "scango.orderCancel", path: "/scango/order/cancel", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderCancel").orderCancel },
-  { contract: "scango.orderRemind", path: "/scango/order/remind", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderRemind").orderRemind },
-  { contract: "scango.orderState", path: "/scango/order/state", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderState").orderState },
-  { contract: "scango.orderDelivery", path: "/scango/order/delivery", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/orderDelivery").orderDelivery },
   // login เว็บร้าน ScanGo ด้วยบัญชี Shopchamp (Pack เคาะ 2026-11-12): ScanGo ส่ง idToken มาถามว่าเป็นเจ้าของร้านไหน · ถามซ้ำว่ายังเป็นเจ้าของไหม
   { contract: "scango.loginAccount", path: "/scango/settings-login/account", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginAccount },
   { contract: "scango.loginOwnerCheck", path: "/scango/settings-login/owner-check", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginOwnerCheck },
@@ -183,17 +177,8 @@ const ROUTES = Object.freeze([
   { contract: "scango.loginRedeem", path: "/scango/settings-login/redeem", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/settingsLogin").loginRedeem },
   { contract: "scango.merchantProductsList", path: "/scango/merchant/products/list", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantProductsList },
   { contract: "scango.merchantProductsSet", path: "/scango/merchant/products/set", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantProductsSet, bodyLimit: "300kb" },
-  // รอบ 5 (Pack เคาะ 2026-11-12 · ค่าตั้งย้ายไปเว็บร้าน ScanGo): เปิด/ปิดรับ · ขั้นต่ำ · สูตรค่าส่งแบบช่วง + ตารางตัวอย่าง (ยึดแบบพี่น้อง)
-  { contract: "scango.merchantOrdering", path: "/scango/merchant/ordering", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantOrdering },
-  { contract: "scango.merchantFeePreview", path: "/scango/merchant/fee/preview", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantFeePreview },
   // ฝั่งแอปร้าน (auth 'shop' · path ขึ้นต้น /scango/shop/ แยกจากขาเข้าของ ScanGo)
-  { contract: "scango.settingsGet", path: "/scango/shop/settings-get", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsGet").settingsGet },
-  { contract: "scango.settingsSave", path: "/scango/shop/settings-save", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/settingsSave").settingsSave },
-  // รายการสินค้าทั้งก้อน ≤1000 ตัว (ตอบ 409 too_many_products ได้ถึง 5000) ⇒ เกิน 100kb ได้
-  { contract: "scango.productsSet", path: "/scango/shop/products-set", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/productsSet").productsSet, bodyLimit: "300kb" },
-  { contract: "scango.productSearch", path: "/scango/shop/product-search", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/productSearch").productSearch },
   { contract: "scango.orderList", path: "/scango/shop/order-list", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderList").orderList },
-  { contract: "scango.orderAction", path: "/scango/shop/order-action", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderAction").orderAction },
   // ไทล์ ScanGo หน้าแรก (รอบ 4 · ยึดแบบพี่น้อง settings-login/status · start): เลือกหน้าแนะนำ/เว็บร้าน/หน้าอธิบาย · รหัสเข้าเว็บร้านใช้ครั้งเดียว
   { contract: "scango.loginStatus", path: "/scango/shop/login-status", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/loginStatus").loginStatus },
   { contract: "scango.loginStart", path: "/scango/shop/login-start", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/loginStart").loginStart },
