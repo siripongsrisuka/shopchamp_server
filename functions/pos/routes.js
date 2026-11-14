@@ -31,6 +31,9 @@ const ROUTES = Object.freeze([
   { contract: "shift.manage", path: "/shift/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/manage").manage },
   // DEV-0002: เว็บถามกะที่เปิดอยู่ก่อนรับชำระเงินเซ็นเป็นเงินสด (อ่านอย่างเดียว)
   { contract: "shift.openList", path: "/shift/open-list", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/openList").openList },
+  // DEV-0010 อ่านกะผ่าน API (แทน get/listener กะของแอป · ประวัติกะตามวันเปิดกะ · อ่านอย่างเดียว · Pack 2026-11-14 ข้อ 2)
+  { contract: "shift.get", path: "/shift/get", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/get").get },
+  { contract: "shift.history", path: "/shift/history", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/history").history },
   { contract: "member.payCredit", path: "/member/pay-credit", fn: "pos", auth: "shop", factory: true, load: () => require("./member/payCredit").payCredit },
 
   // ก้อน 9a สต๊อก · segment stock = pos · stock-repair = pos_heavy (อ่านสินค้าทั้งร้าน)
