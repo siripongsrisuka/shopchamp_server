@@ -94,13 +94,19 @@ function mergeSnaps(snaps, shopRef) {
 }
 
 /**
- * billsByTime({keys, shopRef, after, upTo, fields, limit}) — บิลของร้านที่ after < dateTime <= upTo
- *   index ที่ใช้: bill(shopId ASC, dateTime DESC) มีแล้วใน firestore.indexes.json
+ * billsByTime({keys, shopRef, after, upTo, fields, limit, byId, startAfter}) — บิลของร้านที่ after < dateTime <= upTo
+ *   index ที่ใช้: bill(shopId ASC, dateTime DESC) · byId ใช้ bill(shopId ASC, dateTime DESC, __name__ DESC) มีแล้วใน firestore.indexes.json
  *   fields = select (ลดขนาด) · limit ต่อค่า key
+ *   byId (DEV-0010 · แบ่งหน้า) = เรียงต่อด้วย doc id มากก่อน (orderBy __name__ desc) ⇒ บิลเวลาเท่ากันมีลำดับตายตัวทุกหน้า
+ *   startAfter {at: Date, id} (ต้องคู่กับ byId) = อ่านต่อจากแถวสุดท้ายของหน้าก่อน (เวลา + doc id) ไม่อ่านเผื่อ
  */
-async function billsByTime({ keys, shopRef, after, upTo, fields, limit }) {
+async function billsByTime({ keys, shopRef, after, upTo, fields, limit, byId, startAfter }) {
   const snaps = await Promise.all(keys.map((k) => {
     let q = db.collection("bill").where("shopId", "==", k).where("dateTime", ">", after).where("dateTime", "<=", upTo).orderBy("dateTime", "desc");
+    if (byId === true) {
+      q = q.orderBy("__name__", "desc");
+      if (startAfter) q = q.startAfter(startAfter.at, startAfter.id);
+    }
     if (Array.isArray(fields) && fields.length) q = q.select(...fields);
     if (Number.isInteger(limit) && limit > 0) q = q.limit(limit);
     return q.get();

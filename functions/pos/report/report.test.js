@@ -16,12 +16,14 @@ const ms = (v) => (v instanceof Date ? v.getTime() : v && typeof v.toMillis === 
 let DATA = {};
 let QUERIES = [];
 let FAIL = false;
+let READS = 0; // DEV-0010: จำนวน doc ที่อ่าน (doc.get = 1 · query = จำนวน doc ที่คืน ขั้นต่ำ 1 แบบที่ Firestore คิด)
 function query(coll, st) {
   const api = {
     where: (f, op, v) => query(coll, { ...st, where: [...st.where, [f, op, v]] }),
     orderBy: (f, dir) => query(coll, { ...st, orderBy: [...st.orderBy, [f, dir]] }),
     select: (...fields) => query(coll, { ...st, select: fields }),
     limit: (n) => query(coll, { ...st, limit: n }),
+    startAfter: (...vals) => query(coll, { ...st, startAfter: vals }),
     get: async () => {
       if (FAIL) throw new Error("ฐานล้ม");
       QUERIES.push({ coll, ...st });
@@ -32,7 +34,22 @@ function query(coll, st) {
       const at = (d, f) => f.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), d); // member.id (DEV-0002)
       let docs = Object.entries(DATA[coll] || {}).filter(([, d]) => st.where.every(([f, op, v]) => cmp(at(d, f), op, v)));
       for (const [f, dir] of st.orderBy.slice().reverse()) docs.sort(([ia, a], [ib, b]) => ((ms(at(a, f)) - ms(at(b, f))) || (ia < ib ? -1 : 1)) * (dir === "desc" ? -1 : 1));
+      if (st.startAfter) {
+        // DEV-0010: startAfter ตาม orderBy แบบ Firestore (__name__ = doc id) · ค่าเกิน orderBy = error แบบ SDK
+        if (st.startAfter.length > st.orderBy.length) throw new Error("Too many cursor values");
+        const key = (id, d, f) => (f === "__name__" ? id : ms(at(d, f)));
+        docs = docs.filter(([id, d]) => {
+          for (let i = 0; i < st.startAfter.length; i++) {
+            const [f, dir] = st.orderBy[i];
+            const a = key(id, d, f), b = f === "__name__" ? st.startAfter[i] : ms(st.startAfter[i]);
+            if (a === b) continue;
+            return dir === "desc" ? a < b : a > b;
+          }
+          return false;
+        });
+      }
       if (st.limit) docs = docs.slice(0, st.limit);
+      READS += Math.max(docs.length, 1);
       return { docs: docs.map(([id, d]) => ({ id, data: () => d })) };
     },
   };
@@ -40,7 +57,7 @@ function query(coll, st) {
 }
 const db = {
   collection: (c) => ({
-    doc: (id) => ({ get: async () => { if (FAIL) throw new Error("ฐานล้ม"); const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; } }),
+    doc: (id) => ({ get: async () => { if (FAIL) throw new Error("ฐานล้ม"); READS += 1; const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; } }),
     where: (f, op, v) => query(c, { where: [[f, op, v]], orderBy: [], select: null, limit: null }),
   }),
 };
@@ -81,7 +98,7 @@ async function call(factory, body, deps) {
   await factory(deps || { now: NOW })({ body, shopAccess: OWNER }, res); // ตรึงนาฬิกา (ด่านแพ็กเกจ 62 วันอ่าน now)
   return res;
 }
-function reset(data) { DATA = data; QUERIES = []; FAIL = false; }
+function reset(data) { DATA = data; QUERIES = []; FAIL = false; READS = 0; }
 
 test("② ตัวอย่างบิลและประวัติกะที่ใช้ทดสอบเป็นรูปที่แอปเก่าเขียน (AnyBill · AnyShiftHistory)", () => {
   assert.ok(AnyBill.safeParse(bill({})).success, "บิลรุ่นปัจจุบัน");
@@ -93,7 +110,7 @@ test("② ตัวอย่างบิลและประวัติกะ�
   assert.ok(b.success, JSON.stringify(b.error && b.error.issues.slice(0, 3)));
 });
 
-test("① billList: ค้น bill ด้วย shopId + ช่วง dateTime ตาม cutOff · orderBy dateTime desc · select · limit pageSize+51 · เรียงจริงล่าสุดก่อน", async () => {
+test("① billList: ค้น bill ด้วย shopId + ช่วง dateTime ตาม cutOff · orderBy dateTime desc, __name__ desc · select · limit pageSize+1 · เรียงจริงล่าสุดก่อน", async () => {
   reset({ shop: { shopA: shop }, bill: { a: bill({}), b: bill({ dateTime: ts("2026-11-10T05:00:00.000Z") }), c: legacyBill } });
   const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 10 });
   assert.equal(r.code, 200);
@@ -102,9 +119,10 @@ test("① billList: ค้น bill ด้วย shopId + ช่วง dateTime �
   assert.deepEqual(q.where.map(([f, op]) => `${f}${op}`), ["shopId==", "dateTime>", "dateTime<="]);
   assert.equal(q.where[1][2].toISOString(), "2026-11-09T20:00:00.000Z");
   assert.equal(q.where[2][2].toISOString(), "2026-11-10T20:00:00.000Z");
-  assert.deepEqual(q.orderBy, [["dateTime", "desc"]]);
+  assert.deepEqual(q.orderBy, [["dateTime", "desc"], ["__name__", "desc"]]);
+  assert.equal(q.startAfter, undefined, "หน้าแรกไม่มี startAfter");
   assert.deepEqual(q.select, [...LIST_FIELDS]);
-  assert.equal(q.limit, 61);
+  assert.equal(q.limit, 11);
   assert.ok(LIST_FIELDS.includes("shopId"), "ต้อง select shopId ไว้ตรวจว่าเป็นของร้าน");
 });
 
@@ -257,8 +275,8 @@ test("DEV-0002 memberBills: ค้น member.id + orderBy dateTime desc + limit 
     assert.equal(r.code, 200);
     if (i === 0) {
       assert.deepEqual(QUERIES[0].where.map(([f, op]) => [f, op]), [["member.id", "=="]]);
-      assert.deepEqual(QUERIES[0].orderBy, [["dateTime", "desc"]]);
-      assert.equal(QUERIES[0].limit, 52);
+      assert.deepEqual(QUERIES[0].orderBy, [["dateTime", "desc"], ["__name__", "desc"]]);
+      assert.equal(QUERIES[0].limit, 2);
     }
     seen.push(...r.body.rows.map((x) => x.id));
     cursor = r.body.nextCursor;
@@ -267,14 +285,143 @@ test("DEV-0002 memberBills: ค้น member.id + orderBy dateTime desc + limit 
   assert.deepEqual(seen, ["m4", "m3", "m1", "m0"]);
 });
 
-test("DEV-0002 memberBills: ฐานคืนเต็มเพดานแต่เป็นใบยกเลิกทั้งหมด → หน้าว่างแต่มี nextCursor ให้เดินต่อ (ไม่ตัดจบเงียบ)", async () => {
+test("DEV-0002/DEV-0010 memberBills: หน้าที่อ่านมาเป็นใบยกเลิกทั้งหมด → หน้าว่างแต่มี nextCursor ให้เดินต่อ (ไม่ตัดจบเงียบ) · เดินจนสุดได้ใบปกติครบ", async () => {
   const B = {};
-  for (let i = 0; i < 60; i++) B[`v${String(i).padStart(2, "0")}`] = bill({ member: { id: "m-1" }, void: true, dateTime: ts(new Date(Date.parse("2026-11-10T06:00:00.000Z") + i * 1000).toISOString()) });
+  for (let i = 0; i < 6; i++) B[`v${String(i).padStart(2, "0")}`] = bill({ member: { id: "m-1" }, void: true, dateTime: ts(new Date(Date.parse("2026-11-10T06:00:00.000Z") + i * 1000).toISOString()) });
   B.ok1 = bill({ member: { id: "m-1" }, dateTime: ts("2026-11-10T03:00:00.000Z") });
   reset({ shop: { shopA: shop }, bill: B });
-  const r1 = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 1 });
+  const r1 = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 2 });
   assert.deepEqual(r1.body.rows, []);
   assert.ok(r1.body.nextCursor);
-  const r2 = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 1, cursor: r1.body.nextCursor });
-  assert.deepEqual(r2.body.rows.map((x) => x.id), ["ok1"]);
+  const seen = [];
+  let cursor = r1.body.nextCursor;
+  for (let i = 0; i < 10 && cursor; i++) {
+    const r = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 2, cursor });
+    seen.push(...r.body.rows.map((x) => x.id));
+    cursor = r.body.nextCursor;
+  }
+  assert.deepEqual(seen, ["ok1"]);
+});
+
+// ───────── DEV-0010 · แบ่งหน้าอ่านต่อจากใบสุดท้าย ไม่อ่านเผื่อ ─────────
+const at = (base, sec) => ts(new Date(Date.parse(base) + sec * 1000).toISOString());
+
+test("DEV-0010 billList: หน้าถัดไปส่ง startAfter(เวลา, id) ของแถวสุดท้าย · ยังคง dateTime <= at · รูป cursor เดิม {at, id}", async () => {
+  const B = {};
+  for (let i = 0; i < 5; i++) B[`b${i}`] = bill({ dateTime: at("2026-11-10T03:00:00.000Z", i * 60) });
+  reset({ shop: { shopA: shop }, bill: B });
+  const r1 = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 2 });
+  assert.deepEqual(r1.body.rows.map((x) => x.id), ["b4", "b3"]);
+  assert.deepEqual(Object.keys(r1.body.nextCursor).sort(), ["at", "id"]);
+  assert.deepEqual(r1.body.nextCursor, { at: "2026-11-10T03:03:00.000Z", id: "b3" });
+  reset({ shop: { shopA: shop }, bill: B });
+  const r2 = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 2, cursor: r1.body.nextCursor });
+  const q = QUERIES.find((x) => x.coll === "bill");
+  assert.equal(q.startAfter[0].toISOString(), "2026-11-10T03:03:00.000Z");
+  assert.equal(q.startAfter[1], "b3");
+  assert.equal(q.where[2][2].toISOString(), "2026-11-10T03:03:00.000Z");
+  assert.deepEqual(r2.body.rows.map((x) => x.id), ["b2", "b1"]);
+});
+
+test("DEV-0010 billList: บิลเวลาเท่ากัน 60 ใบข้ามรอยต่อหน้า (pageSize 2) → เดินครบ ไม่หาย ไม่ซ้ำ · ชนเกินที่ของเดิมเผื่อ (50) ก็ไม่ข้าม", async () => {
+  const same = ts("2026-11-10T07:00:00.000Z");
+  const B = { y: bill({}) };
+  const tied = [];
+  for (let i = 0; i < 60; i++) { const id = `t${String(i).padStart(2, "0")}`; B[id] = bill({ dateTime: same }); tied.unshift(id); }
+  B.z = bill({ dateTime: ts("2026-11-10T08:00:00.000Z") });
+  const seen = [];
+  let cursor;
+  for (let i = 0; i < 40; i++) {
+    reset({ shop: { shopA: shop }, bill: B });
+    const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 2, ...(cursor ? { cursor } : {}) });
+    assert.equal(r.code, 200);
+    seen.push(...r.body.rows.map((x) => x.id));
+    cursor = r.body.nextCursor;
+    if (!cursor) break;
+  }
+  assert.deepEqual(seen, ["z", ...tied, "y"]);
+});
+
+test("DEV-0010 billList: ค่าอ่านต่อหน้า = shop 1 + pageSize+1 (ไม่อ่านเผื่อ) · หน้าสุดท้าย = เท่าที่เหลือ", async () => {
+  const B = {};
+  for (let i = 0; i < 120; i++) B[`b${String(i).padStart(3, "0")}`] = bill({ dateTime: at("2026-11-10T01:00:00.000Z", i * 30) });
+  reset({ shop: { shopA: shop }, bill: B });
+  const r1 = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 10 });
+  assert.equal(r1.body.rows.length, 10);
+  assert.equal(READS, 1 + 11, "shop 1 + bill 11 (เดิม 61)");
+  let cursor = r1.body.nextCursor;
+  let pages = 1;
+  let total = 10;
+  while (cursor) {
+    reset({ shop: { shopA: shop }, bill: B });
+    const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 10, cursor });
+    assert.ok(READS <= 12, `หน้า ${pages + 1} อ่าน ${READS}`);
+    total += r.body.rows.length;
+    cursor = r.body.nextCursor;
+    pages += 1;
+  }
+  assert.equal(total, 120);
+  assert.equal(pages, 12);
+});
+
+test("DEV-0010 billList: ร้าน S5 (2 key) → ค่าอ่านต่อ key = pageSize+1 · รวมแล้วเรียงถูก ไม่หาย", async () => {
+  const s5 = { ...shop, shopId: "legacyA" };
+  const B = {};
+  for (let i = 0; i < 6; i++) B[`n${i}`] = bill({ shopId: i % 2 ? "shopA" : "legacyA", dateTime: at("2026-11-10T03:00:00.000Z", i * 60) });
+  const seen = [];
+  let cursor;
+  for (let i = 0; i < 10; i++) {
+    reset({ shop: { shopA: s5 }, bill: B });
+    const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", pageSize: 2, ...(cursor ? { cursor } : {}) });
+    assert.equal(r.code, 200, JSON.stringify(r.body));
+    for (const q of QUERIES.filter((x) => x.coll === "bill" && x.where[0][0] === "shopId" && x.where.length === 3)) assert.equal(q.limit, 3);
+    seen.push(...r.body.rows.map((x) => x.id));
+    cursor = r.body.nextCursor;
+    if (!cursor) break;
+  }
+  assert.deepEqual(seen, ["n5", "n4", "n3", "n2", "n1", "n0"]);
+});
+
+test("DEV-0010 billList: เลขใบของลิงก์แก้บิล 2 ทาง · select เฉพาะ amend.ofReceiptNumber / amend.newReceiptNumber · ไม่มีลิงก์ = null", async () => {
+  reset({ shop: { shopA: shop }, bill: {
+    old: bill({ receiptNumber: "202611000001", amendedBy: "nw", amend: { status: "done", requestId: "r1", newBillId: "nw", newReceiptNumber: "202611000002", staffUid: "u-x" } }),
+    nw: bill({ receiptNumber: "202611000002", dateTime: ts("2026-11-10T04:00:00.000Z"), amendOf: "old", amend: { status: "done", requestId: "r1", ofBillId: "old", ofReceiptNumber: "202611000001" } }),
+    pend: bill({ dateTime: ts("2026-11-10T02:00:00.000Z"), amend: { status: "pending", requestId: "r2", newReceiptNumber: "202611000009" } }),
+    plain: bill({ dateTime: ts("2026-11-10T01:00:00.000Z") }),
+  } });
+  const r = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110" });
+  const by = Object.fromEntries(r.body.rows.map((x) => [x.id, x]));
+  assert.equal(by.nw.amendOfNumber, "202611000001");
+  assert.equal(by.nw.amendedByNumber, null);
+  assert.equal(by.old.amendedByNumber, "202611000002");
+  assert.equal(by.old.amendOfNumber, null);
+  assert.equal(by.pend.amendedByNumber, null, "ยังไม่มี amendedBy = ยังไม่ขึ้นลิงก์ (เท่า amendLinksOf ของแอป)");
+  assert.equal(by.plain.amendOfNumber, null);
+  assert.equal("amend" in by.old, false, "ไม่ส่งก้อน amend ทั้งก้อน");
+  assert.ok(LIST_FIELDS.includes("amend.ofReceiptNumber") && LIST_FIELDS.includes("amend.newReceiptNumber") && !LIST_FIELDS.includes("amend"));
+  reset({ shop: { shopA: shop }, bill: { nw: bill({ amendOf: "old", amend: { status: "done", requestId: "r1", ofReceiptNumber: "202611000001" } }) } });
+  const d = await call(billList, { shopId: "shopA", fromDay: "20261110", toDay: "20261110", detail: true });
+  assert.equal(d.body.rows[0].amendOfNumber, "202611000001", "detail:true ก็มี");
+});
+
+test("DEV-0010 memberBills: ค่าอ่านต่อหน้า = shop 1 + pageSize+1 · startAfter(เวลา, id) ของใบสุดท้ายที่อ่าน · เวลาเท่ากันข้ามหน้าไม่หาย", async () => {
+  const same = ts("2026-11-10T07:00:00.000Z");
+  const B = {};
+  for (let i = 0; i < 5; i++) B[`s${i}`] = bill({ member: { id: "m-1" }, dateTime: same, void: i === 1 });
+  B.early = bill({ member: { id: "m-1" }, dateTime: ts("2026-11-10T03:00:00.000Z") });
+  const seen = [];
+  let cursor;
+  for (let i = 0; i < 10; i++) {
+    reset({ shop: { shopA: shop }, bill: B });
+    const r = await call(memberBills, { shopId: "shopA", memberId: "m-1", pageSize: 2, ...(cursor ? { cursor } : {}) });
+    assert.equal(r.code, 200);
+    assert.ok(READS <= 1 + 3, `อ่าน ${READS}`);
+    const q = QUERIES.find((x) => x.coll === "bill");
+    if (cursor) assert.deepEqual([q.startAfter[0].toISOString(), q.startAfter[1]], [cursor.at, cursor.id]);
+    else assert.equal(q.startAfter, undefined);
+    seen.push(...r.body.rows.map((x) => x.id));
+    cursor = r.body.nextCursor;
+    if (!cursor) break;
+  }
+  assert.deepEqual(seen, ["s4", "s3", "s2", "s0", "early"]);
 });
