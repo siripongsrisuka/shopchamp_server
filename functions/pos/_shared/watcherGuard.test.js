@@ -20,7 +20,9 @@ const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/c
   // ScanGo: ค้นสินค้า (แกนของ relay products/list) · รายการใบ · สถานะไทล์ (อ่านอย่างเดียว)
   "scango/shop/productSearch.js", "scango/shop/orderList.js", "scango/shop/loginStatus.js",
   // DEV-0010 stock.sync · stock.findBarcode (อ่านสินค้าของร้านอย่างเดียว · แอปเดิมทุกคนในร้านอ่านได้)
-  "stock/syncRead.js"]);
+  "stock/syncRead.js",
+  // DEV-0010 expense.list · expenseReport.list (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
+  "shopStaff/expenseRead.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());

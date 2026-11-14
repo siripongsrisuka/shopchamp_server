@@ -75,6 +75,10 @@ const ROUTES = Object.freeze([
   { contract: "staff.verifyCashierCode", path: "/staff/verify-cashier-code", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/verifyCashierCode").verifyCashierCode },
   { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
   { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
+  // DEV-0010 อ่านลงเวลา/ค่าใช้จ่ายผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว) · checkInStatus = auth user ด่านแบบ staff.checkIn (AC-82)
+  { contract: "staff.checkInStatus", path: "/staff/check-in-status", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/checkInStatus").checkInStatus },
+  { contract: "expense.list", path: "/expense/list", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseRead").expenseList },
+  { contract: "expenseReport.list", path: "/expense-report/list", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseRead").expenseReportList },
   { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
   // ก้อน 10 รอบ 2c: LINE token เข้าที่ลับ + สำเนาเดิม (LS-033) · เข้าครั้งแรกของร้านรุ่นแรก (LD-029 · auth user ตัดสินเจ้าของจาก shop.shopId == uid)
   { contract: "shop.lineSettings", path: "/shop/line-settings", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/lineSettings").lineSettings },
