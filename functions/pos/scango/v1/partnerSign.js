@@ -9,7 +9,7 @@
 // 🔑 rawBody = ไบต์ตรงตามที่ส่ง: บน Cloud Functions = req.rawBody ที่ framework เก็บให้ · นอกนั้น app.js ให้ express.json เก็บไบต์ใส่ req.rawBody
 //    ไม่มีทั้งคู่ (เทสเรียกตรง) = JSON.stringify(req.body) · ❌ ไม่ re-serialize เมื่อมีไบต์จริง
 // กุญแจ = `SCANGO_SHOPCHAMP_KEY` ตัวเดียวกับ _partnerAuth.js (= SHOPCHAMP_PLATFORM_KEY ฝั่ง ScanGo · connector ใช้ค่าเดียวกันทั้ง header key และ HMAC)
-// ต่างจากต้นแบบ: ชื่อ partner/env ของบ้านนี้ · ไม่มีขาส่ง (headersFor) เพราะ Shopchamp ไม่ยิงออกหา ScanGo · คำตอบผ่าน respond.fail (มี code ซ้ำ error ตามสัญญา §2)
+// ต่างจากต้นแบบ: ชื่อ partner/env ของบ้านนี้ · ขาส่ง (headersFor) อยู่ที่ ./eventOut.js (ร้านกดรับในแอป · DEV-0009 2026-11-14) · คำตอบผ่าน respond.fail (มี code ซ้ำ error ตามสัญญา §2)
 "use strict";
 
 const crypto = require("crypto");

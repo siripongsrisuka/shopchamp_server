@@ -186,6 +186,8 @@ const ROUTES = Object.freeze([
   { contract: "scango.merchantProductsSet", path: "/scango/merchant/products/set", fn: "pos", auth: "partner", factory: true, load: () => require("./scango/merchantRelay").merchantProductsSet, bodyLimit: "300kb" },
   // ฝั่งแอปร้าน (auth 'shop' · path ขึ้นต้น /scango/shop/ แยกจากขาเข้าของ ScanGo)
   { contract: "scango.orderList", path: "/scango/shop/order-list", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderList").orderList },
+  // DEV-0009 สเปกข้อ 6 (Pack ผ่าน 2026-11-14): ร้านกดรับใบในแอป → accepted + ยิง OrderEvent v1 'accepted' ไป ScanGo (v1/eventOut.js · ลายเซ็น HMAC กุญแจ SCANGO_SHOPCHAMP_KEY)
+  { contract: "scango.orderAccept", path: "/scango/shop/order-accept", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/orderAccept").orderAccept },
   // ไทล์ ScanGo หน้าแรก (รอบ 4 · ยึดแบบพี่น้อง settings-login/status · start): เลือกหน้าแนะนำ/เว็บร้าน/หน้าอธิบาย · รหัสเข้าเว็บร้านใช้ครั้งเดียว
   { contract: "scango.loginStatus", path: "/scango/shop/login-status", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/loginStatus").loginStatus },
   { contract: "scango.loginStart", path: "/scango/shop/login-start", fn: "pos", auth: "shop", factory: true, load: () => require("./scango/shop/loginStart").loginStart },

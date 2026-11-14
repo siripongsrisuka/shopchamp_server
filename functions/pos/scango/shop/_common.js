@@ -85,6 +85,19 @@ const ProductSearchRequest = z
 
 const OrderListRequest = z.object({ shopId: DocId, states: z.array(z.enum(ORDER_STATES)).min(1).max(ORDER_STATES.length).optional() }).strict();
 
+// DEV-0009 สเปกข้อ 6: ร้านกดรับใบในแอป (scango.orderAccept)
+const OrderAcceptRequest = z.object({ shopId: DocId, orderRef: DocId }).strict();
+
+/**
+ * orderOut(orderRef, data) — เนื้อใบที่ส่งให้แอป (order-list · order-accept) · เวลาเป็น ISO
+ *   items[].productRef = ซ้ำ productId (ใบเก็บ productRef ของ ScanGo ไว้ในช่อง productId · แอปเรียกตามสัญญา v1 ว่า productRef)
+ */
+function orderOut(orderRef, data) {
+  const o = { ...jsonSafe(data || {}), orderRef };
+  if (Array.isArray(o.items)) o.items = o.items.map((it) => (isObj(it) && it.productRef === undefined ? { ...it, productRef: it.productId === undefined ? null : it.productId } : it));
+  return o;
+}
+
 /** uniq(list) — ตัดตัวซ้ำ คงลำดับแรกที่เจอ */
 const uniq = (list) => [...new Set(list)];
 
@@ -104,4 +117,6 @@ module.exports = {
   ProductsSetRequest,
   ProductSearchRequest,
   OrderListRequest,
+  OrderAcceptRequest,
+  orderOut,
 };

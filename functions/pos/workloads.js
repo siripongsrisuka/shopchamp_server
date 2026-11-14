@@ -25,7 +25,8 @@ const COMPANY_PAY_SECRETS = Object.freeze(["COMPANY_POSXPAY_TOKEN", "COMPANY_POS
  *   ใช้ 2 แบบ ค่าเดียวกัน: กุญแจใน header x-scango-platform-key (route auth 'partner' · scango/_partnerAuth.js)
  *   และกุญแจ HMAC ของ ScanGo Order API v1 (route auth 'partnerSigned' · scango/v1/partnerSign.js)
  *   ค่าเดียวกับ SHOPCHAMP_PLATFORM_KEY ฝั่ง scango_server · ❌ ห้ามซ้ำกุญแจกลางของพี่น้อง (ฝั่งโน้นตอบ 503 platform_key_shared)
- *   ไม่มีขายิงออกหา ScanGo แล้ว (ถอด _outbound · outboxSweep 2026-11-13) ⇒ ไม่ต้องใช้ env SCANGO_BASE_URL */
+ *   ขายิงออก (DEV-0009 สเปกข้อ 6 · 2026-11-14): scango/v1/eventOut.js เซ็น OrderEvent v1 ด้วยกุญแจตัวเดียวกันนี้ (ScanGo ตรวจด้วย SHOPCHAMP_PLATFORM_KEY)
+ *   ฐาน URL = env SCANGO_BASE_URL (ไม่ใช่ความลับ · ไม่ตั้ง = ค่าตั้งต้นในไฟล์นั้น) ⇒ ไม่ต้องมี secret ใหม่ */
 const SCANGO_SECRETS = Object.freeze(["SCANGO_SHOPCHAMP_KEY"]);
 
 const FUNCTION_CONFIG = Object.freeze({

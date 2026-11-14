@@ -89,7 +89,7 @@ test("ด่านคู่ค้า (auth partner · เส้น /scango/* ท
   assert.equal(partnerRoutes.length, 7, "เส้นคู่ค้าของ ScanGo 7 เส้น (menu · link · settings-login/account · owner-check · redeem · merchant/products/list · merchant/products/set)");
   assert.ok(partnerRoutes.every((r) => r.fn === FN.POS && /^\/scango\//.test(r.path) && !/^\/scango\/(shop|v1)\//.test(r.path)));
   // ฝั่งแอปร้านของ ScanGo อยู่ใต้ /scango/shop/* และเป็น auth shop (ผ่านด่านตัวตน + ด่านร้าน)
-  assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 3, "order-list · login-status · login-start");
+  assert.equal(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).length, 4, "order-list · order-accept · login-status · login-start");
   assert.ok(ROUTES.filter((r) => /^\/scango\/shop\//.test(r.path)).every((r) => r.auth === "shop"));
 
   const app = makeApp({ fnName: FN.POS, checkIfAuthenticated: realishAuth, requireShopAccess: passShop, requirePartnerKey: partnerGate });

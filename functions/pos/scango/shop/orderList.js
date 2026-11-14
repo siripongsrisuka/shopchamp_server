@@ -2,6 +2,9 @@
 //
 // คำขอ {shopId, states?: ['requested'|'accepted'|'ready'|'picked_up'|'delivering'|'delivered'|'cancelled'|'failed']}
 // คำตอบ 200 {ok, orders:[{orderRef, ...เนื้อ scangoOrder (เวลาเป็น ISO)}], limit}
+//   เนื้อใบ (เขียนโดย v1/orderV1.js › docOf): code · state · stateAt · placedAt · fulfillment (รวม round) · items[{lineId, productId, productRef (ซ้ำ productId ·
+//   DEV-0009 2026-11-14), name, qty, unitPrice, lineTotal, note, options}] · subtotal · deliveryFee · total · bill (ทั้งก้อน) · customer{name, phone, note} ·
+//   dropPoint (รวม zone) · payment · acceptedAt/acceptedBy/scangoAck (เมื่อร้านกดรับในแอป · shop/orderAccept.js)
 //   ≤100 ใบ เรียง createdAt ใหม่สุดก่อน (เพดานอ่าน · จอ 3 แท็บส่ง states ของแท็บ)
 // query: scangoOrder where shopId == <shop doc id> [where state in states] orderBy createdAt desc limit 100
 //   ⚠️ ต้องมี index ประกอบ: (shopId ASC, createdAt DESC) และ (shopId ASC, state ASC, createdAt DESC)
@@ -41,7 +44,7 @@ function orderList(_deps) {
         .map((s) => ({ id: s.id, d: s.data() || {} }))
         .filter((e) => e.d.shopId === access.shopId && (!states || states.includes(e.d.state)))
         .sort((a, b) => msOf(b.d.createdAt) - msOf(a.d.createdAt))
-        .map((e) => ({ ...C.jsonSafe(e.d), orderRef: e.id }));
+        .map((e) => C.orderOut(e.id, e.d));
       return ok(res, { orders, limit: LIST_LIMIT, ...adminFlag(access) });
     } catch (e) {
       return internalError(res, e);
