@@ -18,7 +18,9 @@
 //
 // get (member.get · POST /pos/member/get): สมาชิก 1 คน แทน `shopchamp_app/src/modal/Modal_FindMember.js:59`
 //   member/{memberId} · shopId ของ doc ไม่ใช่คีย์ร้าน = 404 member_not_found (ไม่บอกว่ามีอยู่) · ไม่มีเลขสิทธิ์ (แคชเชียร์เลือกสมาชิกที่จอขาย)
-//   คำตอบ {member:{id, name, tel, point, credit, creditArray}} (ช่องที่จอใช้ · ไล่ใน dev0010-survey-member.md ข้อ 4)
+//   คำตอบ {member:{...doc ทั้งก้อน, id}} เวลาเป็น ISO (ชุดเก็บงาน DEV-0010 · Pack ข้อ 7 ไม่ทำระบบปกปิด)
+//     เหตุ: แอปกระจาย doc ทั้งก้อนเข้า cart.currentMember (Modal_FindMember.js:61-65) แล้วก้อนนั้นไหลต่อไป persist · พักบิล (holdedCarts)
+//     · คิวออฟไลน์เก่า (legacyQueueMigrate.js:75 receipt.member = row.currentMember) ⇒ ไล่ผู้อ่านไม่ครบ = คืนเต็มเท่าของเดิม
 //
 // paidHistory (member.paidHistory · POST /pos/member/paid-history): แทน `shopchamp_app/src/screens/MemberPaidScreen.js:54`
 //   ของเดิม: paidHistory where memberId == id and timestamp >= วันนี้-365 (❌ ไม่กรองร้าน)
@@ -44,7 +46,6 @@ const LIST_DEFAULT_LIMIT = 1000;
 const MEMBER_RIGHT = "107";
 const SETTINGS_RIGHT = "101";
 const LIST_FIELDS = Object.freeze(["name", "tel", "point", "credit", "creditArray", "bought", "timestamp", "lastTime"]);
-const GET_FIELDS = Object.freeze(["name", "tel", "point", "credit", "creditArray"]);
 const PAID_FIELDS = Object.freeze(["paid", "existCredit", "timestamp"]);
 const PAID_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -157,7 +158,7 @@ function get(_deps) {
       const snap = await db.collection("member").doc(input.memberId).get();
       const d = snap.exists ? snap.data() || {} : null;
       if (!d || !keys.includes(d.shopId)) return sendDeny(res, deny(404, "member_not_found"));
-      return ok(res, { ...adminFlag(access), member: { ...pickPlain(d, GET_FIELDS), id: input.memberId } });
+      return ok(res, { ...adminFlag(access), member: { ...pickPlain(d, Object.keys(d)), id: input.memberId } });
     } catch (e) {
       return internalError(res, e);
     }

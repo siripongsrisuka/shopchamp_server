@@ -279,11 +279,15 @@ test("list 🔒: ร้านอื่น 403 · cursor มี / 400 · limit �
 });
 
 // ── member.get ──
-test("get: สมาชิกของร้าน → ช่องที่จอใช้ + id · แคชเชียร์ได้ · ร้านช่อง ≠ doc id ได้ทั้ง 2 คีย์", async () => {
-  seed({ member: { m1: MB("shopA", { creditArray: [{ remainCredit: 3, date: T(2) }] }), o1: MB("oldF") } });
+test("get: สมาชิกของร้าน → doc ทั้งก้อน + id (แอปกระจายเข้า currentMember · Pack ข้อ 7) · เวลา ISO · แคชเชียร์ได้ · ร้านช่อง ≠ doc id ได้ทั้ง 2 คีย์", async () => {
+  seed({ member: { m1: MB("shopA", { creditArray: [{ remainCredit: 3, date: T(2) }], extraFromOldApp: { x: 1 } }), o1: MB("oldF") } });
   const r = await M("get", { shopId: "shopA", memberId: "m1" }, CASHIER);
   assert.equal(r.code, 200, JSON.stringify(r.body));
-  assert.deepEqual(r.body.member, { name: "n", tel: "08", point: 1, credit: 0, creditArray: [{ remainCredit: 3, date: "2026-11-10T03:02:00.000Z" }], id: "m1" });
+  assert.deepEqual(r.body.member, {
+    shopId: "shopA", name: "n", tel: "08", point: 1, credit: 0, creditArray: [{ remainCredit: 3, date: "2026-11-10T03:02:00.000Z" }],
+    bought: [{ year: "2026", buy: 10 }], timestamp: "2026-11-10T03:00:00.000Z", lastTime: "2026-11-10T03:01:00.000Z", letter: "A", createdByUid: "u",
+    extraFromOldApp: { x: 1 }, id: "m1",
+  });
   assert.equal(READS, 2);
   DATA.shop.shopA.shopId = "oldF";
   assert.equal((await M("get", { shopId: "shopA", memberId: "o1" })).body.member.id, "o1");
