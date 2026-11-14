@@ -22,7 +22,9 @@ const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/c
   // DEV-0010 stock.sync · stock.findBarcode (อ่านสินค้าของร้านอย่างเดียว · แอปเดิมทุกคนในร้านอ่านได้)
   "stock/syncRead.js",
   // DEV-0010 expense.list · expenseReport.list (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
-  "shopStaff/expenseRead.js"]);
+  "shopStaff/expenseRead.js",
+  // DEV-0010 shop.get · company.catalog · notification.list (อ่านอย่างเดียว · watcher อ่านได้แบบ profile.loading)
+  "shop/get.js", "company/catalog.js", "notification/list.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());

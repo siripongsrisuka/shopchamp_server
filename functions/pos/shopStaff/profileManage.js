@@ -15,6 +15,7 @@
 //               ไม่ผ่าน = 403 not_shop_member {reason} (พนักงาน inActive เข้าไม่ได้)
 //               เขียน currentLogin {shopId: field shop.shopId, printer: ของแถว port เดิมหรือ [], rights: เจ้าของ/ทีมงาน = ชุดเต็ม · พนักงาน = rights ของตัวเอง}
 //               และ port: แถวร้านนี้ย้ายขึ้นหน้า {...แถวเดิม, shopId, shopName, logo} (รูปเดิม WelcomeScreen.js:122-129)
+//               คำตอบมี shop = ก้อนร้านแบบ shop.get (shop/_appView.js · DEV-0010 ของเพิ่ม · แทนการอ่านร้านที่ WelcomeScreen.js:176 / Modal_FindShop)
 //   leaveShop : currentLogin = {shopId:'', rights:[], printer:[]} (initialCurrentLogin)
 //   removePort: เอาแถว port ที่ shopId ตรงออก (อ่านในฐานตอนนั้น ไม่ใช่สำเนาในเครื่อง) · ไม่มีแถว = 200 removed:false
 "use strict";
@@ -26,6 +27,7 @@ const { readNow } = require("../_shared/deps");
 const { resolveShopAccess, INITIAL_RIGHTS } = require("../_shared/auth");
 const WR = require("../_shared/watcherRoster");
 const { isObj, Refusal, refuse } = require("./common");
+const { appShopView } = require("../shop/_appView");
 
 const EMPTY_LOGIN = Object.freeze({ shopId: "", rights: [], printer: [] });
 
@@ -108,7 +110,8 @@ function profileManage(deps) {
         const a = { role: access.role, rights };
         if (access.byAdmin === true) { a.byAdmin = true; a.root = true; }
         if (access.watcher === true) { a.watcher = true; a.readOnly = true; }
-        return { access: a, currentLogin };
+        // DEV-0010: ก้อนร้านที่เพิ่งอ่านใน transaction (0 อ่านเพิ่ม) ⇒ แอปใหม่ไม่ต้องอ่านร้านเองก่อน/หลังเข้า · แอปเก่าไม่อ่านช่องนี้
+        return { access: a, currentLogin, shop: appShopView(input.shopId, shop) };
       });
 
       return ok(res, { op: input.op, uid, ...out });

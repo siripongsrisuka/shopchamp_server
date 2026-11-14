@@ -13,6 +13,8 @@
 //      total ไม่ใช่จำนวนเต็ม ≥ 0 = 500 counter_broken (B4)
 //   4. เขียน (รูปเดิมทุก field · shopTemplate.js เทียบกับ main3 ในเทส):
 //      shop/{id} ทั้งก้อน + createRequestId · createdVia · shift/{id} · numOfStore.total = scShopId · profile {port:[...port, ใหม่], currentLogin}
+// คำตอบ (DEV-0010 ของเพิ่ม · แอปเก่าไม่อ่าน): shop = ก้อนร้านแบบ shop.get (shop/_appView.js) · profile = {port, currentLogin} หลังเขียน
+//   แทนการอ่าน shop/{id} + profile/{uid} หลังสร้าง (`NewShopScreen.js:68-69`) · ส่งซ้ำ (duplicate) = ของในฐานตอนนั้น · 0 อ่านเพิ่ม
 // push ต้อนรับ (DEV-0001 push): หลัง commit (ไม่ใช่ duplicate) ส่งหาผู้สร้าง (uid · ทุกร้าน) ทั้ง 2 ท่อ
 //   แอปเก่าส่งทั้งร้านใหม่ (NewShopScreen.js:83 pushByOneFilter shopId) · ร้านเพิ่งเกิดยังไม่มีเครื่องลงทะเบียน ⇒ ส่งหาคนสร้างแทน (เครื่องเดียวกัน)
 "use strict";
@@ -24,6 +26,8 @@ const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_sha
 const { readNow } = require("../_shared/deps");
 const { buildNewShop } = require("./shopTemplate");
 const { notify } = require("../_shared/push/notify");
+const { appShopView } = require("../shop/_appView");
+const { toPlain } = require("../profile/loading");
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -33,6 +37,14 @@ function derivedId(kind, uid, requestId) {
   let out = "";
   for (let i = 0; i < 20; i++) out += ALPHABET[h[i] % ALPHABET.length];
   return out;
+}
+
+/** profileOut(port, currentLogin) — ช่อง profile ที่จอสร้างร้านใช้ (`NewShopScreen.js:74-75`) · เวลาเป็น ISO */
+function profileOut(port, currentLogin) {
+  return {
+    port: Array.isArray(port) ? toPlain(port) : [],
+    currentLogin: currentLogin && typeof currentLogin === "object" ? toPlain(currentLogin) : { shopId: "", rights: [], printer: [] },
+  };
 }
 
 class Refusal extends Error {
@@ -64,7 +76,9 @@ function shopCreate(deps) {
           if (s.createRequestId === input.requestId && owner === uid) {
             // คืนเครื่องแรกของร้านที่สร้างไว้แล้ว ไม่ใช่ posId ของคำขอที่ส่งซ้ำ (ตรวจซ้ำ 9d ข้อสังเกต)
             const pos0 = Array.isArray(s.POSs) && s.POSs[0] && typeof s.POSs[0].id === "string" && s.POSs[0].id !== "" ? s.POSs[0].id : null;
-            return { duplicate: true, scShopId: s.scShopId, posId: pos0 };
+            // DEV-0010: ก้อนร้าน + profile ที่อ่านใน transaction แล้ว (0 อ่านเพิ่ม)
+            const p = profileSnap.exists ? profileSnap.data() || {} : {};
+            return { duplicate: true, scShopId: s.scShopId, posId: pos0, shop: appShopView(shopDocId, s), profile: profileOut(p.port, p.currentLogin) };
           }
           refuse(deny(409, "request_id_conflict", "รหัสคำขอนี้ถูกใช้แล้ว"));
         }
@@ -83,12 +97,20 @@ function shopCreate(deps) {
         tx.set(shiftRef, built.shift);
         tx.update(counterRef, { total: scShopId });
         tx.update(profileRef, { port: [...port, built.port], currentLogin: built.currentLogin });
-        return { duplicate: false, scShopId };
+        return {
+          duplicate: false,
+          scShopId,
+          shop: appShopView(shopDocId, built.shop),
+          profile: profileOut([...port, built.port], built.currentLogin),
+        };
       });
       if (!out.duplicate) {
         await notify(deps, { to: { kind: "people", ids: [uid] }, heading: "สร้างร้านค้าสำเร็จ!", content: "ยินดีต้อนรับ เข้าสู่ครอบครัว ช็อปแชมป์ ระบบใช้งานง่าย ตอบโจทย์ร้านค้าค่ะ" });
       }
-      return ok(res, { shopId: shopDocId, shiftId, posId: out.posId || input.posId, scShopId: out.scShopId, duplicate: out.duplicate });
+      return ok(res, {
+        shopId: shopDocId, shiftId, posId: out.posId || input.posId, scShopId: out.scShopId, duplicate: out.duplicate,
+        shop: out.shop, profile: out.profile,
+      });
     } catch (e) {
       if (e instanceof Refusal) return sendDeny(res, e.deny);
       return internalError(res, e);

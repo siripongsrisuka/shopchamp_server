@@ -81,6 +81,9 @@ const ROUTES = Object.freeze([
   { contract: "expenseReport.list", path: "/expense-report/list", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseRead").expenseReportList },
   { contract: "profile.manage", path: "/profile/manage", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/profileManage").profileManage },
   // ก้อน 10 รอบ 2c: LINE token เข้าที่ลับ + สำเนาเดิม (LS-033) · เข้าครั้งแรกของร้านรุ่นแรก (LD-029 · auth user ตัดสินเจ้าของจาก shop.shopId == uid)
+  // DEV-0010 อ่านร้านผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว) · findByTel = auth user (ยังไม่เข้าร้าน · ทุกบัญชีกดค้นได้แบบแอปเดิม)
+  { contract: "shop.get", path: "/shop/get", fn: "pos", auth: "shop", factory: true, load: () => require("./shop/get").get },
+  { contract: "shop.findByTel", path: "/shop/find-by-tel", fn: "pos", auth: "user", factory: true, load: () => require("./shop/findByTel").findByTel },
   { contract: "shop.lineSettings", path: "/shop/line-settings", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/lineSettings").lineSettings },
   { contract: "profile.claimLegacyShop", path: "/profile/claim-legacy-shop", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/claimLegacyShop").claimLegacyShop },
   // ก้อน 10 รอบ 2a: จุดขายพร้อม doc shift ใน transaction เดียว · ย้ายโครงร้านรุ่นแรก (U20)
@@ -94,6 +97,8 @@ const ROUTES = Object.freeze([
   { contract: "company.scanLoginApprove", path: "/company/scan-login-approve", fn: "pos", auth: "user", factory: true, load: () => require("./company/scanLoginApprove").scanLoginApprove },
   { contract: "company.deleteAccount", path: "/company/delete-account", fn: "pos", auth: "user", factory: true, load: () => require("./company/deleteAccount").deleteAccount },
   { contract: "company.shopCreate", path: "/company/shop-create", fn: "pos", auth: "user", factory: true, load: () => require("./company/shopCreate").shopCreate },
+  // DEV-0010 ตารางแพ็กเกจ/อุปกรณ์ให้จอร้าน (admin/package · admin/hardware เฉพาะช่องที่จอใช้ · ❌ รายชื่อทีมงาน) · อ่านอย่างเดียว
+  { contract: "company.catalog", path: "/company/catalog", fn: "pos", auth: "shop", factory: true, load: () => require("./company/catalog").catalog },
   // DEV-0003 U2 ชำระเงินอัตโนมัติ (posxpay) ของใบสั่งซื้อบริษัท 4 ชนิด · ยอดจากใบ · server ถามสถานะเองแล้วเปิดของ (_fulfill) · secret COMPANY_POSXPAY_* ผูกที่ workloads.js
   { contract: "company.payRequest", path: "/company/pay-request", fn: "pos", auth: "shop", factory: true, load: () => require("./company/payRequest").payRequest },
   { contract: "company.payStatus", path: "/company/pay-status", fn: "pos", auth: "shop", factory: true, load: () => require("./company/payStatus").payStatus },
@@ -171,6 +176,8 @@ const ROUTES = Object.freeze([
   { contract: "office.annCategoryDelete", path: "/office/ann-category-delete", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annCategoryDelete },
   { contract: "office.annShopFind", path: "/office/ann-shop-find", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annShopFind },
   { contract: "office.annShopTagSet", path: "/office/ann-shop-tag-set", fn: "pos", auth: "user", factory: true, load: () => require("./office/announcement").annShopTagSet },
+  // DEV-0010 ประวัติแจ้งเตือนของร้าน (แทน NotificationHistory.js:93 · 109 + พรีเมียม · อ่านอย่างเดียว) · segment notification = pos
+  { contract: "notification.list", path: "/notification/list", fn: "pos", auth: "shop", factory: true, load: () => require("./notification/list").list },
   // แอปใหม่ 5.00 อ่าน/บันทึกประกาศ · segment announcement = pos · แอปเก่า 3.12 ไม่เรียก
   { contract: "announcement.feed", path: "/announcement/feed", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/feed").feed },
   { contract: "announcement.seen", path: "/announcement/seen", fn: "pos", auth: "shop", factory: true, load: () => require("./announcement/seen").seen },
