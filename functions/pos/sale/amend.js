@@ -57,7 +57,8 @@ const MESSAGES = {
 };
 
 // field ของบิลเดิมที่ส่งต่อให้ใบใหม่ (ผ่าน schema SaleCreateRequest ทีละช่อง · ไม่ผ่าน = ไม่ส่ง)
-const CARRY_BODY_FIELDS = ["manualDiscount", "posId", "posNumber", "cashierId", "cashierName", "vatType", "note", "franchiseId"];
+// scangoOrder = หัวใบ ScanGo (เลขออเดอร์ · รอบ · โซน) ใบใหม่คงหัวเดิม (DEV-0009 · Pack 2026-11-14)
+const CARRY_BODY_FIELDS = ["manualDiscount", "posId", "posNumber", "cashierId", "cashierName", "vatType", "note", "franchiseId", "scangoOrder"];
 const MONEY_INPUT_FIELDS = ["moneyMustPaid", "productDiscount", "vatAmount", "rounding", "change"];
 const NOTI_HEADING_AMEND = "แก้ไขใบเสร็จ";
 const NOTI_CATEGORY_AMEND = 8; // B-5 · 7 = เบิกสินค้า ห้ามใช้ · ดูหัวไฟล์ ⑤

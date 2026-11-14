@@ -136,6 +136,26 @@ test("checkAmendShape: ลำดับด่าน · ตัวเลขข้�
   assert.equal(refundDueOf({ moneyMustPaid: 100 }, 100), 0);
 });
 
+// ── DEV-0009: บิลจากออเดอร์ ScanGo · ใบใหม่คงหัวใบ ScanGo ──
+test("scangoOrder: ใบเดิมมี = ใบใหม่ถือไปด้วย (ผ่าน schema) · รูปเพี้ยน = ไม่ส่ง · ไม่มี = ไม่มี", async () => {
+  const SO = { orderRef: "o-1042", code: "SG-1042", round: { name: "รอบเที่ยง", deliverFrom: "2026-11-14T04:30:00.000Z", deliverTo: "2026-11-14T05:30:00.000Z" }, zone: "ลาดพร้าว" };
+  reset((db) => { db.bill.b1.scangoOrder = SO; });
+  let s = stubs();
+  let r = await call(s.deps);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(s.calls.create[0].body.scangoOrder, SO);
+  assert.equal(require("@shopchamp/schema").SaleCreateRequest.safeParse(s.calls.create[0].body).success, true);
+  reset((db) => { db.bill.b1.scangoOrder = { code: "x", extra: 1 }; });
+  s = stubs();
+  r = await call(s.deps);
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal("scangoOrder" in s.calls.create[0].body, false, "รูปเพี้ยน = ไม่ส่ง (ไม่ทำให้แก้บิลล้ม)");
+  reset();
+  s = stubs();
+  await call(s.deps);
+  assert.equal("scangoOrder" in s.calls.create[0].body, false);
+});
+
 // ── handler: ลำดับและการเขียน ──
 test("สำเร็จ: เขียนตามลำดับ ①→create→③→void→⑤ · amendedBy เขียนหลังยกเลิกเท่านั้น", async () => {
   reset();
