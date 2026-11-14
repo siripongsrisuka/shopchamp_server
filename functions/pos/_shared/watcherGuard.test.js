@@ -18,7 +18,9 @@ const READ_WITHOUT_CALLER = new Set(["system.ping", "shift.openList"]);
 // announcement/feed.js (DEV-0003 0e) อ่านอย่างเดียว · watcher ไม่มีแถวในร้าน = ได้รายการว่าง
 const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/connections.js", "shopStaff/staffManage.js", "announcement/feed.js",
   // ScanGo: ค้นสินค้า (แกนของ relay products/list) · รายการใบ · สถานะไทล์ (อ่านอย่างเดียว)
-  "scango/shop/productSearch.js", "scango/shop/orderList.js", "scango/shop/loginStatus.js"]);
+  "scango/shop/productSearch.js", "scango/shop/orderList.js", "scango/shop/loginStatus.js",
+  // DEV-0010 stock.sync · stock.findBarcode (อ่านสินค้าของร้านอย่างเดียว · แอปเดิมทุกคนในร้านอ่านได้)
+  "stock/syncRead.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());

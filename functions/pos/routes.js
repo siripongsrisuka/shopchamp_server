@@ -50,6 +50,9 @@ const ROUTES = Object.freeze([
   // DEV-0008 จอความเคลื่อนไหวสต๊อก (premium · อ่านอย่างเดียว)
   { contract: "stock.journalDays", path: "/stock/journal-days", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/moveRead").journalDays },
   { contract: "stock.moveList", path: "/stock/move-list", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/moveRead").moveList },
+  // DEV-0010 อ่านสินค้าของร้านผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว)
+  { contract: "stock.sync", path: "/stock/sync", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/syncRead").sync },
+  { contract: "stock.findBarcode", path: "/stock/find-barcode", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/syncRead").findBarcode },
   { contract: "stock.cloneRepair", path: "/stock-repair/clone", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./stock/cloneRepair").cloneRepair },
 
   // ก้อน 9b สมาชิกและสินค้า
