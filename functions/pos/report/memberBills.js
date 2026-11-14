@@ -6,7 +6,11 @@
 //   ไม่กรองร้าน (สมาชิกร้านอื่นที่ id ชนกันโผล่ได้) · ตัดใบยกเลิกหลังได้ 100 ใบ (หน้าแรกได้น้อยกว่า 100)
 //   ใหม่: ด่านตัวตนและร้าน · บิลร้านอื่นไม่ปน (mergeSnaps + belongsToShop) · ใบยกเลิกไม่นับ · แถวเดียวกับ report.billList detail
 // ไม่มีด่านแพ็กเกจ 62 วัน (เว็บเดิมไม่มีช่วงวันในจอนี้)
-// สิทธิ์: พนักงานต้องมี '117' หรือ '106'
+// สิทธิ์: พนักงานต้องมี '117' หรือ '106' (เว็บเจ้าของร้าน · ชุดเดิม ห้ามแคบลง) หรือ '107' / '101' (จอประวัติซื้อของแอป)
+//   DEV-0010 (Pack คิวข้อ 9 · 2026-11-14 · เท่าที่แอปเปิดที่จอ): แอปเข้าจอ MemberBillScreen / MemberDashboardScreen ได้จาก MemberScreen
+//     ซึ่งเปิดได้ 2 ทาง: ไทล์ '107' สมาชิก (`shopchamp_app/src/screens/HomeScreen.js:89`) หรือ '101' ตั้งค่า → ขั้นสูง → ระบบสมาชิก
+//     (`HomeScreen.js:81` → `ShopSettingScreen.js:24` → `AdvanceScreen.js:26` → `MainMemberScreen.js:20`) · จอทั้ง 3 ไม่ตรวจสิทธิ์เพิ่ม
+//     ⇒ เท่ากับ member.paidHistory (pos/member/read.js memberScreenRight) · '107' ใส่ตรงไว้ ไม่พึ่ง legacy reportRights ที่จะถูกขันทีหลัง
 // แบ่งหน้า: เรียง dateTime ใหม่ก่อน เวลาเท่ากัน doc id มากก่อน · cursor = {at, id} ของแถวสุดท้ายที่อ่าน (รูปเดิม)
 //   DEV-0010 (Pack เคาะคิวข้อ 4 · 2026-11-14): เลิก SLACK · ค้น orderBy dateTime desc, __name__ desc + startAfter(at, id) limit pageSize+1
 //     อ่าน pageSize ใบถัดจาก cursor (+1 ใบไว้รู้ว่ามีหน้าต่อ) · ใบยกเลิก/บิลร้านอื่นในนั้นตัดทิ้ง ⇒ หน้านั้นได้น้อยกว่า pageSize ได้
@@ -24,6 +28,7 @@ const { adminFlag } = require("../_shared/auth");
 const { RIGHT, openReport, mergeSnaps } = require("./_reportShared");
 
 const DEFAULT_PAGE = 100;
+const MEMBER_SCREEN_RIGHTS = Object.freeze(["107", "101"]); // ไทล์สมาชิก · ตั้งค่า (ทางเข้าจอสมาชิกของแอป)
 
 const timeOf = (data) => {
   const m = logic.toMillis(data && data.dateTime);
@@ -33,7 +38,7 @@ const timeOf = (data) => {
 function memberBills() {
   return async function handler(req, res) {
     try {
-      const ctx = await openReport(req, res, ReportMemberBillsRequest, { rights: [RIGHT.BILL_HISTORY, RIGHT.REPORT] });
+      const ctx = await openReport(req, res, ReportMemberBillsRequest, { rights: [RIGHT.BILL_HISTORY, RIGHT.REPORT, ...MEMBER_SCREEN_RIGHTS] });
       if (!ctx) return res;
       const { access, input, shop, shopRef } = ctx;
       const pageSize = input.pageSize || DEFAULT_PAGE;

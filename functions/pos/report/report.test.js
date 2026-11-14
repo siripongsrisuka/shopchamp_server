@@ -425,3 +425,21 @@ test("DEV-0010 memberBills: ค่าอ่านต่อหน้า = shop 1 
   }
   assert.deepEqual(seen, ["s4", "s3", "s2", "s0", "early"]);
 });
+
+test("DEV-0010 memberBills สิทธิ์ (Pack คิวข้อ 9): 117/106 ชุดเว็บเดิม + 107/101 ทางเข้าจอสมาชิกของแอป ผ่าน · ไม่มีสักตัว 403 right_required", async () => {
+  const hr = (id, rights) => ({ id, name: id, position: ["002"], status: "active", rights });
+  const people = { "u-117": ["117"], "u-106": ["106"], "u-107": ["107"], "u-101": ["101"], "u-100": ["100", "102", "115"] };
+  const s = { ...shop, humanResource: [...shop.humanResource, ...Object.entries(people).map(([id, r]) => hr(id, r))] };
+  for (const [uid, rights] of Object.entries(people)) {
+    reset({ shop: { shopA: s }, bill: { m1: bill({ member: { id: "m-1" } }) } });
+    const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+    await memberBills({ now: NOW })({ body: { shopId: "shopA", memberId: "m-1" }, shopAccess: { shopId: "shopA", uid, role: "staff", rights } }, res);
+    if (uid === "u-100") {
+      assert.deepEqual([res.code, res.body.error], [403, "right_required"], uid);
+      assert.equal(QUERIES.length, 0, "ปัดก่อนค้นบิล");
+    } else {
+      assert.equal(res.code, 200, uid);
+      assert.deepEqual(res.body.rows.map((x) => x.id), ["m1"], uid);
+    }
+  }
+});
