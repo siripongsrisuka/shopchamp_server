@@ -28,7 +28,9 @@ const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/c
   // DEV-0010 shop.get · company.catalog · notification.list (อ่านอย่างเดียว · watcher อ่านได้แบบ profile.loading)
   "shop/get.js", "company/catalog.js", "notification/list.js",
   // DEV-0010 shift.get · shift.history (อ่านกะอย่างเดียว · watcher อ่านได้แบบ sale.get)
-  "shift/get.js", "shift/history.js"]);
+  "shift/get.js", "shift/history.js",
+  // DEV-0010 stock.linkList · stock.receiveList · stock.supplierList · promotion.list (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
+  "stock/listRead.js", "promotion/list.js"]);
 
 function fileOf(load, base) {
   const m = /require\("(\.[^"]+)"\)/.exec(load.toString());

@@ -56,6 +56,10 @@ const ROUTES = Object.freeze([
   // DEV-0010 อ่านสินค้าของร้านผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว)
   { contract: "stock.sync", path: "/stock/sync", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/syncRead").sync },
   { contract: "stock.findBarcode", path: "/stock/find-barcode", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/syncRead").findBarcode },
+  // DEV-0010 ชุดตกหล่นกลุ่มสต๊อก (อ่านอย่างเดียว · แยกจากเส้นเขียน)
+  { contract: "stock.linkList", path: "/stock/link-list", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/listRead").linkList },
+  { contract: "stock.receiveList", path: "/stock/receive-list", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/listRead").receiveList },
+  { contract: "stock.supplierList", path: "/stock/supplier-list", fn: "pos", auth: "shop", factory: true, load: () => require("./stock/listRead").supplierList },
   { contract: "stock.cloneRepair", path: "/stock-repair/clone", fn: "pos_heavy", auth: "shop", factory: true, load: () => require("./stock/cloneRepair").cloneRepair },
 
   // ก้อน 9b สมาชิกและสินค้า
@@ -72,6 +76,7 @@ const ROUTES = Object.freeze([
   { contract: "promotion.save", path: "/promotion/save", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/save").save },
   { contract: "promotion.delete", path: "/promotion/delete", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/delete").delete },
   { contract: "promotion.setStatus", path: "/promotion/set-status", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/setStatus").setStatus },
+  { contract: "promotion.list", path: "/promotion/list", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/list").list },
   { contract: "product.saveCentral", path: "/product/save-central", fn: "pos", auth: "shop", factory: true, load: () => require("./product/saveCentral").saveCentral },
   { contract: "priceTag.create", path: "/price-tag/create", fn: "pos", auth: "shop", factory: true, load: () => require("./priceTag/create").create, bodyLimit: "1mb" },
 
