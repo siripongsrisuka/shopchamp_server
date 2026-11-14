@@ -251,3 +251,32 @@ test("currentLogin คู่เทียบ: ตัวกลายพันธ�
   store.reset({ shop: { sLeg: { shopId: "u-o" } } });
   assert.deepEqual(shopByField(webOwnerPick(mutantProfile, "x")), [], "เทสข้างบนจับความต่างนี้ได้");
 });
+
+test("enterShop ด้วยช่อง shopId ของร้าน (port[].shopId · ร้านรุ่นแรกช่อง ≠ doc id) → เข้าร้านนั้น · shop.id = doc id · ช่องไม่ตรงร้านไหน 404", async () => {
+  store.reset({
+    shop: {
+      sNew: { shopId: "sNew", name: "ร้านใหม่", humanResource: [{ id: "u-o", position: ["001"], status: "active" }] },
+      sLeg: { shopId: "u-o", name: "ร้านรุ่นแรก", humanResource: [{ id: "u-o", position: ["001"], status: "active" }] },
+      sOther: { shopId: "f-other", name: "ร้านคนอื่น", humanResource: [{ id: "u-x", position: ["001"], status: "active" }] },
+    },
+    profile: { "u-o": { port: [{ shopId: "u-o", shopName: "ร้านรุ่นแรก", printer: [{ type: "android" }] }], currentLogin: { shopId: "", printer: [], rights: [] } } },
+    watcher: { roster: { uids: [], rootUids: [] } },
+  });
+  const enter = kit.caller(PM.profileManage({ now: () => NOW }));
+  const r = await enter({ op: "enterShop", shopId: "u-o" }, { auth: { uid: "u-o" } });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.shop.id, "sLeg");
+  assert.equal(r.body.shop.shopId, "u-o");
+  assert.deepEqual(r.body.currentLogin, { shopId: "u-o", printer: [{ type: "android" }], rights: [...INITIAL_RIGHTS] });
+  assert.equal(store.data.profile["u-o"].port.length, 1, "แถวเดิมไม่ซ้ำ");
+  // doc id ยังเข้าได้เหมือนเดิม
+  assert.equal((await enter({ op: "enterShop", shopId: "sNew" }, { auth: { uid: "u-o" } })).body.shop.id, "sNew");
+  // ช่องของร้านที่ตัวเองไม่ได้เป็นสมาชิก = ตัดสินกับร้านนั้น → 403 (ไม่ได้สิทธิ์เพราะเรียกด้วยช่อง)
+  const x = await enter({ op: "enterShop", shopId: "f-other" }, { auth: { uid: "u-o" } });
+  assert.equal(x.code, 403);
+  assert.equal(x.body.error, "not_shop_member");
+  // ไม่มีทั้ง doc id และช่อง = 404
+  const z = await enter({ op: "enterShop", shopId: "ไม่มีร้านนี้" }, { auth: { uid: "u-o" } });
+  assert.equal(z.code, 404);
+  assert.equal(z.body.error, "shop_not_found");
+});

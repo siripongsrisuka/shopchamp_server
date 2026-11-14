@@ -66,7 +66,8 @@ function makeStore() {
     runTransaction: async (fn) => {
       const writes = [];
       const tx = {
-        get: async (r) => { if (writes.length) throw new Error(`อ่าน ${r.c}/${r.id} หลังเขียน (Firestore ปัด)`); return snapOf(r.c, r.id); },
+        // doc ref = snapshot · query (ไม่มี c/id) = ผล query แบบ Firestore tx.get(query)
+        get: async (r) => { if (writes.length) throw new Error(`อ่าน ${r.c}/${r.id} หลังเขียน (Firestore ปัด)`); return r && r.c !== undefined && r.id !== undefined ? snapOf(r.c, r.id) : r.get(); },
         set: (r, v) => { writes.push({ op: "set", c: r.c, id: r.id, v }); return tx; },
         update: (r, v) => { writes.push({ op: "update", c: r.c, id: r.id, v }); return tx; },
         delete: (r) => { writes.push({ op: "delete", c: r.c, id: r.id }); return tx; },

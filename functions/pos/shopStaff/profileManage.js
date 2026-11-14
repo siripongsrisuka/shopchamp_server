@@ -10,6 +10,7 @@
 //   create    : มี profile แล้ว = 200 created:false (ไม่ทับ) · ไม่มี = เขียนรูปเดียวกับ initialProfile + timestamp: now
 //   update    : ไม่มี profile 404 profile_not_found · แก้เฉพาะช่องที่ส่ง
 //   enterShop : tx อ่าน profile · shop/{shopId} · watcher/roster → ร้านไม่มี 404 shop_not_found
+//               shopId = doc id หรือช่อง shopId ของร้าน (port[].shopId) · ไม่มี doc id นี้ = ค้น shop where shopId == ค่า (+1 query เฉพาะตอนนั้น · ตัวสุดท้ายแบบแอปเก่า)
 //               ตัดสินด้วย auth.resolveShopAccess ตัวเดียวกับ requireShopAccess (root ก่อน · สมาชิก active + แพ็กเกจพนักงาน · แล้ว watcher)
 //               watcher เข้าร้านได้ (เขียนแค่ profile ของตัวเอง ไม่แตะข้อมูลร้าน) · คำตอบ access มี watcher/readOnly ⇒ จอซ่อนปุ่มเขียน
 //               ไม่ผ่าน = 403 not_shop_member {reason} (พนักงาน inActive เข้าไม่ได้)
@@ -52,11 +53,19 @@ function profileManage(deps) {
       const cfgRef = input.op === "enterShop" ? WR.rosterRef(db) : null;
 
       const out = await db.runTransaction(async (tx) => {
-        const [pSnap, shopSnap, cfgSnap] = await Promise.all([
+        const [pSnap, byIdSnap, cfgSnap] = await Promise.all([
           tx.get(profileRef),
           shopRef ? tx.get(shopRef) : Promise.resolve(null),
           cfgRef ? tx.get(cfgRef) : Promise.resolve(null),
         ]);
+        // enterShop รับได้ทั้ง doc id และช่อง shopId ของร้าน (ที่ profile.port[].shopId เก็บ · ร้านรุ่นแรกช่อง ≠ doc id ~11,312 ร้าน)
+        //   doc id ก่อน · ไม่มี doc = ค้น shop where shopId == ค่า (อ่านเฉพาะตอนไม่เจอ) เก็บตัวสุดท้ายแบบแอปเก่า (WelcomeScreen.js backToShop forEach)
+        let shopSnap = byIdSnap;
+        if (shopRef && !(byIdSnap && byIdSnap.exists)) {
+          const q = await tx.get(db.collection("shop").where("shopId", "==", input.shopId));
+          const docs = q && Array.isArray(q.docs) ? q.docs : [];
+          if (docs.length) shopSnap = docs[docs.length - 1];
+        }
         const profile = pSnap.exists ? pSnap.data() || {} : null;
 
         if (input.op === "create") {
@@ -96,12 +105,13 @@ function profileManage(deps) {
         }
 
         // enterShop
-        if (!shopSnap.exists) refuse(deny(404, "shop_not_found"));
+        if (!shopSnap || !shopSnap.exists) refuse(deny(404, "shop_not_found"));
+        const shopDocId = shopSnap.id;
         const shop = shopSnap.data() || {};
-        const verdict = await resolveShopAccess({ shopDocId: input.shopId, shop, uid, now, roster: WR.snapToRoster(cfgSnap) });
+        const verdict = await resolveShopAccess({ shopDocId, shop, uid, now, roster: WR.snapToRoster(cfgSnap) });
         if (!verdict.ok) refuse(verdict);
         const access = verdict.access;
-        const field = typeof shop.shopId === "string" && shop.shopId ? shop.shopId : input.shopId;
+        const field = typeof shop.shopId === "string" && shop.shopId ? shop.shopId : shopDocId;
         const oldRow = port.find((p) => isObj(p) && p.shopId === field);
         const rights = access.role === "owner" ? [...INITIAL_RIGHTS] : access.rights;
         const currentLogin = { shopId: field, printer: oldRow && Array.isArray(oldRow.printer) ? oldRow.printer : [], rights };
@@ -111,7 +121,7 @@ function profileManage(deps) {
         if (access.byAdmin === true) { a.byAdmin = true; a.root = true; }
         if (access.watcher === true) { a.watcher = true; a.readOnly = true; }
         // DEV-0010: ก้อนร้านที่เพิ่งอ่านใน transaction (0 อ่านเพิ่ม) ⇒ แอปใหม่ไม่ต้องอ่านร้านเองก่อน/หลังเข้า · แอปเก่าไม่อ่านช่องนี้
-        return { access: a, currentLogin, shop: appShopView(input.shopId, shop) };
+        return { access: a, currentLogin, shop: appShopView(shopDocId, shop) };
       });
 
       return ok(res, { op: input.op, uid, ...out });
