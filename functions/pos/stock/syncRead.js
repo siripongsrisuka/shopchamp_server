@@ -30,10 +30,10 @@ const { db, admin } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { callerAccess, adminFlag } = require("../_shared/auth");
 const S = require("./_shared");
+// cursor เวลานาโนวินาที+id · FLOOR · การเรียง/กรองหน้า = ตัวช่วยกลางที่ member.indexSync ใช้ร่วม (ยกจากไฟล์นี้ ไม่เปลี่ยนพฤติกรรม)
+const { toPlain, parseCursor, encodeCursor, readChangedPage, nextCursorOf } = require("../_shared/syncCursor");
 
 const DEFAULT_LIMIT = 500;
-// new Date(2011, 0, 1) บนเครื่องเวลาไทย = ค่าตั้งต้น watermark ของแอปเดิม (`useLocalStock.js:244-246`)
-const FLOOR_MS = Date.parse("2010-12-31T17:00:00.000Z");
 // รอยทีมงาน/ผู้แก้ที่ server เขียนลง stock (productSave · productDelete · adminTrail) · แอปไม่อ่าน
 const STRIP = Object.freeze(["createdBy", "updatedBy", "deletedBy", "deletedAt", "byAdmin", "adminUid"]);
 const CATALOG_FIELDS = Object.freeze(["barcode", "imageId", "name", "unit"]);
@@ -49,49 +49,6 @@ async function readShop(access, res) {
   const snap = await db.collection("shop").doc(access.shopId).get();
   if (!snap.exists) { sendDeny(res, deny(404, "shop_not_found")); return null; }
   return snap.data() || {};
-}
-
-/** Timestamp ของ Firestore (มี seconds nanoseconds) หรือ Date → {s, n} · อย่างอื่น = null */
-function tsKey(v) {
-  if (v instanceof Date) {
-    const ms = v.getTime();
-    if (Number.isNaN(ms)) return null;
-    const s = Math.floor(ms / 1000);
-    return { s, n: (ms - s * 1000) * 1e6 };
-  }
-  if (v && typeof v === "object" && Number.isInteger(v.seconds) && Number.isInteger(v.nanoseconds)) return { s: v.seconds, n: v.nanoseconds };
-  return null;
-}
-const cmpKey = (a, b) => (a.s - b.s) || (a.n - b.n) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-
-/** Timestamp จริงของ SDK (เทียบละเอียดถึง nanos) · ไม่มี (ฐานปลอมของ harness) = Date */
-function toTimestamp(k) {
-  const T = admin && admin.firestore && admin.firestore.Timestamp;
-  return T ? new T(k.s, k.n) : new Date(k.s * 1000 + Math.floor(k.n / 1e6));
-}
-
-const encodeCursor = (k) => `1|${k.s}|${k.n}|${k.id}`;
-function parseCursor(raw) {
-  const m = /^1\|(-?\d{1,12})\|(\d{1,9})\|(.+)$/.exec(raw);
-  if (!m || !S.validDocId(m[3])) return null;
-  return { s: Number(m[1]), n: Number(m[2]), id: m[3] };
-}
-
-/** toPlain(v) — เวลา (Timestamp มี toDate / Date) → ISO ทั้งก้อน · ค่าอื่นคงเดิม */
-function toPlain(v) {
-  if (v === null || v === undefined) return v;
-  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
-  if (typeof v === "object" && typeof v.toDate === "function") {
-    const d = v.toDate();
-    return d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString() : null;
-  }
-  if (Array.isArray(v)) return v.map(toPlain);
-  if (typeof v === "object") {
-    const out = {};
-    for (const k of Object.keys(v)) out[k] = toPlain(v[k]);
-    return out;
-  }
-  return v;
 }
 
 function itemOf(id, d) {
@@ -117,29 +74,14 @@ function sync(_deps) {
       const key = shopKey(access.shopId, shop);
       const limit = input.limit || DEFAULT_LIMIT;
 
-      let q = db.collection("stock").where("shopId", "==", key).where("updateTime", ">", new Date(FLOOR_MS))
-        .orderBy("updateTime").orderBy("__name__");
-      if (cur) q = q.startAfter(toTimestamp(cur), cur.id);
-      const snap = await q.limit(limit + 1).get();
-
-      // เรียง/กรองซ้ำในโค้ด: ฐานจริงเรียงและตัดมาแล้ว (ไม่มีผล) · กันฐานที่ไม่เรียงให้ (harness) และ doc ร้านอื่น/เวลาไม่ใช่เวลาจริง
-      const rows = (snap.docs || [])
-        .map((s) => ({ id: s.id, d: s.data() || {} }))
-        .map((r) => ({ ...r, k: tsKey(r.d.updateTime) }))
-        .filter((r) => r.k !== null && r.d.shopId === key && r.k.s * 1000 + r.k.n / 1e6 > FLOOR_MS)
-        .map((r) => ({ ...r, k: { ...r.k, id: r.id } }))
-        .filter((r) => !cur || cmpKey(r.k, cur) > 0)
-        .sort((a, b) => cmpKey(a.k, b.k));
-      const page = rows.slice(0, limit);
-      const hasMore = rows.length > limit;
+      const { page, hasMore } = await readChangedPage({ db, admin, coll: "stock", keys: [key], cursor: cur, limit });
       const items = [];
       const deletedIds = [];
       for (const r of page) {
         if (isDeleted(r.d)) deletedIds.push(r.id);
         else items.push(itemOf(r.id, r.d));
       }
-      const last = page[page.length - 1];
-      const nextCursor = last ? encodeCursor(last.k) : cur ? input.cursor : null;
+      const nextCursor = nextCursorOf(page, cur, input.cursor);
       return ok(res, { ...adminFlag(access), items, deletedIds, nextCursor, hasMore });
     } catch (e) {
       return internalError(res, e);

@@ -21,6 +21,8 @@ const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/c
   "scango/shop/productSearch.js", "scango/shop/orderList.js", "scango/shop/loginStatus.js",
   // DEV-0010 stock.sync · stock.findBarcode (อ่านสินค้าของร้านอย่างเดียว · แอปเดิมทุกคนในร้านอ่านได้)
   "stock/syncRead.js",
+  // DEV-0010 member.indexSync · member.list · member.get · member.paidHistory · staff.profiles (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
+  "member/read.js", "shopStaff/staffProfiles.js",
   // DEV-0010 expense.list · expenseReport.list (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
   "shopStaff/expenseRead.js",
   // DEV-0010 shop.get · company.catalog · notification.list (อ่านอย่างเดียว · watcher อ่านได้แบบ profile.loading)

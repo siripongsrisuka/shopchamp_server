@@ -64,6 +64,11 @@ const ROUTES = Object.freeze([
   { contract: "member.redeemPoint", path: "/member/redeem-point", fn: "pos", auth: "shop", factory: true, load: () => require("./member/redeemPoint").redeemPoint },
   { contract: "member.delete", path: "/member/delete", fn: "pos", auth: "shop", factory: true, load: () => require("./member/delete").delete },
   { contract: "member.rebuildIndex", path: "/member/rebuild-index", fn: "pos", auth: "shop", factory: true, load: () => require("./member/rebuildIndex").rebuildIndex },
+  // DEV-0010 อ่านสมาชิกผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว) · indexSync ใช้ตัวช่วยกลาง _shared/syncCursor.js ร่วมกับ stock.sync
+  { contract: "member.indexSync", path: "/member/index-sync", fn: "pos", auth: "shop", factory: true, load: () => require("./member/read").indexSync },
+  { contract: "member.list", path: "/member/list", fn: "pos", auth: "shop", factory: true, load: () => require("./member/read").list },
+  { contract: "member.get", path: "/member/get", fn: "pos", auth: "shop", factory: true, load: () => require("./member/read").get },
+  { contract: "member.paidHistory", path: "/member/paid-history", fn: "pos", auth: "shop", factory: true, load: () => require("./member/read").paidHistory },
   { contract: "promotion.save", path: "/promotion/save", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/save").save },
   { contract: "promotion.delete", path: "/promotion/delete", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/delete").delete },
   { contract: "promotion.setStatus", path: "/promotion/set-status", fn: "pos", auth: "shop", factory: true, load: () => require("./promotion/setStatus").setStatus },
@@ -78,6 +83,8 @@ const ROUTES = Object.freeze([
   { contract: "staff.verifyCashierCode", path: "/staff/verify-cashier-code", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/verifyCashierCode").verifyCashierCode },
   { contract: "expense.manage", path: "/expense/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseManage").expenseManage },
   { contract: "expenseReport.manage", path: "/expense-report/manage", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseReportManage").expenseReportManage },
+  // DEV-0010 จอพนักงาน: profile ของคนใน humanResource ร้านนี้ (แทนอ่าน profile ทีละคน · แสดงคนและช่องเท่าแอปตอนนี้ · Pack ข้อ 12)
+  { contract: "staff.profiles", path: "/staff/profiles", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/staffProfiles").staffProfiles },
   // DEV-0010 อ่านลงเวลา/ค่าใช้จ่ายผ่าน API (แทนการอ่าน Firestore ตรงจากแอป · อ่านอย่างเดียว) · checkInStatus = auth user ด่านแบบ staff.checkIn (AC-82)
   { contract: "staff.checkInStatus", path: "/staff/check-in-status", fn: "pos", auth: "user", factory: true, load: () => require("./shopStaff/checkInStatus").checkInStatus },
   { contract: "expense.list", path: "/expense/list", fn: "pos", auth: "shop", factory: true, load: () => require("./shopStaff/expenseRead").expenseList },

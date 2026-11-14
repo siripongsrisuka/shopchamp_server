@@ -166,9 +166,19 @@ test("ไม่เขียนฐานเลยทุกทาง (เจ้า
   assert.deepEqual(WRITES, []);
 });
 
-test("profile ที่คืน = 5 ช่องเท่านั้น (ไม่คืน currentLogin หรือ doc ทั้งก้อน)", async () => {
-  seed({ profile: { "u-owner": { ...profile("shopA"), secretX: "s", currentLogin: { shopId: "shopA", rights: ["x"] } } } });
+test("profile ที่คืน = 5 ช่องเดิม + currentLogin wallPaper (DEV-0010 คลื่น 2) · ไม่คืน doc ทั้งก้อน", async () => {
+  seed({ profile: { "u-owner": { ...profile("shopA"), secretX: "s", currentLogin: { shopId: "shopA", rights: ["x"], printer: [{ at: ts("2026-05-05T05:05:05.000Z") }] }, wallPaper: { status: true, imageId: "https://x/w.jpg" } } } });
   const r = await call("u-owner");
+  assert.deepEqual(Object.keys(r.body.profile).sort(), ["currentLogin", "email", "imageId", "name", "port", "tel", "wallPaper"]);
+  assert.deepEqual(r.body.profile.currentLogin, { shopId: "shopA", rights: ["x"], printer: [{ at: "2026-05-05T05:05:05.000Z" }] });
+  assert.deepEqual(r.body.profile.wallPaper, { status: true, imageId: "https://x/w.jpg" });
+});
+
+test("DEV-0010: currentLogin / wallPaper ไม่มี หรือไม่ใช่ object → ไม่มี key (แอปใช้ค่าตั้งต้นเอง) · 5 ช่องเดิมคงเดิม", async () => {
+  const { currentLogin, ...noLogin } = profile("shopA");
+  seed({ profile: { "u-owner": { ...noLogin, wallPaper: "x" } } });
+  const r = await call("u-owner");
+  assert.equal(r.code, 200, JSON.stringify(r.body));
   assert.deepEqual(Object.keys(r.body.profile).sort(), ["email", "imageId", "name", "port", "tel"]);
 });
 

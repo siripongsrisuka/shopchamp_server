@@ -89,6 +89,11 @@ function profileView(p) {
     email: typeof p.email === "string" ? p.email : "",
     imageId: typeof p.imageId === "string" ? p.imageId : "",
     port: Array.isArray(p.port) ? toPlain(p.port) : [],
+    // DEV-0010 คลื่น 2 (ของเพิ่ม · แอปเก่าไม่เรียก): แอปเลิกอ่าน profile ตรง (`LoadingScreen.js:85`) ⇒ ส่ง 2 ช่องที่จอใช้
+    //   currentLogin ทั้งก้อน (shopId · rights · printer · `HomeScreen.js:186-187` · `staffRole.js:65` · `usePushRegister.js:20`)
+    //   wallPaper {status, imageId} (`SummaryScreen.js:146` · `WallpaperScreen.js:37`) · ไม่มี/ไม่ใช่ object = ไม่มี key (แอปใช้ค่าตั้งต้นเอง)
+    ...(isPlainObject(p.currentLogin) ? { currentLogin: toPlain(p.currentLogin) } : {}),
+    ...(isPlainObject(p.wallPaper) ? { wallPaper: toPlain(p.wallPaper) } : {}),
   };
 }
 
