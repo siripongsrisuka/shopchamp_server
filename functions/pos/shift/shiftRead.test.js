@@ -6,27 +6,15 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("path");
-const fs = require("fs");
 
 const FUNCTIONS = path.resolve(__dirname, "..", "..");
-const CENTER = path.resolve(FUNCTIONS, "..", "..", "shopchamp-center");
 const NEW_SCHEMAS = ["ShiftGetRequest", "ShiftHistoryRequest"];
 
-// คำขอใหม่ยังไม่อยู่ใน vendor tarball (แม่ bump รวม) ⇒ build จาก src ของ center แล้วเติมเฉพาะตัวที่ขาด
+// คำขอ DEV-0010 อยู่ใน vendor @shopchamp/schema 0.1.28 แล้ว ⇒ ใช้ vendor ปกติ · ขาดตัวไหน = ตกทันที (ไม่ build จาก src ของ center แทน)
 function installSchemas() {
   const pkg = require("@shopchamp/schema");
-  if (NEW_SCHEMAS.every((k) => pkg[k])) return;
-  const src = path.join(CENTER, "packages", "schema", "src", "requests", "shiftRead.ts");
-  if (!fs.existsSync(src)) throw new Error(`ไม่พบ ${src}`);
-  const esbuild = require(require.resolve("esbuild", { paths: [CENTER] }));
-  const out = esbuild.buildSync({
-    entryPoints: [src], bundle: true, platform: "node", format: "cjs", write: false, logLevel: "error",
-    nodePaths: [path.join(CENTER, "packages", "schema", "node_modules"), path.join(CENTER, "node_modules")],
-  });
-  const m = { exports: {} };
-  // eslint-disable-next-line no-new-func
-  new Function("module", "exports", "require", out.outputFiles[0].text)(m, m.exports, require);
-  for (const k of NEW_SCHEMAS) if (!pkg[k]) pkg[k] = m.exports[k];
+  const missing = NEW_SCHEMAS.filter((k) => !pkg[k]);
+  if (missing.length) throw new Error(`vendor @shopchamp/schema ไม่มี ${missing.join(" ")} · bump + vendor ใหม่`);
 }
 
 // ── ฐานปลอม (อ่านอย่างเดียว · นับการอ่าน) ──

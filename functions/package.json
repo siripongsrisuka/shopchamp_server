@@ -20,7 +20,7 @@
     "@node-escpos/network-adapter": "^0.0.1",
     "@node-escpos/usb-adapter": "^0.1.0",
     "@shopchamp/logic": "file:vendor/shopchamp-logic-0.1.12.tgz",
-    "@shopchamp/schema": "file:vendor/shopchamp-schema-0.1.27.tgz",
+    "@shopchamp/schema": "file:vendor/shopchamp-schema-0.1.28.tgz",
     "api": "^5.0.5",
     "axios": "^1.4.0",
     "connect-timeout": "^1.9.0",
