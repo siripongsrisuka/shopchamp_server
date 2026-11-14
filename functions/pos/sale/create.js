@@ -16,6 +16,7 @@
 //     bill {...finalReceipt, receiptNumber, existPoint, franchiseId} · billId|billDayId {month|date, receipts}
 //     stock {stock, updateTime, latestSaleDate?} · member {point, bought, lastTime, creditArray?}
 //   เพิ่ม: bill receiptUUID shiftOpenTime shiftUnassigned? shiftHistoryId? stockSnapshot ในแถวสินค้า · ตระกูล offline
+//          bill scangoOrder? (DEV-0009 · บิลจากออเดอร์ ScanGo · ส่ง null/ไม่ส่ง = ไม่มีช่องนี้)
 //          ตัวนับ serverKey serverRun · guard billId shopId · shiftHistory lateSales lateBillQty · ทีมงาน byAdmin adminUid ทุกเอกสาร
 //   ร้านไม่ใช้ระบบกะ (ก้อน 5 ข้อ ①): รูปบิลเท่าแอปเก่าเป๊ะในส่วนกะ = shiftId ประจำจุดขาย (ถ้าส่ง) · ไม่มี shiftOpenTime/shiftUnassigned
 //   ต่างจากแอปเก่าโดยตั้งใจ:
@@ -285,6 +286,9 @@ function create(deps) {
           manualDiscount: input.manualDiscount !== undefined ? input.manualDiscount : "",
           productDiscount: input.productDiscount !== undefined ? input.productDiscount : 0,
         };
+        // DEV-0009 (Pack เคาะ 2026-11-14): บิลจากออเดอร์ ScanGo เก็บ scangoOrder ตามที่ส่ง (มาจาก ...input · schema strict ตรวจรูปแล้ว)
+        //   จอพิมพ์ซ้ำอ่าน bill.scangoOrder (แอป modal/Modal_Receipt.js) · null = ไม่ใช่ออเดอร์ ScanGo ⇒ ไม่เขียนช่องนี้ (รูปบิลเท่าเดิม)
+        if (bill.scangoOrder === null) delete bill.scangoOrder;
         if (shiftOpenAt !== null) bill.shiftOpenTime = shiftOpenAt;
         if (round.status === "unassigned") bill.shiftUnassigned = true;
         if (round.reason === "soldAt_clamped") {

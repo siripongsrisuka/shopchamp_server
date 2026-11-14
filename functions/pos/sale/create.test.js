@@ -412,3 +412,44 @@ test("ข้อ ① · ร้านไม่ใช้กะ + บิลออฟ
   assert.equal("shiftId" in b, false);
   assert.equal(b.shiftIdAtSale, "sh1");
 });
+
+// ── DEV-0009 · บิลจากออเดอร์ ScanGo เก็บ scangoOrder ให้พิมพ์ซ้ำได้หัวใบเดิม (Pack เคาะ 2026-11-14) ──
+const SCANGO = { orderRef: "ord-abc123", code: "C123", round: { name: "รอบเช้า", deliverFrom: "2026-11-10T02:00:00.000Z", deliverTo: "2026-11-10T03:30:00.000Z" }, zone: "A" };
+test("DEV-0009 · ส่ง scangoOrder ⇒ 200 · บิลเก็บรูปเดิมครบ (รหัส · รอบ · โซน)", async () => {
+  seed();
+  const r = await call(body({ scangoOrder: SCANGO }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(onlyBill().scangoOrder, SCANGO);
+});
+test("DEV-0009 · ส่งทันที (round null · zone null) ⇒ บิลเก็บ null ตามที่ส่ง", async () => {
+  seed();
+  const r = await call(body({ scangoOrder: { ...SCANGO, round: null, zone: null } }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(onlyBill().scangoOrder, { orderRef: "ord-abc123", code: "C123", round: null, zone: null });
+});
+test("DEV-0009 · บิลออฟไลน์ที่ซิงก์ขึ้นมาพก scangoOrder ⇒ บิลเก็บด้วย", async () => {
+  seed();
+  const r = await call(body({ scangoOrder: SCANGO, offline: true, soldAt: "2026-11-10T02:30:00.000Z", offlineRef: "T0001" }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.deepEqual(onlyBill().scangoOrder, SCANGO);
+});
+test("DEV-0009 คู่ควบคุม · แอปเก่าไม่ส่ง ⇒ 200 · บิลไม่มีช่อง scangoOrder", async () => {
+  seed();
+  const r = await call(body());
+  assert.equal(r.code, 200);
+  assert.equal("scangoOrder" in onlyBill(), false);
+});
+test("DEV-0009 · ส่ง null ⇒ 200 · บิลไม่มีช่อง scangoOrder (ไม่เขียน null ลงฐาน)", async () => {
+  seed();
+  const r = await call(body({ scangoOrder: null }));
+  assert.equal(r.code, 200, JSON.stringify(r.body));
+  assert.equal("scangoOrder" in onlyBill(), false);
+});
+test("DEV-0009 🔒 · scangoOrder มีช่องเกิน ⇒ 400 invalid_request · ไม่เขียนอะไร", async () => {
+  seed();
+  const r = await call(body({ scangoOrder: { ...SCANGO, total: 999 } }));
+  assert.equal(r.code, 400);
+  assert.equal(r.body.error, "invalid_request");
+  assert.equal(LOG.length, 0);
+  assert.equal(Object.keys(DATA.bill).length, 0);
+});
