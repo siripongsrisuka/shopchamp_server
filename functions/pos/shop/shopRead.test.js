@@ -32,6 +32,7 @@ function installSchemas() {
 // ── ฐานปลอม (มีสถานะ · transaction ลงจริงตอนจบ) ──
 let DATA = {};
 let QUERIES = [];
+let READS = [];
 const clone = (v) => (v === undefined ? undefined : structuredClone(v));
 const coll = (c) => (DATA[c] = DATA[c] || {});
 const snapOf = (c, id, fields) => {
@@ -68,7 +69,7 @@ function query(c, st) {
 }
 const fakeDb = {
   collection: (c) => ({
-    doc: (id) => ({ c, id, get: async () => snapOf(c, id) }),
+    doc: (id) => ({ c, id, get: async () => { READS.push(`${c}/${id}`); return snapOf(c, id); } }),
     where: (f, op, v) => query(c, { filters: [[f, op, v]] }),
   }),
   runTransaction: async (fn) => {
@@ -131,6 +132,35 @@ test("shop.get: อ่าน shop doc ครั้งเดียว · คื�
   const r = await call(get({}), { shopId: "shopA" }, OWNER);
   assert.equal(r.code, 200);
   assert.deepEqual(r.body.shop, appShopView("shopA", SHOP_A));
+});
+
+test("ด่านจริง + handler: shop.get · notification.list · company.catalog อ่าน shop doc รวม 1 ครั้ง (ด่านแนบ doc ให้ handler)", async () => {
+  const { makeRequireShopAccess } = require("../_shared/auth");
+  const mw = makeRequireShopAccess({ db: fakeDb, now: () => NOW, log: () => {} });
+  const viaGate = async (h, body) => {
+    const req = { body, auth: { uid: "u-owner" } };
+    const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+    let nexted = false;
+    await mw(req, res, () => { nexted = true; });
+    assert.equal(nexted, true, `ด่านปัด ${JSON.stringify(res.body)}`);
+    await h(req, res);
+    return res;
+  };
+  const shopReads = () => READS.filter((x) => x === "shop/shopA").length;
+  DATA = { shop: { shopA: SHOP_A }, admin: { hardware: { items: [] } } };
+  READS = [];
+  const r1 = await viaGate(get({}), { shopId: "shopA" });
+  assert.equal(r1.code, 200);
+  assert.deepEqual(r1.body.shop, appShopView("shopA", SHOP_A));
+  assert.equal(shopReads(), 1);
+  READS = [];
+  const r2 = await viaGate(list({ now: () => NOW }), { shopId: "shopA" });
+  assert.equal(r2.code, 200);
+  assert.equal(shopReads(), 1);
+  READS = [];
+  const r3 = await viaGate(catalog({}), { shopId: "shopA", kind: "hardware" });
+  assert.equal(r3.code, 200);
+  assert.equal(shopReads(), 1);
 });
 
 test("shop.findByTel: แถวมีแค่ {id, shopId, name, logo} · limit 20 · ไม่มีช่องลับ", async () => {

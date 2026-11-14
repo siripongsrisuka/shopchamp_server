@@ -11,13 +11,13 @@
 // ด่าน: requireShopAccess → callerAccess อ่านอย่างเดียว (watcher ผ่าน) → ด่านซ้ำสมาชิก active
 //   ไม่มีเลขสิทธิ์ (Pack ข้อ 9): แคชเชียร์ทั่วไปต้องรู้ว่ากะของจุดตัวเองเปิดไหมก่อนขาย (HomeScreen.js:622 ไม่ตรวจสิทธิ์)
 // ของร้านไหม: doc.shopId ตรง doc id ร้าน หรือช่อง shopId ของ doc ร้านที่ผ่านด่านแล้ว (Pack ข้อ 8) · ไม่ตรง 409 shift_other_shop · ไม่มี 404 shift_not_found
-// Firestore อ่าน: shop/{shopId} · shift/{shiftId} (+1 ของ middleware) · เขียน: ไม่มี
+// Firestore อ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) · shift/{shiftId} 1 · เขียน: ไม่มี
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError } = require("../_shared/respond");
-const { callerAccess, adminFlag } = require("../_shared/auth");
+const { callerAccess, adminFlag, shopSnapOf } = require("../_shared/auth");
 const { schemaOf } = require("../stock/_shared");
 const { memberDeny } = require("../shop/_appView");
 const { toClientJson } = require("../sale/getSerialize");
@@ -38,7 +38,7 @@ function get(_deps) {
       const access = gate.access;
 
       const [shopSnap, shiftSnap] = await Promise.all([
-        db.collection("shop").doc(access.shopId).get(),
+        shopSnapOf(db, access),
         db.collection("shift").doc(input.shiftId).get(),
       ]);
       if (!shopSnap.exists) return fail(res, 404, "shop_not_found");

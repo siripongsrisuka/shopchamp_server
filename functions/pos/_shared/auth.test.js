@@ -416,3 +416,48 @@ test("memberStatusOf (ใช้ร่วม profile.loading): active · inactive
   assert.equal(A.memberStatusOf({}, "u-owner", NOW).status, "not_a_member");
   assert.equal(A.INITIAL_RIGHTS.includes("143"), true);
 });
+
+// ── DEV-0010 ชุดเก็บงาน: ด่านแนบ doc ร้านที่อ่านแล้ว · handler ใช้ต่อ (ค่าอ่านร้านเหลือ 1 เท่าแอปเดิม) ──
+test("requireShopAccess แนบ doc ร้านที่ req.shopAccess.shopDoc แบบ non-enumerable (deepEqual/JSON/spread ไม่เห็น)", async () => {
+  const db = fakeDb({ shop: { shopA: shopA() }, ...ADMIN });
+  const { nexted, req } = await runShop(db, { body: { shopId: "shopA" }, auth: { uid: "u-staff" } });
+  assert.equal(nexted, true);
+  assert.equal(req.shopAccess.shopDoc.id, "shopA");
+  assert.equal(req.shopAccess.shopDoc.data.humanResource[0].id, "u-owner");
+  assert.deepEqual(req.shopAccess, { shopId: "shopA", uid: "u-staff", role: "staff", rights: ["116"] });
+  assert.equal("shopDoc" in JSON.parse(JSON.stringify(req.shopAccess)), false);
+  assert.equal("shopDoc" in { ...req.shopAccess }, false);
+  assert.deepEqual(Object.keys(req.shopAccess), ["shopId", "uid", "role", "rights"]);
+});
+
+test("shopSnapOf: มีของแนบ id ตรง = ไม่อ่านฐาน · ไม่มีของแนบ / id ไม่ตรง / access ถูก freeze = อ่านฐาน 1 ครั้ง", async () => {
+  const db = fakeDb({ shop: { shopA: shopA(), shopB: { shopId: "shopB" } } });
+  const a = { shopId: "shopA", uid: "u-owner", role: "owner", rights: [] };
+  A.attachShopDoc(a, "shopA", { shopId: "shopA", name: "แนบ" });
+  const s1 = await A.shopSnapOf(db, a);
+  assert.equal(s1.exists, true);
+  assert.equal(s1.data().name, "แนบ");
+  assert.deepEqual(db.reads, []);
+  // harness ส่ง access เอง (ไม่มีของแนบ)
+  const s2 = await A.shopSnapOf(db, { shopId: "shopA", uid: "u", role: "owner", rights: [] });
+  assert.equal(s2.data().shopId, "shopA");
+  assert.deepEqual(db.reads, ["shop/shopA"]);
+  // ของแนบเป็นของร้านอื่น (id ไม่ตรง access.shopId) = ไม่เชื่อ อ่านร้านของ access
+  const b = { shopId: "shopB", uid: "u", role: "owner", rights: [] };
+  A.attachShopDoc(b, "shopA", { shopId: "shopA" });
+  assert.equal((await A.shopSnapOf(db, b)).data().shopId, "shopB");
+  assert.deepEqual(db.reads, ["shop/shopA", "shop/shopB"]);
+  // access ถูก freeze = แนบไม่ได้ (เงียบ) → อ่านเอง
+  const f = Object.freeze({ shopId: "shopA", uid: "u", role: "owner", rights: [] });
+  A.attachShopDoc(f, "shopA", { shopId: "x" });
+  assert.equal(f.shopDoc, undefined);
+  // แนบซ้ำบน object เดิมได้ (configurable) · ผู้เรียกเขียนทับไม่ได้ (writable false)
+  A.attachShopDoc(a, "shopA", { name: "รอบสอง" });
+  assert.equal(a.shopDoc.data.name, "รอบสอง");
+  assert.throws(() => { "use strict"; a.shopDoc = { id: "shopA", data: {} }; });
+});
+
+test("ด่านปัด (404/403/500) ไม่แนบอะไร", async () => {
+  const { req } = await runShop(fakeDb({ shop: { shopA: shopA() }, ...ADMIN }), { body: { shopId: "shopA" }, auth: { uid: "u-stranger" } });
+  assert.equal(req.shopAccess, undefined);
+});

@@ -13,7 +13,7 @@
 //   - ตัวที่ลบ (deleted === true หรือ sku === 'delete' · แบบ splitSyncedProducts `shopchamp_app/src/domain/localStock.js:35`)
 //     คืนแค่ id ใน deletedIds · ตัวอื่นคืน doc เต็ม + id · เวลาทุกช่อง (ซ้อนในก้อนด้วย) เป็น ISO
 //   - ตัดเฉพาะรอยทีมงาน/ผู้แก้ที่แอปไม่อ่าน (STRIP · grep shopchamp_app/src แล้วไม่มีจอไหนอ่านจาก doc สินค้า) · ไม่ซ่อน cost (Pack 2026-11-14 ข้อ 6)
-//   ค่าอ่าน: shop 1 + จำนวน doc ที่ได้ (+1 ตัวดูว่ามีหน้าต่อไหม) · ขั้นต่ำ 1 ต่อคำขอ · doc เท่าของเดิม (ของเดิมไม่ limit)
+//   ค่าอ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) + จำนวน doc ที่ได้ (+1 ตัวดูว่ามีหน้าต่อไหม) · ขั้นต่ำ 1 ต่อคำขอ · doc เท่าของเดิม (ของเดิมไม่ limit)
 //
 // findBarcode (stock.findBarcode · POST /pos/stock/find-barcode): แทน `.where('barcode','==',code)` 7 จอ + คลังกลาง 3 จอ
 //   stock where shopId == K and barcode == code (ไม่ limit แบบเดิม) → ตัวที่ไม่ลบทั้งหมด เรียง doc id (แอปเดิมเอาตัวสุดท้าย)
@@ -28,7 +28,7 @@
 
 const { db, admin } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
-const { callerAccess, adminFlag } = require("../_shared/auth");
+const { callerAccess, adminFlag, shopSnapOf } = require("../_shared/auth");
 const S = require("./_shared");
 // cursor เวลานาโนวินาที+id · FLOOR · การเรียง/กรองหน้า = ตัวช่วยกลางที่ member.indexSync ใช้ร่วม (ยกจากไฟล์นี้ ไม่เปลี่ยนพฤติกรรม)
 const { toPlain, parseCursor, encodeCursor, readChangedPage, nextCursorOf } = require("../_shared/syncCursor");
@@ -46,7 +46,7 @@ function shopKey(shopDocId, shop) {
 }
 
 async function readShop(access, res) {
-  const snap = await db.collection("shop").doc(access.shopId).get();
+  const snap = await shopSnapOf(db, access);
   if (!snap.exists) { sendDeny(res, deny(404, "shop_not_found")); return null; }
   return snap.data() || {};
 }

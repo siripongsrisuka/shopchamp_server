@@ -29,14 +29,14 @@
 //   ร้านทั่วไป = คีย์เดียว · ร้านรุ่นแรกที่ช่อง ≠ doc id = 2 คีย์ (สมาชิกเก่าถือช่อง · ที่เพิ่มผ่าน API ร้านที่พิสูจน์ช่องไม่ผ่านถือ doc id)
 //   (Pack 2026-11-14 ข้อ 8 · ค่าจาก doc ร้านที่ผู้เรียกผ่านด่านแล้ว)
 // ด่าน: middleware requireShopAccess (สมาชิกร้าน active / ทีมงาน) → callerAccess อ่านอย่างเดียว (watcher ผ่าน · ได้ทุกสิทธิ์แบบเจ้าของ)
-// ค่าอ่าน: shop 1 + doc ที่ได้ (ขั้นต่ำ 1 ต่อ query) · ไม่ส่งข้อมูลร้านอื่น · ไม่เขียน · แอปเก่าไม่เห็นอะไรเปลี่ยน
+// ค่าอ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) + doc ที่ได้ (ขั้นต่ำ 1 ต่อ query) · ไม่ส่งข้อมูลร้านอื่น · ไม่เขียน · แอปเก่าไม่เห็นอะไรเปลี่ยน
 // ❌ ไม่ require SDK ตัวจริง · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db, admin } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, hasRight, adminFlag } = require("../_shared/auth");
+const { callerAccess, hasRight, adminFlag, shopSnapOf } = require("../_shared/auth");
 const SC = require("../_shared/syncCursor");
 
 const INDEX_DEFAULT_LIMIT = 100;
@@ -89,7 +89,7 @@ async function open(req, res, schemaName, rightOk, validate) {
   if (!input) return null;
   if (rightOk && !rightOk(access)) { sendDeny(res, deny(403, "right_required")); return null; }
   if (validate && !validate(input)) { badCursor(res); return null; }
-  const snap = await db.collection("shop").doc(access.shopId).get();
+  const snap = await shopSnapOf(db, access);
   if (!snap.exists) { sendDeny(res, deny(404, "shop_not_found")); return null; }
   return { access, input, keys: memberShopKeys(access.shopId, snap.data() || {}) };
 }

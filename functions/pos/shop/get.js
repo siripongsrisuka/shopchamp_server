@@ -7,13 +7,13 @@
 //   ต่างจากต้นแบบ: ❌ ไม่ตัด password/LINE token (Pack 2026-11-14 ข้อ 7) · ก้อน = appShopView (shop/_appView.js)
 // ด่าน: requireShopAccess (สมาชิก active / ทีมงาน) → callerAccess อ่านอย่างเดียว (watcher ผ่าน) → ด่านซ้ำสมาชิก active (memberDeny)
 //   ไม่มีเลขสิทธิ์ (ก้อนเดียวกับที่ทุกคนได้ตอนเปิดแอปจาก profile.loading · แอปเดิมอ่านได้ทุกคนในร้าน · Pack ข้อ 9)
-// Firestore อ่าน: shop/{shopId} 1 ครั้ง (+1 ของ middleware)
+// Firestore อ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ)
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError } = require("../_shared/respond");
-const { callerAccess, adminFlag } = require("../_shared/auth");
+const { callerAccess, adminFlag, shopSnapOf } = require("../_shared/auth");
 const { schemaOf } = require("../stock/_shared");
 const { appShopView, memberDeny } = require("./_appView");
 
@@ -28,7 +28,7 @@ function get(_deps) {
       if (!gate.ok) return sendDeny(res, gate);
       const access = gate.access;
 
-      const snap = await db.collection("shop").doc(access.shopId).get();
+      const snap = await shopSnapOf(db, access);
       if (!snap.exists) return fail(res, 404, "shop_not_found");
       const shop = snap.data() || {};
       const denied = memberDeny(shop, access);

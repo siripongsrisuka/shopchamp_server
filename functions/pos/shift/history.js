@@ -10,13 +10,13 @@
 // ค่าค้น shopId = ช่อง shopId ของ doc ร้านที่ผ่านด่านแล้ว · ไม่มี = doc id (Pack 2026-11-14 ข้อ 8 · แบบแอปเดิม)
 // สิทธิ์ (Pack ข้อ 9 · เท่าที่แอปเปิดตอนนี้): จอเปิดจากจอกะ (เมนู 102 `HomeScreen.js:79`) + พรีเมียม (`ShiftScreen.js:338` openHistory)
 //   เจ้าของ/ทีมงานผ่านสิทธิ์ · พรีเมียมหมด = 403 premium_required ทุกคน (แอปเดิมปัดทุกคนรวมทีมงาน)
-// Firestore อ่าน: shop/{shopId} · shiftHistory ของวันที่ขอ (+1 ของ middleware) · index เดียวกับแอปเดิม (equality + in) · เขียน: ไม่มี
+// Firestore อ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) · shiftHistory ของวันที่ขอ · index เดียวกับแอปเดิม (equality + in) · เขียน: ไม่มี
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
-const { callerAccess, adminFlag, hasRight } = require("../_shared/auth");
+const { callerAccess, adminFlag, hasRight, shopSnapOf } = require("../_shared/auth");
 const { readNow } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
 const { schemaOf } = require("../stock/_shared");
@@ -38,7 +38,7 @@ function history(deps) {
       const access = gate.access;
       if (!hasRight(access, RIGHT)) return sendDeny(res, deny(403, "right_required"));
 
-      const shopSnap = await db.collection("shop").doc(access.shopId).get();
+      const shopSnap = await shopSnapOf(db, access);
       if (!shopSnap.exists) return fail(res, 404, "shop_not_found");
       const shop = shopSnap.data() || {};
       const denied = memberDeny(shop, access);

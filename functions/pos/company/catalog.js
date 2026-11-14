@@ -13,13 +13,13 @@
 //   hardware: สิทธิ์ '105' (ไทล์ 105 ทางเดียว `HomeScreen.js:85`) · เจ้าของ/ทีมงานผ่าน
 //   (ไทล์ 104/105 ถูกซ่อนเมื่อ isPackageOn ปิด = ค่าตั้งแอปจาก admin/updateShopchamp ไม่ใช่สิทธิ์คน ⇒ server ไม่ตรวจ)
 // doc ไม่มี = 200 catalog:null (จอเดิมไม่ตั้งค่าอะไรเมื่อ doc ไม่มี)
-// Firestore อ่าน: shop/{shopId} (ด่านซ้ำสมาชิก) · admin/{kind} 1 doc (+1 ของ middleware)
+// Firestore อ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) · admin/{kind} 1 doc
 // ❌ ห้าม require SDK ตัวจริงตรงนี้ · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db } = require("../../firebase");
 const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
-const { callerAccess, adminFlag, hasRight } = require("../_shared/auth");
+const { callerAccess, adminFlag, hasRight, shopSnapOf } = require("../_shared/auth");
 const { schemaOf } = require("../stock/_shared");
 const { toPlain } = require("../profile/loading");
 const { memberDeny } = require("../shop/_appView");
@@ -50,7 +50,7 @@ function catalog(_deps) {
       if (need && !hasRight(access, need)) return sendDeny(res, deny(403, "right_required"));
 
       const [shopSnap, docSnap] = await Promise.all([
-        db.collection("shop").doc(access.shopId).get(),
+        shopSnapOf(db, access),
         db.collection("admin").doc(input.kind).get(),
       ]);
       if (!shopSnap.exists) return fail(res, 404, "shop_not_found");

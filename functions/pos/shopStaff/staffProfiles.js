@@ -8,13 +8,13 @@
 //     ช่องที่ doc ไม่มี = ไม่มี key (จอเดิม destructure ได้ undefined เท่ากัน)
 //   สิทธิ์ '101' ตั้งค่า (เมนู `HomeScreen.js:78` → `ShopSettingScreen.js:23` จัดการพนักงาน) → ไม่มี 403 right_required
 // ด่าน: middleware requireShopAccess (สมาชิกร้าน active / ทีมงาน) → callerAccess อ่านอย่างเดียว (watcher ผ่าน · ได้ทุกสิทธิ์แบบเจ้าของ)
-// ค่าอ่าน: shop 1 + จำนวนพนักงาน (เดิม = จำนวนพนักงาน) · ไม่เขียน · แอปเก่าไม่เห็นอะไรเปลี่ยน
+// ค่าอ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) + จำนวนพนักงาน (เดิม = จำนวนพนักงาน) · ไม่เขียน · แอปเก่าไม่เห็นอะไรเปลี่ยน
 // ❌ ไม่ require SDK ตัวจริง · ใช้ ../../firebase เท่านั้น
 "use strict";
 
 const { db } = require("../../firebase");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
-const { callerAccess, hasRight, adminFlag } = require("../_shared/auth");
+const { callerAccess, hasRight, adminFlag, shopSnapOf } = require("../_shared/auth");
 
 const SETTINGS_RIGHT = "101";
 const PROFILE_FIELDS = Object.freeze(["email", "name", "imageId", "tel"]);
@@ -38,7 +38,7 @@ function staffProfiles(_deps) {
       const input = parseOr400(schemaOf("StaffProfilesRequest"), body, res);
       if (!input) return;
       if (!hasRight(access, SETTINGS_RIGHT)) return sendDeny(res, deny(403, "right_required"));
-      const shopSnap = await db.collection("shop").doc(access.shopId).get();
+      const shopSnap = await shopSnapOf(db, access);
       if (!shopSnap.exists) return sendDeny(res, deny(404, "shop_not_found"));
       const shop = shopSnap.data() || {};
       const hr = Array.isArray(shop.humanResource) ? shop.humanResource : [];

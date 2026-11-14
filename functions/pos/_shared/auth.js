@@ -306,6 +306,32 @@ function staffInShop(shop, staffId, access, opts) {
   return opts && opts.activeOnly === true ? st === "active" : true;
 }
 
+// ── doc ร้านที่ด่านอ่านแล้ว (DEV-0010 ชุดเก็บงาน · ค่าอ่านเท่าแอปเดิม) ─────────────────────────
+//   requireShopAccess อ่าน shop/{shopId} ไปแล้ว 1 ครั้ง ⇒ แนบ doc นั้นไว้ที่ req.shopAccess.shopDoc ให้ handler อ่านร้านใช้ต่อ (0 read)
+//   แนบแบบ non-enumerable ⇒ ไม่โผล่ใน JSON / deepEqual / {...access} (handler เดิมที่ส่ง access ต่อไม่เห็นอะไรเปลี่ยน)
+//   ไม่มีของแนบ (harness/เทสที่ส่ง req.shopAccess เอง · access ถูก freeze) = อ่านฐานเองแบบเดิม 1 ครั้ง
+//   ⚠️ ใช้กับการอ่านนอก transaction เท่านั้น · ใน transaction ต้อง tx.get เอง (ต้องได้ค่าล่าสุด + ล็อก)
+
+/** attachShopDoc(access, shopDocId, data) — แนบ {id, data} · พลาด (freeze) = เงียบ (handler อ่านเอง) */
+function attachShopDoc(access, shopDocId, data) {
+  if (!access || typeof access !== "object") return;
+  try {
+    Object.defineProperty(access, "shopDoc", { value: { id: shopDocId, data }, enumerable: false, configurable: true, writable: false });
+  } catch (_) { /* access ถูก freeze = ไม่แนบ */ }
+}
+
+/**
+ * shopSnapOf(db, access) — snapshot ร้าน shop/{access.shopId}
+ *   มี doc ที่ด่านแนบและ id ตรง access.shopId → {exists:true, id, data()} ไม่อ่านฐาน · ไม่งั้นอ่านฐาน 1 ครั้ง
+ */
+async function shopSnapOf(db, access) {
+  const att = access && access.shopDoc;
+  if (att && typeof att === "object" && isNonEmptyString(access.shopId) && att.id === access.shopId && att.data && typeof att.data === "object") {
+    return { exists: true, id: att.id, data: () => att.data };
+  }
+  return db.collection("shop").doc(access.shopId).get();
+}
+
 // ── middleware ─────────────────────────────────────────────────────────────────
 
 // โหลด SDK ตอนเรียกจริงเท่านั้น (โหลดไฟล์นี้ใน harness/เทส = ไม่แตะ firebase-admin)
@@ -360,14 +386,16 @@ function makeRequireShopAccess({ db, now, log, resolve } = {}) {
     const uid = req.auth && req.auth.uid;
     if (!isNonEmptyString(uid)) return fail(res, 401, "no_auth");
     let verdict;
+    let shopData;
     try {
       const d = getDb();
       const snap = await d.collection("shop").doc(shopId).get();
       if (!snap.exists) return fail(res, 404, "shop_not_found");
+      shopData = snap.data() || {};
       const at = await readNow({ now });
       verdict = await decide({
         shopDocId: shopId,
-        shop: snap.data() || {},
+        shop: shopData,
         uid,
         now: at,
         roster: () => WR.readRoster(d),
@@ -385,6 +413,7 @@ function makeRequireShopAccess({ db, now, log, resolve } = {}) {
       return sendDeny(res, verdict);
     }
     req.shopAccess = verdict.access;
+    attachShopDoc(req.shopAccess, shopId, shopData);
     return next();
   };
 }
@@ -423,6 +452,8 @@ module.exports = {
   fieldStateOf,
   belongsToShop,
   checkOwnedDoc,
+  attachShopDoc,
+  shopSnapOf,
   staffInShop,
   staffStatusOf,
   INITIAL_RIGHTS,

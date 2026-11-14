@@ -19,7 +19,7 @@
 // ทั้ง 2 เส้น: แพ็กเกจพรีเมี่ยมหมด = 403 premium_required (แอปปัดที่เมนู `HomeScreen.js:107,474` และ `AdvanceScreen.js:32,65` · Pack 2026-11-14 ข้อ 9)
 // K = ช่อง shopId ของ doc ร้านที่ผู้เรียกผ่านด่านแล้ว (ไม่มี/ไม่ใช่สตริง = doc id) · แบบแอปเดิม (Pack 2026-11-14 ข้อ 8)
 // ด่าน: middleware requireShopAccess (สมาชิกร้าน active / ทีมงาน) → callerAccess อ่านอย่างเดียว (watcher ผ่าน · ได้ทุกสิทธิ์แบบเจ้าของ)
-// ค่าอ่าน: shop 1 + doc ที่ได้ · expense เท่าเดิม · expenseReport ≤ 6 (เดิมทุกเดือน) / 1
+// ค่าอ่าน: shop 1 ครั้ง (ด่าน requireShopAccess · handler ใช้ doc ที่ด่านแนบ shopSnapOf ไม่อ่านซ้ำ) + doc ที่ได้ · expense เท่าเดิม · expenseReport ≤ 6 (เดิมทุกเดือน) / 1
 // อ่านอย่างเดียว ไม่เขียน · แอปเก่าไม่เห็นอะไรเปลี่ยน
 "use strict";
 
@@ -27,7 +27,7 @@ const { db } = require("../../firebase");
 const logic = require("@shopchamp/logic");
 const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/respond");
 const { readNow } = require("../_shared/deps");
-const { callerAccess, hasRight, adminFlag } = require("../_shared/auth");
+const { callerAccess, hasRight, adminFlag, shopSnapOf } = require("../_shared/auth");
 const { isPremiumActive } = require("../_shared/premium");
 const { isObj, toIsoDeep } = require("./common");
 
@@ -57,7 +57,7 @@ async function open(req, res, deps, schemaName, rightOk) {
   if (!input) return null;
   if (!rightOk(access)) { sendDeny(res, deny(403, "right_required")); return null; }
   const now = await readNow(deps);
-  const snap = await db.collection("shop").doc(access.shopId).get();
+  const snap = await shopSnapOf(db, access);
   if (!snap.exists) { sendDeny(res, deny(404, "shop_not_found")); return null; }
   const shop = snap.data() || {};
   if (!isPremiumActive(shop, now)) { sendDeny(res, deny(403, "premium_required", "ฟีเจอร์ สำหรับแพ็กเกจพรีเมี่ยม")); return null; }
