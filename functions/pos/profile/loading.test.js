@@ -12,8 +12,9 @@ const ts = (iso) => { const d = new Date(iso); return { toDate: () => d, toMilli
 
 let DATA = {};
 let WRITES = [];
+let READS = []; // DEV-0010: นับการอ่าน (พิสูจน์ shopFull ไม่อ่าน doc ร้านซ้ำ)
 function makeDb() {
-  const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
+  const snapOf = (c, id) => { READS.push({ c, id }); const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
   const rec = (op, c, id) => (v) => { WRITES.push({ op, c, id, v }); };
   const ref = (c, id) => ({ id, get: async () => snapOf(c, id), set: rec("set", c, id), update: rec("update", c, id), delete: rec("delete", c, id) });
   return {
@@ -75,6 +76,7 @@ function seed(x = {}) {
     ...x,
   };
   WRITES = [];
+  READS = [];
 }
 
 // W1 · ทีมงานที่อยู่ใน humanResource ด้วย (ตำแหน่งพนักงาน) ต้องได้สิทธิ์เต็มแบบทีมงาน (LoadingScreen.js:83 · หัวสัญญาข้อ 3-2)
@@ -125,8 +127,9 @@ test("staff[] ไม่มี password และ rights ของใคร · �
     assert.equal(s.rights, undefined);
     for (const k of Object.keys(s)) assert.ok(L.STAFF_FIELDS.includes(k), `ช่อง ${k} ไม่ควรออก`);
   }
-  assert.equal(JSON.stringify(r.body).includes("9999"), false);
-  assert.equal(JSON.stringify(r.body).includes("secret-token"), false);
+  // ช่อง shop เดิม (สัญญาเซ็นแล้ว) ยังไม่มีรหัสแคชเชียร์และ token · shopFull (DEV-0010) มีตามที่ Pack เลือก 2026-11-14 ข้อ 7 (ส่งเหมือนเดิม)
+  assert.equal(JSON.stringify(r.body.shop).includes("9999"), false);
+  assert.equal(JSON.stringify(r.body.shop).includes("secret-token"), false);
 });
 
 // G1 ส่วน fail-closed · ช่องที่ไม่อยู่ใน allowlist ไม่ออก (ช่องใหม่ที่เพิ่มในฐานพรุ่งนี้)
@@ -281,4 +284,35 @@ test("ลำดับช่องทางชำระเงิน (DEV-0001 · 
   seed();
   const r2 = await call("u-owner");
   assert.equal("paymentDisplayOrder" in r2.body.shop, false);
+});
+
+// DEV-0010 คลื่น 2: shopFull = ก้อนเดียวกับ shop.get (_appView) · ใช้ doc ร้านที่อ่านแล้ว ไม่อ่านซ้ำ · shop เดิมไม่เปลี่ยน
+test("DEV-0010: shopFull = appShopView ของ doc ร้านเดียวกัน (humanResource line taxCustomer lineNoti lineUsers scango) · shop เดิมคงเดิม · อ่าน shop ครั้งเดียว", async () => {
+  const { appShopView } = require("../shop/_appView");
+  const extra = { taxCustomer: [{ id: "t1" }], lineNoti: { token: "n" }, lineUsers: ["U1"], scango: { enabled: true } };
+  seed({ shop: { shopA: shopDoc(extra) } });
+  const r = await call("u-owner");
+  assert.equal(r.code, 200);
+  assert.deepEqual(r.body.shopFull, appShopView("shopA", shopDoc(extra)));
+  for (const f of ["humanResource", "line", "taxCustomer", "lineNoti", "lineUsers", "scango"]) {
+    assert.ok(r.body.shopFull[f] !== undefined, `shopFull.${f}`);
+    assert.equal(r.body.shop[f], undefined, `shop.${f} ต้องไม่ออก (สัญญาเซ็นแล้ว)`);
+  }
+  assert.equal(r.body.shopFull.cutOff, "2026-01-01T17:00:00.000Z");
+  assert.deepEqual(r.body.shop, L.shopView("shopA", shopDoc(extra)));
+  assert.equal(READS.filter((x) => x.c === "shop").length, 1);
+  assert.equal(WRITES.length, 0);
+});
+
+test("DEV-0010: ไม่ active (no_shop · inactive · not_a_member) → ไม่มี shopFull", async () => {
+  seed({ shop: { shopA: shopDoc({ vip: [] }) } });
+  for (const uid of ["u-staff", "u-old"]) {
+    const r = await call(uid);
+    assert.notEqual(r.body.access.status, "active");
+    assert.equal(r.body.shopFull, undefined);
+  }
+  seed({ profile: { "u-owner": { ...profile("shopA"), currentLogin: {} } } });
+  const r = await call("u-owner");
+  assert.equal(r.body.access.status, "no_shop");
+  assert.equal(r.body.shopFull, undefined);
 });

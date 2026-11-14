@@ -168,7 +168,12 @@ function loading(deps) {
         ...(a.byAdmin === true ? { byAdmin: true, root: true } : {}),
         ...(a.watcher === true ? { watcher: true, readOnly: true } : {}),
       };
-      return ok(res, { ...base, access, shop: shopView(shopDoc.id, shop) });
+      // DEV-0010 คลื่น 2 (ของเพิ่ม · แอปเก่าไม่อ่าน): shopFull = ก้อนร้านแบบเดียวกับ shop.get (pos/shop/_appView.js ตัวเดียวกัน)
+      //   ใช้ doc ร้านที่อ่านข้างบนแล้ว ⇒ ไม่อ่านเพิ่ม · แอปใหม่เลิกเรียก shop.get ต่อตอนเปิดแอป (Pack 2026-11-14 ข้อ 7: ส่งเหมือนเดิม)
+      //   ช่อง shop เดิมคงไว้ทุกอย่าง (สัญญาเซ็นแล้วล็อก absent humanResource/line/taxCustomer ใน shop)
+      //   require ตอนเรียก: _appView require ไฟล์นี้ (shopView) ⇒ โหลดบนหัวไฟล์จะวนกัน
+      const { appShopView } = require("../shop/_appView");
+      return ok(res, { ...base, access, shop: shopView(shopDoc.id, shop), shopFull: appShopView(shopDoc.id, shop) });
     } catch (e) {
       return internalError(res, e);
     }
