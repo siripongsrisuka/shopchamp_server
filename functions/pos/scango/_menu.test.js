@@ -78,7 +78,7 @@ test("quoteDelivery (สูตรแบบช่วง deliveryFeeModel): ชน
   assert.equal(broken.deliveryFeeSource, "legacy", "สูตรในฐานผิดรูป = ถอยไปค่าเดิม");
 });
 
-test("buildMenu: รูปเมนู · ไม่มีโปร/สมาชิก/ส่วนลดกลุ่ม · ปิดรับมี closedReason · version เปลี่ยนเมื่อราคา/ค่าส่งเปลี่ยน", () => {
+test("buildMenu: รูปเมนู · ไม่มีโปร/สมาชิก/ส่วนลดกลุ่ม · สวิตช์ปิดก็ยังตอบรับ (ScanGo ตัดสินเอง) · version เปลี่ยนเมื่อราคา/ค่าส่งเปลี่ยน", () => {
   const products = [{ id: "p1", ...stock({ price: 15 }) }, { id: "pOut", ...stock({ stock: 0 }) }, { id: "pC", ...stock({ customPriceStatus: true }) }];
   const m = M.buildMenu({ shop: shop(), products, now: NOW });
   assert.equal(m.providerId, "shopchamp");
@@ -91,7 +91,7 @@ test("buildMenu: รูปเมนู · ไม่มีโปร/สมาช�
   assert.deepEqual(m.rails, []);
   assert.match(m.menuVersion, /^[0-9a-f]{16}$/);
   const off = M.buildMenu({ shop: shop({ enabled: false }), products, now: NOW });
-  assert.deepEqual([off.acceptingOrders, off.closedReason], [false, "ordering_disabled"]);
+  assert.deepEqual([off.acceptingOrders, off.acceptingReason, "closedReason" in off], [true, null, false], "POS ไม่ตัดสินเปิด/ปิดรับ (Pack 2026-11-14 แบบพี่น้อง)");
   const v2 = M.buildMenu({ shop: shop(), products: [{ id: "p1", ...stock({ price: 16 }) }, products[1]], now: NOW }).menuVersion;
   const v3 = M.buildMenu({ shop: shop({ deliveryFee: 35 }), products, now: NOW }).menuVersion;
   assert.notEqual(v2, m.menuVersion);

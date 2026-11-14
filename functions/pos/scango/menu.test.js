@@ -16,10 +16,10 @@ test("เมนู: เฉพาะสินค้าที่ร้านเล
   assert.equal(mem.writes.length, 0, "อ่านอย่างเดียว");
 });
 
-test("เมนู: ร้านปิดรับ = 200 acceptingOrders false · ไม่เลือกสินค้าเลย = products ว่าง", async () => {
+test("เมนู: สวิตช์ปิด = ยังตอบ acceptingOrders true (ScanGo ตัดสินเอง) · ไม่เลือกสินค้าเลย = products ว่าง", async () => {
   const { deps, mod } = load({ [`shop/${SHOP}`]: shop({ enabled: false, productIds: [] }) });
   const r = await call(mod("menu.js").menu(deps), { externalId: SHOP });
-  assert.deepEqual([r.code, r.body.acceptingOrders, r.body.closedReason, r.body.products.length], [200, false, "ordering_disabled", 0]);
+  assert.deepEqual([r.code, r.body.acceptingOrders, "closedReason" in r.body, r.body.products.length], [200, true, false, 0]);
 });
 
 test("เมนู: ร้านไม่มี = 404 shop_not_found · ช่องเกิน/externalId ผิดรูป = 400 invalid_request", async () => {

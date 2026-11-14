@@ -6,7 +6,7 @@
 // ค่าตั้งร้าน `shop.scango` ที่ไฟล์นี้อ่าน = {enabled, minOrder, deliveryFeeModel?, productIds:[≤1000]}
 //   + ค่าส่งแบบเดิม (deliveryFee · maxKm · freeDeliveryMin) อ่านเป็นสูตรให้ร้านที่ตั้งไว้แล้ว (`_deliveryFee.resolveDeliveryConfig`)
 //   รอบ 5 (Pack เคาะ 2026-11-12 · ยึดแบบพี่น้อง): เวลาทำการ · เวลาเตรียม · พิกัด · โปร = ScanGo ถือเอง (ตั้งที่เว็บร้าน)
-//     ⇒ ไฟล์นี้ **ไม่ปิดรับตามเวลาแล้ว** (ช่อง hours/prepMinutes ในฐานยังอยู่ แต่ไม่มีใครอ่าน) · ปิดรับ = enabled เท่านั้น
+//     ⇒ ไฟล์นี้ **ไม่ปิดรับตามเวลาแล้ว** (ช่อง hours/prepMinutes ในฐานยังอยู่ แต่ไม่มีใครอ่าน) · เมนูไม่ปิดรับเลย: acceptingOrders true เสมอ (ScanGo ตัดสิน · Pack 2026-11-14)
 // ราคา: `logic.linePrice(stock, 1, {now})` ต่อหน่วย · fullPrice มีเฉพาะเมื่อโปรลดจริง · ❌ ไม่ส่งโปรท้ายบิล/สมาชิก/ส่วนลดค่าส่ง/ส่วนลดกลุ่ม
 // หมด: stockCountStatus === true และ stock ≤ 0 (อ่านไม่ออก = หมด · fail-closed)
 // ค่าส่ง: สูตรแบบช่วง (`_deliveryFee` · คัดจากต้นแบบ) · เมนูส่งสูตร + ไกลสุด · ตัวเลขต่อระยะ = quoteDelivery
@@ -153,16 +153,16 @@ function buildMenu({ shop, products, now }) {
   const cfg = configOf(s);
   const list = (Array.isArray(products) ? products : []).map((p) => productView(p, now)).filter(Boolean);
   const categoryTree = categoryTreeOf(s.smartCategory);
-  const acc = acceptingOf(s, now);
   const d = cfg.delivery;
   const deliveryFee = d.model.baseFee;
   return {
     providerId: PROVIDER_ID,
     menuVersion: menuVersionOf({ products: list, categoryTree, minOrder: cfg.minOrder, deliveryFee, deliveryFeeModel: d.model }),
     currency: "THB",
-    acceptingOrders: acc.accepting,
-    acceptingReason: acc.reason,
-    ...(acc.reason ? { closedReason: acc.reason } : {}),
+    // POS ไม่ตัดสินเปิด/ปิดรับ — ScanGo ตัดสินจากปุ่มเปิดรับของมันที่เดียว (แบบพี่น้อง menu.js `acceptingOrders: true` · Pack 2026-11-14)
+    //   คงช่องไว้ให้ ScanGo รุ่นก่อน · acceptingOf() เหลือไว้ให้เทส/ที่อื่นอ้าง แต่ไม่ใช้ตัดสินเมนูแล้ว
+    acceptingOrders: true,
+    acceptingReason: null,
     minOrder: cfg.minOrder,
     deliveryFee,
     deliveryFeeModel: d.model,
