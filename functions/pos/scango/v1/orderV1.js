@@ -15,7 +15,7 @@
 //   ลายเซ็นผิด/หมดอายุ = ยามหน้าเส้น (v1/partnerSign.js) ไม่ถึงไฟล์นี้
 // ต่างจากต้นแบบอีก: ใบอยู่ scangoOrder (ไม่ใช่ใบ POS) ⇒ state ใช้ศัพท์ของ scangoOrder (requested · accepted · ready · cancelled) ·
 //   ร้านจัดการใบบนเว็บร้าน ScanGo (Pack ตอบ "1" 2026-11-12) ⇒ ฝั่งนี้มีหน้าที่ ①นับใบใหม่ (scango.orderList) ②ป๊อปอัปในแอป (push)
-//   rider.* = ข้อมูลเท่านั้น (deliveryState · rider) ไม่แตะ state (ท่าเดียวกับต้นแบบ)
+//   rider.* = ข้อมูล (deliveryState · rider) · ยกเว้น rider.delivered = ปิดใบ state delivered (Pack 2026-11-14 · ต่างจากต้นแบบ: ใบที่ส่งถึงแล้วไม่ค้างแท็บ "กำลังทำ" บนหน้าขาย)
 // 🔁 idempotent: สร้าง = orderId (doc id) · เหตุการณ์ = eventId (เก็บ eventIds ล่าสุด 20 · ซ้ำ = applied:false ignored:'duplicate_event')
 // 🔑 เบอร์ลูกค้าถูกลบเมื่อใบยกเลิก (C.redactPhonePatch)
 "use strict";
@@ -190,7 +190,8 @@ function v1OrderCreate(deps) {
  * applyEvent(data, ev, now) → {applied, ignored?, patch}
  *   requested --venue.accepted--> accepted --venue.ready--> ready · requested --venue.ready--> ready
  *   venue.rejected/venue.cancelled (ยังไม่จบ) · customer.cancelled (เฉพาะ requested) → cancelled + ลบเบอร์
- *   platform.reminder (เฉพาะ requested) → remindedAt · remindCount+1 · rider.* → deliveryState/rider เท่านั้น
+ *   platform.reminder (เฉพาะ requested) → remindedAt · remindCount+1 · rider.* → deliveryState/rider
+ *   rider.delivered (ใบยังไม่จบ) → + state delivered · stateAt.delivered (ใบยกเลิก/จบแล้ว = แค่ deliveryState)
  */
 function applyEvent(data, ev, now) {
   const type = str(ev.type);
@@ -206,6 +207,10 @@ function applyEvent(data, ev, now) {
     const patch = { ...base, deliveryState: ds, [`deliveryStateAt.${ds}`]: at };
     if (rider) patch.rider = rider;
     if (ds === "failed") patch.deliveryFailReason = textOrNull(ev.reason, 200);
+    if (ds === "delivered" && !closed) {
+      patch.state = "delivered";
+      patch["stateAt.delivered"] = at;
+    }
     return { applied: true, patch };
   }
   if (type === "platform.reminder") {

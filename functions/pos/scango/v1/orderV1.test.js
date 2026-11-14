@@ -158,6 +158,26 @@ test("เหตุการณ์: ร้านกดรับบนเว็บ
   assert.deepEqual([ready.body.applied, t.mem.store.get("scangoOrder/sg-0001").state], [true, "ready"]);
 });
 
+test("rider.delivered = ปิดใบ (state delivered · stateAt) · ไรเดอร์อื่นไม่แตะ state · ใบยกเลิกแล้ว = ไม่เปลี่ยน state (DEV-0009 · Pack 2026-11-14)", async () => {
+  const t = load();
+  await call(t.V.v1OrderCreate, t.deps, ORDER());
+  await call(t.V.v1OrderEvent, t.deps, EVENT("venue.accepted"), { orderId: "sg-0001" });
+  await call(t.V.v1OrderEvent, t.deps, EVENT("rider.delivering"), { orderId: "sg-0001" });
+  let d = t.mem.store.get("scangoOrder/sg-0001");
+  assert.deepEqual([d.state, d.deliveryState], ["accepted", "delivering"]);
+  const dl = await call(t.V.v1OrderEvent, t.deps, EVENT("rider.delivered"), { orderId: "sg-0001" });
+  assert.equal(dl.body.applied, true);
+  d = t.mem.store.get("scangoOrder/sg-0001");
+  assert.deepEqual([d.state, d.deliveryState], ["delivered", "delivered"]);
+  assert.ok(d.stateAt && d.stateAt.delivered, "stateAt.delivered");
+  // ใบยกเลิกแล้ว: ไรเดอร์ส่งถึงมาช้า = state ยัง cancelled
+  const t2 = load();
+  await call(t2.V.v1OrderCreate, t2.deps, ORDER());
+  await call(t2.V.v1OrderEvent, t2.deps, EVENT("venue.rejected", { reason: "busy" }), { orderId: "sg-0001" });
+  await call(t2.V.v1OrderEvent, t2.deps, EVENT("rider.delivered"), { orderId: "sg-0001" });
+  assert.equal(t2.mem.store.get("scangoOrder/sg-0001").state, "cancelled");
+});
+
 test("เหตุการณ์: ปฏิเสธ/ยกเลิก → cancelled + ลบเบอร์ · ไรเดอร์ = ข้อมูลเท่านั้นไม่แตะ state · เตือน = remindCount · ใบจบแล้วไม่ขยับ", async () => {
   const t = load();
   await call(t.V.v1OrderCreate, t.deps, ORDER());
