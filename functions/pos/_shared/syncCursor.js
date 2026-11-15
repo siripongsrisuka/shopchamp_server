@@ -82,10 +82,27 @@ async function readChangedPage({ db, admin, coll, keys, cursor, limit }) {
   return { page: rows.slice(0, limit), hasMore: rows.length > limit };
 }
 
+/**
+ * countChanged({db, admin, coll, keys, cursor}) — จำนวน doc ที่เปลี่ยนหลัง cursor ทั้งหมด (query เดียวกับ readChangedPage ไม่มี limit · aggregation count)
+ *   ค่านับของ Firestore = 1 read ต่อ index entry 1,000 ตัว · ใช้ทำ % โหลดของแอป (ผู้เรียกนับเฉพาะเมื่อมีหน้าต่อ)
+ *   คืนจำนวนเต็ม ≥ 0 · นับไม่ได้ (ฐานไม่รองรับ/ค่าไม่ใช่เลข) = null ⇒ ผู้เรียกไม่ส่ง total (แอปโชว์จำนวนที่ดึงแล้วแทน %)
+ */
+async function countChanged({ db, admin, coll, keys, cursor }) {
+  const ks = [...new Set(keys)];
+  let q = ks.length === 1
+    ? db.collection(coll).where("shopId", "==", ks[0])
+    : db.collection(coll).where("shopId", "in", ks);
+  q = q.where("updateTime", ">", new Date(FLOOR_MS)).orderBy("updateTime").orderBy("__name__");
+  if (cursor) q = q.startAfter(toTimestamp(cursor, admin), cursor.id);
+  const snap = await q.count().get();
+  const n = snap && typeof snap.data === "function" ? (snap.data() || {}).count : undefined;
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
 /** nextCursorOf(page, cursor, rawCursor) — cursor ของ doc สุดท้ายที่อ่าน · หน้าว่าง = cursor เดิม · ไม่มีเลย = null */
 function nextCursorOf(page, cursor, rawCursor) {
   const last = page[page.length - 1];
   return last ? encodeCursor(last.k) : cursor ? rawCursor : null;
 }
 
-module.exports = { FLOOR_MS, tsKey, cmpKey, toTimestamp, encodeCursor, parseCursor, toPlain, readChangedPage, nextCursorOf, validDocId };
+module.exports = { FLOOR_MS, tsKey, cmpKey, toTimestamp, encodeCursor, parseCursor, toPlain, readChangedPage, countChanged, nextCursorOf, validDocId };

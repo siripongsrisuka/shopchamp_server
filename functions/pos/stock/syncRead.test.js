@@ -36,6 +36,8 @@ const cmpT = (a, b) => (a[0] - b[0]) || (a[1] - b[1]);
 let DATA = {};
 let READS = 0;
 let QUERIES = [];
+let COUNTS = [];
+let COUNT_FAILS = false;
 function makeDb() {
   const snapOf = (c, id) => { const d = (DATA[c] || {})[id]; return { exists: d !== undefined, id, data: () => d }; };
   const query = (c, st) => ({
@@ -43,6 +45,16 @@ function makeDb() {
     orderBy: (f) => query(c, { ...st, order: [...st.order, f] }),
     startAfter: (...vals) => query(c, { ...st, after: vals }),
     limit: (n) => query(c, { ...st, limit: n }),
+    count: () => ({ get: async () => {
+      if (COUNT_FAILS) throw new Error("count ล้ม");
+      assert.equal(st.limit, null, "count ต้องไม่มี limit");
+      const before = READS;
+      const snap = await query(c, st).get();
+      QUERIES.pop();
+      COUNTS.push({ c, ...st });
+      READS = before + Math.max(1, Math.ceil(snap.size / 1000)); // ค่านับจริง = 1 read ต่อ 1,000 ตัว
+      return { data: () => ({ count: snap.size }) };
+    } }),
     get: async () => {
       QUERIES.push({ c, ...st });
       let rows = Object.keys(DATA[c] || {}).map((id) => ({ id, d: DATA[c][id] }));
@@ -97,6 +109,7 @@ async function call(fn, body, reqExtra) {
   const res = { code: 0, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
   READS = 0;
   QUERIES = [];
+  COUNTS = [];
   await handler({ body, ...(reqExtra === undefined ? OWNER : reqExtra) }, res);
   return res;
 }
@@ -254,6 +267,57 @@ test("sync: แคชเชียร์ (ไม่มีเลขสิทธิ
     assert.equal(r.code, 200, JSON.stringify(r.body));
     assert.deepEqual(r.body.items.map((x) => x.id), ["p1"]);
   }
+});
+
+// ── total (% โหลดของแอป · Pack 2026-11-15) ──
+const FIVE = () => ({ p1: P({ updateTime: T(1) }), p2: P({ updateTime: T(2) }), p3: P({ updateTime: T(2) }), p4: P({ updateTime: T(4), deleted: true }), p5: P({ updateTime: T(5) }), b1: P({ shopId: "shopB", updateTime: T(1) }) });
+
+test("sync total: ขอ count + มีหน้าต่อ → total = ทุกตัวที่ต้องดึงนับจาก cursor ของคำขอ (รวมตัวที่ลบ · ไม่รวมร้านอื่น) · นับ 1 ครั้ง ไม่มี limit", async () => {
+  seed(FIVE());
+  const r = await call("sync", { shopId: "shopA", limit: 2, count: true });
+  assert.equal(r.code, 200);
+  assert.equal(r.body.hasMore, true);
+  assert.equal(r.body.total, 5);
+  assert.equal(COUNTS.length, 1);
+  assert.equal(COUNTS[0].after, null);
+  assert.equal(READS, 1 + 3 + 1, "shop 1 + หน้า (2 + ตัวดูหน้าต่อ) + ค่านับ 1");
+});
+
+test("sync total: ส่ง cursor → นับเฉพาะหลัง cursor (ตัวที่เวลาเท่า cursor แต่ id หลังกว่า ยังนับ)", async () => {
+  seed(FIVE());
+  const first = await call("sync", { shopId: "shopA", limit: 2 });
+  assert.deepEqual(first.body.items.map((x) => x.id), ["p1", "p2"]);
+  const r = await call("sync", { shopId: "shopA", limit: 2, count: true, cursor: first.body.nextCursor });
+  assert.equal(r.body.hasMore, true);
+  assert.equal(r.body.total, 3, "p3 (เวลาเท่า p2) + p4 + p5");
+  assert.equal(COUNTS[0].after[1], "p2");
+});
+
+test("sync total: ไม่มีหน้าต่อ / ไม่ขอ count / count false → ไม่นับ ไม่มีช่อง total (ซิงก์ปกติไม่มีค่าอ่านเพิ่ม)", async () => {
+  seed(FIVE());
+  const one = await call("sync", { shopId: "shopA", limit: 10, count: true });
+  assert.equal(one.body.hasMore, false);
+  assert.equal("total" in one.body, false);
+  assert.equal(COUNTS.length, 0);
+  assert.equal(READS, 1 + 5);
+  for (const extra of [{}, { count: false }]) {
+    const r = await call("sync", { shopId: "shopA", limit: 2, ...extra });
+    assert.equal(r.body.hasMore, true);
+    assert.equal("total" in r.body, false);
+    assert.equal(COUNTS.length, 0);
+  }
+});
+
+test("sync total: นับล้ม → หน้านี้ยัง 200 ครบ แค่ไม่มี total", async () => {
+  seed(FIVE());
+  COUNT_FAILS = true;
+  try {
+    const r = await call("sync", { shopId: "shopA", limit: 2, count: true });
+    assert.equal(r.code, 200);
+    assert.deepEqual(r.body.items.map((x) => x.id), ["p1", "p2"]);
+    assert.equal(r.body.hasMore, true);
+    assert.equal("total" in r.body, false);
+  } finally { COUNT_FAILS = false; }
 });
 
 test("findBarcode: เจอในร้าน → ตัวที่ไม่ลบทั้งหมด เรียง doc id · ร้านอื่นบาร์โค้ดเดียวกันไม่ปน · ไม่อ่านคลังกลาง", async () => {

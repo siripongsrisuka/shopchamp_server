@@ -31,7 +31,7 @@ const { ok, fail, sendDeny, parseOr400, internalError, deny } = require("../_sha
 const { callerAccess, adminFlag, shopSnapOf } = require("../_shared/auth");
 const S = require("./_shared");
 // cursor เวลานาโนวินาที+id · FLOOR · การเรียง/กรองหน้า = ตัวช่วยกลางที่ member.indexSync ใช้ร่วม (ยกจากไฟล์นี้ ไม่เปลี่ยนพฤติกรรม)
-const { toPlain, parseCursor, encodeCursor, readChangedPage, nextCursorOf } = require("../_shared/syncCursor");
+const { toPlain, parseCursor, encodeCursor, readChangedPage, countChanged, nextCursorOf } = require("../_shared/syncCursor");
 
 const DEFAULT_LIMIT = 500;
 // รอยทีมงาน/ผู้แก้ที่ server เขียนลง stock (productSave · productDelete · adminTrail) · แอปไม่อ่าน
@@ -82,7 +82,15 @@ function sync(_deps) {
         else items.push(itemOf(r.id, r.d));
       }
       const nextCursor = nextCursorOf(page, cur, input.cursor);
-      return ok(res, { ...adminFlag(access), items, deletedIds, nextCursor, hasMore });
+      // % โหลดของแอป (Pack 2026-11-15): นับเฉพาะเมื่อแอปขอ + มีหน้าต่อ ⇒ ซิงก์ปกติ (หน้าเดียว) ไม่มีค่านับเพิ่ม · นับล้ม = ไม่ส่ง total (ไม่ทำให้หน้านี้ล้ม)
+      let total;
+      if (input.count === true && hasMore) {
+        try {
+          const n = await countChanged({ db, admin, coll: "stock", keys: [key], cursor: cur });
+          if (n !== null && n >= page.length) total = n;
+        } catch (_) { total = undefined; }
+      }
+      return ok(res, { ...adminFlag(access), items, deletedIds, nextCursor, hasMore, ...(total !== undefined ? { total } : {}) });
     } catch (e) {
       return internalError(res, e);
     }
