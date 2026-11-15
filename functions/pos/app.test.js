@@ -289,3 +289,91 @@ test("เพดาน body แบบ Cloud Functions: framework อ่าน bod
     assert.deepEqual([r.status, r.body && r.body.error], [413, "payload_too_large"], r.text.slice(0, 200));
   });
 });
+
+// ── บีบ gzip (DEV-0010 2026-11-15 · Pack สั่ง: stock.sync หน้าละ ~954 KB ไม่บีบ) ──
+// ยิงด้วย http ดิบ (fetch แตก gzip ให้เอง = มองไม่เห็นว่าบีบไหม) · ได้ header + ไบต์ที่ส่งจริงบนสาย
+const http = require("http");
+const zlib = require("zlib");
+function rawPost(base, p, body, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(base + p);
+    const data = Buffer.from(JSON.stringify(body));
+    const rq = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: "POST", headers: { "content-type": "application/json", "content-length": data.length, ...headers } }, (rs) => {
+      const chunks = [];
+      rs.on("data", (c) => chunks.push(c));
+      rs.on("end", () => resolve({ status: rs.statusCode, headers: rs.headers, wire: Buffer.concat(chunks) }));
+    });
+    rq.on("error", reject);
+    rq.end(data);
+  });
+}
+// route ทดสอบ: ตอบรายการตามจำนวนที่ขอ (ข้อความไทยปน = ตรวจ utf-8 ข้ามการบีบ) · 201 = ตรวจว่าสถานะไม่เปลี่ยน
+const BIG_ROUTES = [
+  { contract: "t.items", path: "/t/items", fn: "pos", auth: "user", load: () => (req, res) => res.status(req.body.status || 200).json({ ok: true, items: Array.from({ length: req.body.n }, (_, i) => ({ id: `sku-${i}`, name: `สินค้าทดสอบ ${i}`, qty: i })) }) },
+];
+const gzApp = (opts = {}) => makeApp({ fnName: "pos", checkIfAuthenticated: realishAuth, requireShopAccess: passShop, routes: BIG_ROUTES, publicRoutes: [], ...opts });
+const AUTH = { authorization: "Bearer tok-u1" };
+
+test("gzip: ขอ gzip + คำตอบใหญ่ = Content-Encoding gzip · แตกแล้วเท่าเนื้อเดิมทุกไบต์ · สถานะ/Content-Type เดิม · Content-Length = ขนาดหลังบีบ", async () => {
+  await serve(gzApp(), async (base) => {
+    const plain = await rawPost(base, "/t/items", { n: 2000, status: 201 }, AUTH);
+    const gz = await rawPost(base, "/t/items", { n: 2000, status: 201 }, { ...AUTH, "accept-encoding": "gzip, deflate, br" });
+    assert.equal(plain.headers["content-encoding"], undefined);
+    assert.equal(gz.headers["content-encoding"], "gzip");
+    assert.match(gz.headers.vary || "", /Accept-Encoding/i);
+    assert.equal(gz.status, 201);
+    assert.equal(plain.status, 201);
+    assert.equal(gz.headers["content-type"], plain.headers["content-type"]);
+    assert.equal(Number(gz.headers["content-length"]), gz.wire.length);
+    assert.ok(gz.wire.length < plain.wire.length / 3, `บีบแล้ว ${gz.wire.length} ไม่เล็กกว่าเดิม ${plain.wire.length}`);
+    assert.ok(zlib.gunzipSync(gz.wire).equals(plain.wire), "แตกแล้วไม่เท่าเนื้อเดิม");
+    assert.equal(JSON.parse(plain.wire.toString("utf8")).items[5].name, "สินค้าทดสอบ 5");
+  });
+});
+
+test("gzip: ไม่ส่ง Accept-Encoding / ขอแค่ identity / ห้าม gzip (q=0) = ส่งแบบเดิม ไม่มี Content-Encoding ไม่มี Vary", async () => {
+  await serve(gzApp(), async (base) => {
+    const ref = await rawPost(base, "/t/items", { n: 2000 }, AUTH);
+    for (const ae of [undefined, "identity", "gzip;q=0", "br"]) {
+      const h = ae === undefined ? AUTH : { ...AUTH, "accept-encoding": ae };
+      const r = await rawPost(base, "/t/items", { n: 2000 }, h);
+      assert.equal(r.headers["content-encoding"], undefined, `ae=${ae}`);
+      assert.equal(r.headers.vary, ref.headers.vary, `ae=${ae} vary`);
+      assert.ok(r.wire.equals(ref.wire), `ae=${ae} เนื้อเปลี่ยน`);
+      assert.equal(Number(r.headers["content-length"]), r.wire.length);
+    }
+  });
+});
+
+test("gzip: คำตอบเล็ก (< 1 KB) ไม่บีบแม้ขอ · error 401/404 ในซองเดิมไม่บีบ", async () => {
+  await serve(gzApp(), async (base) => {
+    const small = await rawPost(base, "/t/items", { n: 1 }, { ...AUTH, "accept-encoding": "gzip" });
+    assert.equal(small.headers["content-encoding"], undefined);
+    assert.ok(small.wire.length < 1024);
+    assert.equal(JSON.parse(small.wire.toString()).items[0].id, "sku-0");
+    const noAuth = await rawPost(base, "/t/items", { n: 2000 }, { "accept-encoding": "gzip" });
+    assert.equal(noAuth.status, 401);
+    assert.equal(noAuth.headers["content-encoding"], undefined);
+    assert.equal(JSON.parse(noAuth.wire.toString()).error, "no_auth");
+    const nf = await rawPost(base, "/nope", {}, { ...AUTH, "accept-encoding": "gzip" });
+    assert.equal(nf.status, 404);
+    assert.equal(JSON.parse(nf.wire.toString()).error, "not_found");
+  });
+});
+
+test("gzip: เกณฑ์ 1 KB อยู่ตรงขอบ (1023 ไม่บีบ · 1024 บีบ) · fetch ของ node (แบบ ScanGo/เว็บ) แตกเองได้ JSON เดิม", async () => {
+  const edge = [{ contract: "t.pad", path: "/t/pad", fn: "pos", auth: "user", load: () => (req, res) => res.json({ p: "x".repeat(req.body.len - 8) }) }];
+  await serve(gzApp({ routes: edge }), async (base) => {
+    const a = await rawPost(base, "/t/pad", { len: 1023 }, { ...AUTH, "accept-encoding": "gzip" });
+    const b = await rawPost(base, "/t/pad", { len: 1024 }, { ...AUTH, "accept-encoding": "gzip" });
+    assert.equal(a.wire.length, 1023);
+    assert.equal(a.headers["content-encoding"], undefined);
+    assert.equal(b.headers["content-encoding"], "gzip");
+    assert.equal(zlib.gunzipSync(b.wire).length, 1024);
+  });
+  await serve(gzApp(), async (base) => {
+    const r = await post(base, "/t/items", { n: 2000 }, AUTH);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.items.length, 2000);
+  });
+});

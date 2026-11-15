@@ -13,6 +13,8 @@
 //   ⑤ stripBody ลบ field ภายในจาก body อีกรอบหลังอ่าน (ลบแค่ใน body · req.auth ที่ ③ ตั้งต้องอยู่ต่อ)
 //   ⑥ requireShopAccess (route auth 'shop')   ร้านจาก body.shopId · แถว access:"reportRead" = requireReportReadAccess (legacy owner-web parity ชั่วคราว)
 //   ⑦ handler
+// ⓪ gzipJson (ทุกคำตอบของ app นี้ · DEV-0010 2026-11-15 Pack สั่ง): client ขอ gzip (Accept-Encoding) และเนื้อ ≥ 1 KB = บีบ gzip
+//    เนื้อ/สถานะเหมือนเดิมทุกไบต์หลังแตก · ไม่ขอ/เล็ก = ส่งแบบเดิมทุกไบต์ (ไม่เติม header) · webhook อยู่ที่ gateway/app.js ไม่ผ่านตัวนี้
 // ซองคำตอบเดียว: สำเร็จ 2xx {ok:true,...} · ไม่สำเร็จ non-2xx {ok:false, error, message} (respond.js) · รวม 404 และ error กลาง
 //
 // 🪤 บน Cloud Functions ตัว framework อ่าน body ให้ก่อนถึง express (req.body + req.rawBody) ⇒ express.json ข้ามเอง
@@ -21,6 +23,7 @@
 //   ⇒ function เดิม (gen1) ที่โหลด index.js เดียวกันไม่ต้องโหลด handler ของ pos
 "use strict";
 
+const zlib = require("zlib");
 const express = require("express");
 const cors = require("cors");
 const { ROUTES } = require("./routes");
@@ -44,6 +47,36 @@ function toBytes(v) {
 function stripInternal(obj) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
   for (const k of INTERNAL_FIELDS) if (Object.prototype.hasOwnProperty.call(obj, k)) delete obj[k];
+}
+
+// เกณฑ์บีบ: ต่ำกว่า 1 KB บีบแล้วได้ไม่คุ้ม header · level 1 = เร็วสุด (หน้า stock.sync 1,000 ตัว 968 KB → 144 KB ~3 ms บน Mac
+//   level 6 ได้ 127 KB แต่ใช้ CPU ~6 เท่า · pos รับพร้อมกัน 40 คำขอต่อเครื่อง จึงเลือกประหยัด CPU)
+const GZIP_MIN_BYTES = 1024;
+const GZIP_LEVEL = 1;
+
+/**
+ * บีบ gzip คำตอบ JSON เมื่อ client ขอ · ใช้ zlib ในตัว node (ไม่เพิ่ม dependency)
+ * ดักที่ res.send ตอนได้ข้อความแล้ว (res.json → res.send(string)) · handler ทุกตัวตอบผ่าน res.json (respond.js)
+ * บีบเฉพาะ: เนื้อเป็นข้อความ · ตั้ง Content-Type แล้ว · ยังไม่มี Content-Encoding · ไม่ใช่ HEAD/204/304 · ≥ minBytes · client รับ gzip
+ * Content-Type คงเดิม (res.json ตั้ง "application/json; charset=utf-8" ไว้ก่อน) · Content-Length = ขนาดหลังบีบ (express นับจาก Buffer)
+ */
+function gzipJson({ minBytes = GZIP_MIN_BYTES, level = GZIP_LEVEL } = {}) {
+  return function gzipResponse(req, res, next) {
+    const send = res.send;
+    res.send = function sendMaybeGzip(body) {
+      res.send = send; // ใช้ครั้งเดียว · กันวนเมื่อ send เรียก json/send ซ้ำ
+      if (typeof body === "string" && req.method !== "HEAD" && res.statusCode !== 204 && res.statusCode !== 304 &&
+          res.get("Content-Type") && !res.get("Content-Encoding") && Buffer.byteLength(body, "utf8") >= minBytes &&
+          req.acceptsEncodings("gzip", "identity") === "gzip") {
+        const out = zlib.gzipSync(Buffer.from(body, "utf8"), { level });
+        res.vary("Accept-Encoding");
+        res.set("Content-Encoding", "gzip");
+        return send.call(this, out);
+      }
+      return send.call(this, body);
+    };
+    next();
+  };
 }
 
 /** ลบ field ภายในจาก req และ body (body อาจถูกอ่านไว้แล้วโดย framework) */
@@ -129,6 +162,7 @@ function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requir
   app.disable("x-powered-by");
   app.set("etag", false);
   app.use(cors({ origin: true }));
+  app.use(gzipJson());
   app.use(gateFor(fnName, routes));
 
   for (const r of routes) {
@@ -161,4 +195,4 @@ function makeApp({ fnName, deps, checkIfAuthenticated, requireShopAccess, requir
   return app;
 }
 
-module.exports = { makeApp, checkRegistry, scrubInternal, stripBody, bodyLimit, toBytes, INTERNAL_FIELDS, DEFAULT_LIMIT };
+module.exports = { makeApp, gzipJson, GZIP_MIN_BYTES, checkRegistry, scrubInternal, stripBody, bodyLimit, toBytes, INTERNAL_FIELDS, DEFAULT_LIMIT };
