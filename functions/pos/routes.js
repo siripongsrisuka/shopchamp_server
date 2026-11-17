@@ -34,6 +34,8 @@ const ROUTES = Object.freeze([
   // DEV-0010 อ่านกะผ่าน API (แทน get/listener กะของแอป · ประวัติกะตามวันเปิดกะ · อ่านอย่างเดียว · Pack 2026-11-14 ข้อ 2)
   { contract: "shift.get", path: "/shift/get", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/get").get },
   { contract: "shift.history", path: "/shift/history", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/history").history },
+  // DEV-0011 ⑤: ยอดสรุปรอบที่เปิดอยู่ (เงินคาดบนจอกะ = สูตรเดียวกับปิดกะ · อ่านอย่างเดียว)
+  { contract: "shift.summary", path: "/shift/summary", fn: "pos", auth: "shop", factory: true, load: () => require("./shift/summary").summary },
   { contract: "member.payCredit", path: "/member/pay-credit", fn: "pos", auth: "shop", factory: true, load: () => require("./member/payCredit").payCredit },
 
   // ก้อน 9a สต๊อก · segment stock = pos · stock-repair = pos_heavy (อ่านสินค้าทั้งร้าน)

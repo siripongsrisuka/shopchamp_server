@@ -221,6 +221,18 @@ async function roundDocs(get, coll, shiftId, openTime) {
   return [...seen.values()];
 }
 
+/**
+ * roundInputOf — อ่านบิล/ใบรับชำระของรอบที่เปิดอยู่ แล้วประกอบข้อมูลเข้า logic.shift.roundSummary/closeShift
+ *   ตัวเดียวที่ close · คำเตือนเงินออก · summary (DEV-0011 จอกะ) ใช้ร่วม ⇒ เงินคาดบนจอ = เงินคาดตอนปิดเสมอ (ไม่มีสูตรคัดลอก)
+ *   get = tx.get (ใน transaction) หรือ q => q.get() · ไม่มีรอบ (openTime อ่านไม่ได้) = null
+ */
+async function roundInputOf(get, { shiftId, shift, shop, shopRef }) {
+  const round = openRoundOf(shiftId, shift);
+  if (!round) return null;
+  const [billDocs, paidDocs] = await Promise.all([roundDocs(get, "bill", shiftId, shift.openTime), roundDocs(get, "paidHistory", shiftId, shift.openTime)]);
+  return { round, input: roundInput({ round, shift, shop, shopRef, billDocs, paidDocs }) };
+}
+
 const notiRefOf = (input) => db.collection("notification").doc(`${input.shiftId}_${input.op}_${encodeURIComponent(input.requestId)}`);
 function notificationDoc({ shopRef, noti, now, access }) {
   return { ...noti, shopId: shopRef.shopId || shopRef.id, categoryId: NOTI_CATEGORY_SHIFT, timestamp: now, ...adminTrail(access) };
@@ -321,12 +333,10 @@ async function runClose(tx, ctx) {
   }
   if (shift.status !== true || hist) return { refusal: refuse(409, "shift_not_open") };
   if (!round) return { refusal: refuse(409, "shift_open_time_bad") };
-  const txGet = (q) => tx.get(q);
-  const billDocs = await roundDocs(txGet, "bill", input.shiftId, shift.openTime);
-  const paidDocs = await roundDocs(txGet, "paidHistory", input.shiftId, shift.openTime);
+  const loaded = await roundInputOf((q) => tx.get(q), { shiftId: input.shiftId, shift, shop, shopRef });
   // ── อ่านครบแล้ว · ต่อจากนี้คิดและเขียนเท่านั้น ──
   const closed = logic.closeShift({
-    ...roundInput({ round, shift, shop, shopRef, billDocs, paidDocs }),
+    ...loaded.input,
     closeCash: input.closeCash,
     closeWithDraw: input.closeWithDraw,
   });
@@ -354,12 +364,9 @@ async function runClose(tx, ctx) {
 // คำเตือนนำเงินออกเกินเงินคาด (SC-26 เตือน ไม่บล็อก) · ยอดคาดก่อนรายการนี้ · อ่านไม่ได้ = ไม่เตือน (ไม่ล้มคำตอบที่เขียนสำเร็จแล้ว)
 async function duringWarnings(input, after) {
   try {
-    const round = openRoundOf(input.shiftId, after.shift);
-    if (!round) return [];
-    const qGet = (q) => q.get();
-    const openTime = after.shift.openTime;
-    const [billDocs, paidDocs] = await Promise.all([roundDocs(qGet, "bill", input.shiftId, openTime), roundDocs(qGet, "paidHistory", input.shiftId, openTime)]);
-    const s = logic.roundSummary(roundInput({ round, shift: after.shift, shop: after.shop, shopRef: after.shopRef, billDocs, paidDocs }));
+    const loaded = await roundInputOf((q) => q.get(), { shiftId: input.shiftId, shift: after.shift, shop: after.shop, shopRef: after.shopRef });
+    if (!loaded) return [];
+    const s = logic.roundSummary(loaded.input);
     return logic.checkDuringEntry({ type: input.type, amount: input.amount, expectedCash: s.expectedCash }).warnings;
   } catch (e) {
     return [];
@@ -390,6 +397,6 @@ function manage(deps) {
 }
 
 module.exports = {
-  manage, openRoundOf, roundInput, summaryForResponse, openWrite, duringEntry, historyDoc, SHIFT_MESSAGES,
+  manage, openRoundOf, roundInput, roundInputOf, summaryForResponse, openWrite, duringEntry, historyDoc, SHIFT_MESSAGES,
   openNotification, duringNotification, closeNotification, roundDocs, HISTORY_DEFAULTS, thaiDateTime,
 };

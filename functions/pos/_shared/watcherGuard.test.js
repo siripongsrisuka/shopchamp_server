@@ -29,6 +29,8 @@ const READ_FILES = new Set(["sale/get.js", "report/_reportShared.js", "gateway/c
   "shop/get.js", "company/catalog.js", "notification/list.js",
   // DEV-0010 shift.get · shift.history (อ่านกะอย่างเดียว · watcher อ่านได้แบบ sale.get)
   "shift/get.js", "shift/history.js",
+  // DEV-0011 shift.summary (ยอดสรุปรอบที่เปิด · อ่านอย่างเดียว · watcher อ่านได้แบบ shift.get)
+  "shift/summary.js",
   // DEV-0010 stock.linkList · stock.receiveList · stock.supplierList · promotion.list (อ่านอย่างเดียว · watcher ได้สิทธิ์แบบเจ้าของ)
   "stock/listRead.js", "promotion/list.js"]);
 
