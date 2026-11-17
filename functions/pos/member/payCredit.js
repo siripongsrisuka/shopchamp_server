@@ -12,6 +12,7 @@
 //       เจ้าของ/ทีมงานผ่านทุกสิทธิ์ (hasRight) · verify W1
 //   3. transaction: อ่านครบ 4 ใบก่อนเขียน (shop · paidHistory/{payUUID} · member · shift)
 //      ร้านไม่มี 404 shop_not_found · payUUID เดิมของร้านนี้ 200 duplicate (ไม่ตัดหนี้ซ้ำ · ตรวจก่อนกะ เพราะส่งซ้ำหลังปิดกะได้)
+//        + existCredit = ยอดค้างปัจจุบันของสมาชิก (logic.totalCredit · DEV-0011 ⑨) เมื่อสมาชิกยังอยู่ในร้าน · ไม่อยู่ = ไม่ส่ง field
 //        payUUID เดิมแต่ memberId หรือยอดต่าง 409 pay_uuid_mismatch (B-13)
 //      payUUID ของร้านอื่น 409 pay_uuid_other_shop · member 404/409 · shift 404/409 · กะปิด 409 shift_not_open (#17)
 //        ด่านกะ 3 ข้อหลังใช้กับร้านที่ shop.shift === true เท่านั้น · ร้านไม่ใช้ระบบกะ (ก้อน 5 ข้อ ①) = ปัดแค่ shift ของร้านอื่น
@@ -169,7 +170,11 @@ function payCredit(deps) {
           if (!belongsToShop(prev.shopId, ref)) refuse(deny(409, "pay_uuid_other_shop", "รหัสรับชำระนี้เป็นของร้านอื่น"));
           // B-13 (agent เลือก): payUUID เดิมแต่คนละสมาชิกหรือคนละยอด = ไม่ใช่การส่งซ้ำ ⇒ ปัด ไม่ตอบ duplicate ให้เครื่องเชื่อว่ารับแล้ว
           if (!sameRequest(prev, input)) refuse(deny(409, "pay_uuid_mismatch", "รหัสรับชำระนี้ใช้กับรายการอื่นไปแล้ว"));
-          return { duplicate: true };
+          // DEV-0011 ⑨: คืนยอดค้างปัจจุบันของสมาชิก (อ่านใน tx เดียวกัน) ให้แอปอัปจอได้เมื่อรอบแรกหลุดเน็ต · เพิ่ม field อย่างเดียว
+          //   สมาชิกไม่มีแล้ว/เป็นของร้านอื่น = ไม่ส่ง field (คำตอบ duplicate รูปเดิม)
+          const dupMember = memberSnap.exists ? memberSnap.data() : undefined;
+          const dupOwned = dupMember !== undefined && checkOwnedDoc("member", dupMember, ref).ok;
+          return dupOwned ? { duplicate: true, existCredit: logic.totalCredit(dupMember) } : { duplicate: true };
         }
 
         const member = memberSnap.exists ? memberSnap.data() : undefined;
@@ -254,7 +259,14 @@ function payCredit(deps) {
         return { duplicate: false, paid: r.paid, existCredit: r.existCredit, cutBills, push };
       });
 
-      if (out.duplicate) return ok(res, { paidHistoryId: input.payUUID, duplicate: true, ...adminFlag(access) });
+      if (out.duplicate) {
+        return ok(res, {
+          paidHistoryId: input.payUUID,
+          duplicate: true,
+          ...(out.existCredit !== undefined ? { existCredit: out.existCredit } : {}),
+          ...adminFlag(access),
+        });
+      }
       await notify(deps, out.push);
       return ok(res, {
         paidHistoryId: input.payUUID,

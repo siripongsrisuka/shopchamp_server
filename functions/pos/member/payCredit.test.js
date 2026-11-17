@@ -214,6 +214,41 @@ test("G3 payUUID เดิม + กะปิดแล้ว → 200 duplicate (�
   assert.equal(LOG.length, 0);
 });
 
+// ── DEV-0011 ⑨ duplicate คืนยอดค้างปัจจุบัน ───────────────────────────────────────
+test("DEV-0011 ⑨ ส่งซ้ำ: duplicate คืน existCredit ปัจจุบันของสมาชิก (รวม credit + remainCredit) · ไม่เขียน", async () => {
+  seed();
+  const a = await call(body({ amount: 100 }), OWNER);
+  assert.equal(a.body.existCredit, 200);
+  const n = LOG.length;
+  const b = await call(body({ amount: 100 }), OWNER);
+  assert.equal(b.code, 200);
+  assert.equal(b.body.duplicate, true);
+  assert.equal(b.body.paidHistoryId, UUID);
+  assert.equal(b.body.existCredit, 200);
+  assert.equal(LOG.length, n);
+  // ยอดปัจจุบันจากฐาน ไม่ใช่ยอดของรอบแรก: ร้านขายเซ็นเพิ่มหลังรอบแรก
+  seed((d) => {
+    d.paidHistory[UUID] = { shopId: "shopA", memberId: "m1", paid: 100 };
+    d.member.m1.credit = 50;
+    d.member.m1.creditArray[0].remainCredit = 200;
+  });
+  const c = await call(body({ amount: 100 }), OWNER);
+  assert.equal(c.body.duplicate, true);
+  assert.equal(c.body.existCredit, 250);
+  assert.equal(LOG.length, 0);
+});
+
+test("DEV-0011 ⑨ ส่งซ้ำ แต่สมาชิกไม่มีแล้ว/เป็นของร้านอื่น → duplicate รูปเดิม ไม่มี existCredit", async () => {
+  for (const mut of [(d) => { delete d.member.m1; }, (d) => { d.member.m1.shopId = "shopB"; }]) {
+    seed((d) => { d.paidHistory[UUID] = { shopId: "shopA", memberId: "m1", paid: 100 }; mut(d); });
+    const r = await call(body(), OWNER);
+    assert.equal(r.code, 200);
+    assert.equal(r.body.duplicate, true);
+    assert.equal("existCredit" in r.body, false);
+    assert.equal(LOG.length, 0);
+  }
+});
+
 // ── G4 ทีมงานใส่ staffId ของคนอื่น ──────────────────────────────────────────────
 test("G4 ทีมงานใส่ staffId ที่ไม่อยู่ในร้านและไม่ใช่ uid ตัวเอง → 409 staff_not_in_shop", async () => {
   seed();
