@@ -30,6 +30,7 @@ const { ok, sendDeny, parseOr400, internalError, deny } = require("../_shared/re
 const { readNow } = require("../_shared/deps");
 const { callerAccess, hasRight, adminTrail, adminFlag, resolveShopRef, checkOwnedDoc } = require("../_shared/auth");
 const { SHOP_TZ } = require("../_shared/billClock");
+const { amendHoldState, amendHeldGuardId } = require("../_shared/idempotency");
 
 const TAX_RIGHT = "118"; // ปุ่มใบกำกับภาษีบนจอประวัติบิล (main3 src/screens/BillHistoryScreen.js:98-106 · แอปใหม่ :65)
 const TAX_PATTERN = "month"; // เลขใบกำกับเป็นรายเดือนเสมอ (docNumber.js พฤติกรรมเดิม ④)
@@ -99,6 +100,17 @@ function issueTaxInvoice(deps) {
 
         const own = checkOwnedDoc("bill", bill, shopRef);
         if (!own.ok) throw new Refusal(own);
+        // บิลกำลังถูกแก้ (sale.amend ประทับ pending แล้ว) = ห้ามออกใบกำกับ · ออกแล้ว sale.void ปัด tax_invoice_issued ถาวร
+        //   ⇒ ขั้น ④ ของการแก้ไม่มีวันจบ = บิลใช้งาน 2 ใบ (DEV-0011 B1)
+        //   เกณฑ์ "ยังมีชีวิต" = ตัวเดียวกับ sale.amend ① (idempotency.amendHoldState): pending < 5 นาที (busy)
+        //   หรือเกิน 5 นาทีแต่ออกใบใหม่ไปแล้ว (newBillId / receiptGuard ของใบใหม่ · stalled)
+        //   pending ที่ถูกทิ้ง (เกิน 5 นาที · ไม่มีใบใหม่) = sale.amend ถือว่าว่าง ⇒ ออกใบกำกับได้ตามเดิม
+        //   (หลังออกแล้ว คำขอแก้เดิมที่กลับมายิงซ้ำถูกปัด bill_locked {lock:tax_invoice} ก่อนออกใบใหม่)
+        const heldAmend = isObj(bill) ? bill.amend : undefined;
+        const heldGuardId = amendHeldGuardId(heldAmend, input.billId, undefined);
+        const heldGuardExists = heldGuardId ? !!dataOf(await tx.get(db.collection("receiptGuard").doc(heldGuardId))) : false;
+        const hold = amendHoldState(heldAmend, undefined, now, heldGuardExists);
+        if (hold === "busy" || hold === "stalled") refuse(409, "amend_in_progress", undefined, "บิลนี้กำลังถูกแก้ไข ออกใบกำกับภาษีไม่ได้");
         const plan = logic.planTaxNumber({ bill, printerReady: true });
         if (plan.action === "refuse") {
           if (plan.reason === "bill-void") refuse(409, "bill_void", undefined, "บิลนี้ถูกยกเลิกแล้ว ออกใบกำกับภาษีไม่ได้");

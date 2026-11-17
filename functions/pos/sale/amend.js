@@ -33,9 +33,10 @@ const { ok, fail, sendDeny, parseOr400, internalError } = require("../_shared/re
 const { callerAccess, hasRight, resolveShopRef, checkOwnedDoc, belongsToShop, adminTrail, adminFlag } = require("../_shared/auth");
 const { readNow, depOr } = require("../_shared/deps");
 const { isPremiumActive } = require("../_shared/premium");
-const { amendReceiptUUID, amendLockState, sameRequestId } = require("../_shared/idempotency");
+const { amendReceiptUUID, amendHoldState, amendHeldGuardId, sameRequestId } = require("../_shared/idempotency");
 const { amendLocks, checkAmendShape, refundDueOf } = require("./amendRules");
 const { notify, idsOf } = require("../_shared/push/notify");
+const { billStateForVoid } = require("./void");
 
 const AMEND_RIGHT = "143";
 const REASON_MAX = 500; // schema Reason (requests/sale.ts)
@@ -44,6 +45,9 @@ const MESSAGES = {
   bill_void: "บิลนี้ยกเลิกแล้ว",
   amend_in_progress: "บิลนี้กำลังถูกแก้ไขจากเครื่องอื่น",
   bill_locked: "บิลนี้แก้ไขไม่ได้",
+  bill_unreadable: "อ่านบิลนี้ไม่ได้ แก้ไขไม่ได้",
+  tax_invoice_issued: "บิลนี้ออกใบกำกับภาษีแล้ว แก้ไขไม่ได้",
+  already_void: "บิลนี้ถูกยกเลิกไปแล้ว",
   shift_unknown: "ไม่รู้ว่าบิลนี้อยู่กะไหน แก้ไขไม่ได้",
   shift_closed: "กะของบิลนี้ปิดแล้ว แก้ไขไม่ได้",
   line_mismatch: "รายการไม่ตรงกับบิลเดิม",
@@ -254,10 +258,10 @@ function amend(deps) {
           shiftData = s.exists ? s.data() : undefined;
         }
         // คำขออื่นที่ค้าง pending: ใบใหม่ของคำขอนั้นอาจออกไปแล้วแต่ยังไม่ผูก (ล้มระหว่าง ② กับ ③) ⇒ อ่าน receiptGuard ของมัน
-        const held = bill && bill.amend && typeof bill.amend === "object" ? bill.amend : null;
         let heldGuardExists = false;
-        if (held && held.status === "pending" && typeof held.requestId === "string" && held.requestId !== "" && !sameRequestId(held.requestId, input.requestId)) {
-          const g = await txn.get(db.collection("receiptGuard").doc(amendReceiptUUID(input.billId, held.requestId)));
+        const heldGuardId = bill ? amendHeldGuardId(bill.amend, input.billId, input.requestId) : null;
+        if (heldGuardId) {
+          const g = await txn.get(db.collection("receiptGuard").doc(heldGuardId));
           heldGuardExists = !!g.exists;
         }
         // ── อ่านครบแล้ว · ต่อจากนี้ตรวจแล้วเขียน ──
@@ -273,13 +277,11 @@ function amend(deps) {
         if (typeof bill.receiptNumber !== "string" || bill.receiptNumber === "") refuse(409, "legacy_bill_view_only");
 
         const lockAmend = isBackLinkOnly(bill.amend) ? null : bill.amend;
-        const lock = amendLockState(lockAmend, input.requestId, now);
+        const lock = amendHoldState(lockAmend, input.requestId, now, heldGuardExists);
         if (lock === "done") return { kind: "duplicate", bill };
         if (lock === "busy") refuse(409, "amend_in_progress");
-        if (lock === "free" && lockAmend && lockAmend.status === "pending" && (lockAmend.newBillId || heldGuardExists)) {
-          // คำขออื่นค้างเกิน 5 นาทีแต่ออกใบใหม่ไปแล้ว ⇒ รับช่วงแทน = ใบใหม่ 2 ใบ · ให้เครื่องเดิมกดยืนยันซ้ำ
-          refuse(409, "amend_in_progress", { stalled: true });
-        }
+        // คำขออื่นค้างเกิน 5 นาทีแต่ออกใบใหม่ไปแล้ว ⇒ รับช่วงแทน = ใบใหม่ 2 ใบ · ให้เครื่องเดิมกดยืนยันซ้ำ
+        if (lock === "stalled") refuse(409, "amend_in_progress", { stalled: true });
 
         const resume = lock === "resume";
         const prior = resume ? bill.amend : null;
@@ -289,6 +291,11 @@ function amend(deps) {
         if (lock === "taken" || isVoidedBill(bill) || bill.amendedBy) refuse(409, "bill_void");
         const locks = amendLocks(bill);
         if (locks.length) refuse(409, "bill_locked", { lock: locks[0] });
+        // ใบเดิมต้องยกเลิกได้ด้วยเกณฑ์เดียวกับขั้น ④ (sale.void › billStateForVoid) ก่อนประทับและก่อนออกใบใหม่
+        //   ไม่งั้นใบใหม่ออกแล้ว ใบเดิมยกเลิกไม่ได้ทุกรอบ = บิลใช้งาน 2 ใบของการขายเดียว (DEV-0011 B1)
+        //   ปัดด้วย code เดิมของ sale.void (bill_unreadable · legacy_bill_view_only · tax_invoice_issued · already_void)
+        const voidable = billStateForVoid(bill, input.requestId);
+        if (voidable.ok === false) refuse(voidable.status, voidable.error, voidable.issues ? { issues: voidable.issues } : undefined);
         if (usesShift) {
           if (!validDocId(bill.shiftId)) refuse(409, "shift_unknown");
           checkShift(bill, shiftData, shopRef);

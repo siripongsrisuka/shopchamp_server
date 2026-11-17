@@ -147,8 +147,34 @@ function amendLockState(amend, requestId, now) {
   return nowMs - at < AMEND_PENDING_TTL_MS ? "busy" : "free";
 }
 
+/**
+ * amendHeldGuardId(amend, billId, requestId) — doc id ของ receiptGuard ที่ต้องอ่านเพื่อดูว่าคำขอแก้อื่นที่ค้าง pending
+ *   ออกใบใหม่ไปแล้วหรือยัง (ล้มระหว่าง ② กับ ③ = ยังไม่ผูก newBillId) · ไม่ต้องอ่าน = null
+ *   requestId = คำขอของผู้เรียก (sale.amend) · ผู้เรียกที่ไม่มีคำขอแก้ (เช่น sale.issueTaxInvoice) ส่ง undefined
+ */
+function amendHeldGuardId(amend, billId, requestId) {
+  if (!amend || typeof amend !== "object" || amend.status !== "pending") return null;
+  if (typeof amend.requestId !== "string" || amend.requestId === "" || sameRequestId(amend.requestId, requestId)) return null;
+  return amendReceiptUUID(billId, amend.requestId);
+}
+
+/**
+ * amendHoldState(amend, requestId, now, heldGuardExists) — amendLockState + กรณีค้างตายแต่ออกใบใหม่ไปแล้ว
+ * @returns เหมือน amendLockState และเพิ่ม
+ *          'stalled' pending คำขออื่นเกิน 5 นาที แต่มี newBillId หรือมี receiptGuard ของใบใหม่แล้ว
+ *                    ⇒ การแก้ยังมีชีวิต (ใบใหม่ออกแล้ว ใบเดิมรอยกเลิก) ห้ามรับช่วง/ห้ามแตะบิล
+ *   ผู้ใช้: sale.amend ขั้น ① · sale.issueTaxInvoice (busy / stalled = ปัด amend_in_progress)
+ */
+function amendHoldState(amend, requestId, now, heldGuardExists) {
+  const lock = amendLockState(amend, requestId, now);
+  if (lock === "free" && amend && typeof amend === "object" && amend.status === "pending" && (amend.newBillId || heldGuardExists)) return "stalled";
+  return lock;
+}
+
 module.exports = {
   readReceiptUUID,
+  amendHeldGuardId,
+  amendHoldState,
   legacyGuardPrefix,
   legacyGuardIdOfShop,
   classifyGuard,
